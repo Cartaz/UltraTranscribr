@@ -28,9 +28,24 @@ class FileTranscriberThread(threading.Thread):
         self._vocal_path: Optional[str] = None
         self._pcm_wav_path: Optional[str] = None
         self._terminal_state: str | None = None
+        self._conversion_process: Optional[subprocess.Popen[bytes]] = None
+        self._conversion_lock = threading.Lock()
 
     def stop(self) -> None:
         self._stop_event.set()
+        with self._conversion_lock:
+            proc = self._conversion_process
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+            except OSError:
+                pass
 
     def run(self) -> None:
         bus = EventBus()
@@ -78,6 +93,8 @@ class FileTranscriberThread(threading.Thread):
 
     def _transcribe_progressively(self, source: str, start_pct: int) -> None:
         wav_path = self._convert_to_pcm_wav(source)
+        if self._stop_event.is_set():
+            return
         self._pcm_wav_path = wav_path
         bus = EventBus()
         full_parts: list[str] = []
@@ -138,21 +155,43 @@ class FileTranscriberThread(threading.Thread):
             return self._convert_with_soundfile(source)
         tmp = tempfile.mkdtemp(prefix="ultratranscribr_pcm_")
         out = os.path.join(tmp, "audio.wav")
-        proc = subprocess.run(
-            ["ffmpeg", "-y", "-i", source, "-vn", "-ar", "16000", "-ac", "1",
-             "-c:a", "pcm_s16le", "-hide_banner", "-loglevel", "error", out],
-            capture_output=True, timeout=None,
-        )
-        if proc.returncode != 0:
-            shutil.rmtree(tmp, ignore_errors=True)
-            detail = proc.stderr.decode("utf-8", errors="replace")[-800:]
-            raise RuntimeError(f"ffmpeg conversion fallita: {detail}")
-        return out
+        cmd = [
+            "ffmpeg", "-y", "-i", source, "-vn", "-ar", "16000", "-ac", "1",
+            "-c:a", "pcm_s16le", "-hide_banner", "-loglevel", "error", out,
+        ]
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        with self._conversion_lock:
+            self._conversion_process = proc
+        try:
+            while proc.poll() is None:
+                if self._stop_event.wait(0.1):
+                    try:
+                        proc.terminate()
+                        proc.wait(timeout=2.0)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=2.0)
+                    shutil.rmtree(tmp, ignore_errors=True)
+                    raise RuntimeError("conversione audio interrotta")
+            stderr = proc.stderr.read() if proc.stderr is not None else b""
+            if proc.returncode != 0:
+                shutil.rmtree(tmp, ignore_errors=True)
+                detail = stderr.decode("utf-8", errors="replace")[-800:]
+                raise RuntimeError(f"ffmpeg conversion fallita: {detail}")
+            return out
+        finally:
+            with self._conversion_lock:
+                if self._conversion_process is proc:
+                    self._conversion_process = None
+            if proc.stderr is not None:
+                proc.stderr.close()
 
     def _convert_with_soundfile(self, source: str) -> str:
         import soundfile as sf
         from core.audio_resampler import resample
         data, sr = sf.read(source, dtype="float32", always_2d=True)
+        if self._stop_event.is_set():
+            raise RuntimeError("conversione audio interrotta")
         mono = data.mean(axis=1, dtype=np.float32)
         mono = resample(mono, int(sr), 16000) if int(sr) != 16000 else mono
         tmp = tempfile.mkdtemp(prefix="ultratranscribr_pcm_")
