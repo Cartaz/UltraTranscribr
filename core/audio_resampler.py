@@ -1,14 +1,4 @@
-# core/audio_resampler.py
-"""Utilita di resampling audio per la cattura da microfono.
-
-Fornisce funzioni per il resampling da sample rate nativo del
-dispositivo hardware al sample rate target di faster-whisper (16 kHz).
-
-Functions:
-    resample: Resampla un array audio tramite interpolazione lineare.
-    query_device_sample_rate: Interroga il sample rate nativo di un dispositivo.
-"""
-
+"""Resampling audio one-shot e streaming senza drift cumulativo."""
 from __future__ import annotations
 
 import logging
@@ -17,62 +7,93 @@ import numpy as np
 import sounddevice as sd
 
 logger = logging.getLogger(__name__)
-
-# Sample rate target per faster-whisper (fisso, non modificabile)
-WHISPER_SAMPLE_RATE: int = 16000
+WHISPER_SAMPLE_RATE = 16000
 
 
 def resample(audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
-    """Resampla audio da orig_sr a target_sr tramite interpolazione lineare.
+    """Resampling lineare one-shot, con lunghezza temporale corretta."""
+    audio = np.asarray(audio, dtype=np.float32).reshape(-1)
+    if audio.size == 0 or orig_sr == target_sr:
+        return audio.copy() if audio.size else np.array([], dtype=np.float32)
+    if orig_sr <= 0 or target_sr <= 0:
+        raise ValueError("sample rate deve essere positivo")
+    target_length = max(1, int(round(audio.size * target_sr / orig_sr)))
+    src_positions = np.arange(audio.size, dtype=np.float64)
+    dst_positions = np.arange(target_length, dtype=np.float64) * orig_sr / target_sr
+    dst_positions = np.minimum(dst_positions, audio.size - 1)
+    return np.interp(dst_positions, src_positions, audio).astype(np.float32)
 
-    Usa np.interp per interpolazione lineare: sufficiente per segnali
-    vocali a 16 kHz. Non richiede dipendenze aggiuntive oltre a numpy.
 
-    Args:
-        audio: Array numpy float32 mono.
-        orig_sr: Sample rate originale.
-        target_sr: Sample rate target.
+class StreamingLinearResampler:
+    """Resampler lineare stateful che conserva la fase tra i blocchi."""
 
-    Returns:
-        Array numpy float32 resamplato a target_sr.
-    """
-    if orig_sr == target_sr:
-        return audio
-    duration = audio.shape[0] / orig_sr
-    target_length = int(duration * target_sr)
-    if target_length <= 0:
-        return np.array([], dtype=np.float32)
-    orig_indices = np.arange(audio.shape[0], dtype=np.float64)
-    target_indices = np.linspace(0, audio.shape[0] - 1, target_length)
-    resampled = np.interp(target_indices, orig_indices, audio)
-    return resampled.astype(np.float32)
+    def __init__(self, orig_sr: int, target_sr: int) -> None:
+        if orig_sr <= 0 or target_sr <= 0:
+            raise ValueError("sample rate deve essere positivo")
+        self.orig_sr = int(orig_sr)
+        self.target_sr = int(target_sr)
+        self._step = self.orig_sr / self.target_sr
+        self._buffer = np.array([], dtype=np.float32)
+        self._next_pos = 0.0
+
+    def process(self, audio: np.ndarray, *, final: bool = False) -> np.ndarray:
+        data = np.asarray(audio, dtype=np.float32).reshape(-1)
+        if self.orig_sr == self.target_sr:
+            return data.copy()
+        if data.size:
+            self._buffer = np.concatenate((self._buffer, data))
+        if self._buffer.size == 0:
+            return np.array([], dtype=np.float32)
+
+        limit = self._buffer.size - (0 if final else 1)
+        if limit <= 0 or self._next_pos > limit:
+            return np.array([], dtype=np.float32)
+
+        positions = np.arange(self._next_pos, limit + (1e-12 if final else 0), self._step)
+        if positions.size == 0:
+            return np.array([], dtype=np.float32)
+        positions = positions[positions <= self._buffer.size - 1]
+        if positions.size == 0:
+            return np.array([], dtype=np.float32)
+
+        base = np.arange(self._buffer.size, dtype=np.float64)
+        out = np.interp(positions, base, self._buffer).astype(np.float32)
+        next_abs = float(positions[-1] + self._step)
+        discard = min(int(next_abs), max(0, self._buffer.size - 1))
+        if discard:
+            self._buffer = self._buffer[discard:]
+            next_abs -= discard
+        self._next_pos = next_abs
+        if final:
+            self._buffer = np.array([], dtype=np.float32)
+            self._next_pos = 0.0
+        return out
+
+    def flush(self) -> np.ndarray:
+        return self.process(np.array([], dtype=np.float32), final=True)
 
 
 def query_device_sample_rate(device: object) -> int:
-    """Interroga il sample rate nativo del dispositivo.
-
-    Se il dispositivo supporta 16000 Hz, lo usa direttamente.
-    Altrimenti usa il default_samplerate riportato da sounddevice.
-
-    Args:
-        device: Nome o indice del dispositivo sounddevice.
-
-    Returns:
-        Sample rate nativo da usare per aprire lo stream.
-    """
+    """Usa 16 kHz direttamente se il device lo accetta; altrimenti il default."""
     try:
-        dev_info = sd.query_devices(device)
-        default_sr = int(dev_info.get("default_samplerate", 48000))
-        logger.info("Dispositivo '%s' — sample rate nativo: %d Hz",
-                    dev_info.get("name", "?"), default_sr)
+        info = sd.query_devices(device)
+        channels = max(1, min(int(info.get("max_input_channels", 1)), 2))
+        try:
+            sd.check_input_settings(
+                device=device,
+                channels=channels,
+                dtype="float32",
+                samplerate=WHISPER_SAMPLE_RATE,
+            )
+            logger.info("Dispositivo '%s' supporta 16 kHz nativamente", info.get("name", "?"))
+            return WHISPER_SAMPLE_RATE
+        except Exception:
+            default_sr = int(round(float(info.get("default_samplerate", 48000))))
+            logger.info(
+                "Dispositivo '%s': uso %d Hz con resampling a %d Hz",
+                info.get("name", "?"), default_sr, WHISPER_SAMPLE_RATE,
+            )
+            return default_sr
     except Exception as exc:
         logger.warning("Impossibile interrogare il sample rate del dispositivo: %s", exc)
-        default_sr = 48000
-
-    if default_sr == WHISPER_SAMPLE_RATE:
-        return WHISPER_SAMPLE_RATE
-
-    logger.info("Il dispositivo non supporta 16 kHz nativamente, "
-                 "uso %d Hz con resampling a %d Hz",
-                 default_sr, WHISPER_SAMPLE_RATE)
-    return default_sr
+        return 48000
