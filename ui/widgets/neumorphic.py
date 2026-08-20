@@ -1,26 +1,27 @@
-"""Widget Qt custom per il tema neumorfico di UltraTranscribr.
+"""Renderer Qt per superfici Dark Neumorphism.
 
-Il rendering usa esclusivamente API Qt/Python: QPainter, gradienti e palette.
-Le superfici rialzate hanno sempre due sorgenti visive opposte:
-luce morbida in alto a sinistra e ombra morbida in basso a destra.
-I campi editabili usano invece lo stesso principio invertito, dentro il bordo.
+La sorgente di luce virtuale è sempre in alto a sinistra.
+I rilievi usano highlight alto/sinistra e ombra basso/destra.
+Gli input usano la direzione opposta per apparire incavati.
 """
+
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import (
-    QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QBrush,
+    QColor, QFont, QFontMetrics, QLinearGradient, QPainter,
+    QPainterPath, QPen, QBrush,
 )
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QGraphicsOpacityEffect, QLineEdit, QProgressBar,
+    QCheckBox, QComboBox, QLineEdit, QProgressBar,
     QPushButton, QTextEdit, QWidget, QTabBar,
 )
 
 from config.theme import theme
 
 
-def _alpha(hex_value: str, alpha: int) -> QColor:
-    color = QColor(hex_value)
+def _alpha(color_spec: str, alpha: int) -> QColor:
+    color = QColor(color_spec)
     color.setAlpha(max(0, min(255, alpha)))
     return color
 
@@ -31,7 +32,11 @@ def _path_for_rect(rect, radius: int) -> QPainterPath:
     return path
 
 
-def _rounded_path(widget: QWidget, inset: float = 1.0, radius: int | None = None) -> QPainterPath:
+def _rounded_path(
+    widget: QWidget,
+    inset: float = 1.0,
+    radius: int | None = None,
+) -> QPainterPath:
     r = radius if radius is not None else theme.radius_md
     rect = widget.rect().adjusted(inset, inset, -inset, -inset)
     return _path_for_rect(rect, r)
@@ -45,14 +50,7 @@ def _paint_raised_surface(
     *,
     strong: bool = True,
 ) -> None:
-    """Disegna una superficie estrusa con luce/ombra *solo all'esterno*.
-
-    La superficie resta uniforme. Le due sorgenti luminose vengono costruite
-    come fasce esterne al perimetro reale: la parte che ricadrebbe dentro la
-    superficie viene sottratta tramite QPainterPath.subtracted(). In questo
-    modo non compaiono bordi chiari/scuri sui quattro lati interni, che
-    trasformerebbero il rilievo in un incavo.
-    """
+    """Superficie estrusa morbida e chiaramente neumorfica."""
     m = max(2, int(margin))
     rect = widget.rect().adjusted(m, m, -m, -m)
     if rect.width() <= 4 or rect.height() <= 4:
@@ -62,138 +60,196 @@ def _paint_raised_surface(
     painter.save()
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-    # Materiale uniforme: nessun gradiente/bordo interno.
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QBrush(theme.qcolor(theme.bg)))
-    painter.drawPath(base)
-
-    depth = max(4.0, min(float(m), float(theme.shadow_offset)))
+    depth = min(float(m), float(theme.shadow_offset))
     if not strong:
-        depth *= 0.58
+        depth *= 0.62
 
-    steps = max(6, int(depth * 1.8))
-    light_alpha = theme.raised_light_alpha if strong else int(theme.raised_light_alpha * 0.55)
-    dark_alpha = theme.raised_dark_alpha if strong else int(theme.raised_dark_alpha * 0.55)
+    steps = max(10, int(depth * 2.6))
+    light_alpha = (
+        theme.raised_light_alpha
+        if strong else int(theme.raised_light_alpha * 0.56)
+    )
+    dark_alpha = (
+        theme.raised_dark_alpha
+        if strong else int(theme.raised_dark_alpha * 0.58)
+    )
 
-    # Ogni banda è una differenza geometrica: shifted - base.
-    # Quindi viene dipinta esclusivamente nello spazio esterno.
+    # Ombre esterne stratificate: l'ordine è importante.
     for i in range(steps, 0, -1):
         t = i / steps
         off = depth * t
-        fade = (1.0 - t) ** 0.72
-        band_width = max(1.0, depth / steps * 2.1)
+        fade = (1.0 - t) ** 0.62
 
-        # Highlight: alto/sinistra.
         light_shape = _path_for_rect(
             rect.translated(-off, -off),
-            radius + int(off * 0.45),
+            radius + int(off * 0.42),
         )
-        light_outer = light_shape.subtracted(base)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(_alpha(theme.shadow_light, max(2, int(light_alpha * fade * 0.48)))))
-        painter.drawPath(light_outer)
+        painter.setBrush(QBrush(_alpha(
+            theme.shadow_light,
+            max(2, int(light_alpha * fade * 0.55)),
+        )))
+        painter.drawPath(light_shape.subtracted(base))
 
-        # Ombra: basso/destra.
         dark_shape = _path_for_rect(
             rect.translated(off, off),
-            radius + int(off * 0.45),
+            radius + int(off * 0.42),
         )
-        dark_outer = dark_shape.subtracted(base)
-        painter.setBrush(QBrush(_alpha(theme.shadow_dark, max(3, int(dark_alpha * fade * 0.42)))))
-        painter.drawPath(dark_outer)
+        painter.setBrush(QBrush(_alpha(
+            theme.shadow_dark,
+            max(3, int(dark_alpha * fade * 0.62)),
+        )))
+        painter.drawPath(dark_shape.subtracted(base))
+
+    # Materiale leggermente modellato, senza effetto glass.
+    fill = QLinearGradient(rect.topLeft(), rect.bottomRight())
+    fill.setColorAt(0.0, theme.qcolor(theme.bg_surface_alt))
+    fill.setColorAt(0.34, theme.qcolor(theme.bg))
+    fill.setColorAt(1.0, theme.qcolor(theme.bg))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QBrush(fill))
+    painter.drawPath(base)
+
+    # Microscopico highlight di bordo sul lato illuminato.
+    painter.setPen(QPen(_alpha(theme.shadow_light, 62 if strong else 34), 1.0))
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawPath(base)
 
     painter.restore()
 
 
-def _paint_external_relief(painter: QPainter, base: QPainterPath, radius: int, depth: float, light_alpha: int, dark_alpha: int, *, bottom_shadow: bool = True) -> None:
-    """Applica rilievo esclusivamente fuori da una geometria già definita."""
-    steps = max(6, int(depth * 1.8))
+def _paint_external_relief(
+    painter: QPainter,
+    base: QPainterPath,
+    radius: int,
+    depth: float,
+    light_alpha: int,
+    dark_alpha: int,
+    *,
+    bottom_shadow: bool = True,
+) -> None:
+    steps = max(8, int(depth * 2.4))
     for i in range(steps, 0, -1):
         t = i / steps
         off = depth * t
-        fade = (1.0 - t) ** 0.72
+        fade = (1.0 - t) ** 0.64
+
         light_shape = base.translated(-off, -off)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(_alpha(theme.shadow_light, max(2, int(light_alpha * fade * 0.48)))))
+        painter.setBrush(QBrush(_alpha(
+            theme.shadow_light,
+            max(2, int(light_alpha * fade * 0.48)),
+        )))
         painter.drawPath(light_shape.subtracted(base))
+
         if bottom_shadow:
             dark_shape = base.translated(off, off)
-            painter.setBrush(QBrush(_alpha(theme.shadow_dark, max(3, int(dark_alpha * fade * 0.42)))))
+            painter.setBrush(QBrush(_alpha(
+                theme.shadow_dark,
+                max(3, int(dark_alpha * fade * 0.56)),
+            )))
             painter.drawPath(dark_shape.subtracted(base))
 
 
-def _paint_inset_surface(painter: QPainter, widget: QWidget, radius: int) -> None:
-    """Disegna un incavo: scuro in alto/sinistra, luce in basso/destra."""
+def _paint_inset_surface(
+    painter: QPainter,
+    widget: QWidget,
+    radius: int,
+) -> None:
+    """Superficie incavata con ombra interna alto/sinistra."""
     rect = widget.rect().adjusted(1, 1, -1, -1)
+    if rect.width() <= 3 or rect.height() <= 3:
+        return
     path = _path_for_rect(rect, radius)
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QBrush(theme.qcolor(theme.bg)))
-    painter.drawPath(path)
 
     painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QBrush(theme.qcolor(theme.bg_surface)))
+    painter.drawPath(path)
+
     painter.setClipPath(path)
-    depth = 5
-    steps = 6
+    depth = 7.0
+    steps = 10
+
     for i in range(steps, 0, -1):
         t = i / steps
-        offset = depth * t
-        alpha_dark = int(theme.inset_dark_alpha * (1.0 - t * 0.68))
-        alpha_light = int(theme.inset_light_alpha * (1.0 - t * 0.68))
+        off = depth * t
+        fade = (1.0 - t) ** 0.56
 
-        # Ombra interna: bordo scuro rivolto verso alto/sinistra.
-        dark_rect = rect.translated(-offset, -offset)
-        painter.setPen(QPen(_alpha(theme.shadow_dark, max(10, alpha_dark)), max(1.0, 1.0 + t * 1.8), Qt.PenStyle.SolidLine))
+        # Scuro in alto/sinistra.
+        dark_rect = rect.translated(-off, -off)
+        painter.setPen(QPen(
+            _alpha(theme.shadow_dark, max(
+                10, int(theme.inset_dark_alpha * fade * 0.72)
+            )),
+            1.0 + t * 2.1,
+        ))
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawPath(_path_for_rect(dark_rect, radius + int(offset * 0.5)))
+        painter.drawPath(_path_for_rect(
+            dark_rect, radius + int(off * 0.42)
+        ))
 
-        # Luce interna: bordo chiaro rivolto verso basso/destra.
-        light_rect = rect.translated(offset, offset)
-        painter.setPen(QPen(_alpha(theme.shadow_light, max(8, alpha_light)), max(1.0, 1.0 + t * 1.8), Qt.PenStyle.SolidLine))
-        painter.drawPath(_path_for_rect(light_rect, radius + int(offset * 0.5)))
+        # Luce riflessa in basso/destra.
+        light_rect = rect.translated(off, off)
+        painter.setPen(QPen(
+            _alpha(theme.shadow_light, max(
+                7, int(theme.inset_light_alpha * fade * 0.55)
+            )),
+            1.0 + t * 1.8,
+        ))
+        painter.drawPath(_path_for_rect(
+            light_rect, radius + int(off * 0.42)
+        ))
 
-    # Gradiente appena percettibile che completa l'illusione di concavità.
-    dark = QLinearGradient(rect.topLeft(), rect.bottomRight())
-    dark.setColorAt(0.0, _alpha(theme.shadow_dark, 34))
-    dark.setColorAt(0.32, QColor(0, 0, 0, 0))
-    dark.setColorAt(0.72, QColor(0, 0, 0, 0))
-    dark.setColorAt(1.0, _alpha(theme.shadow_light, 24))
+    shade = QLinearGradient(rect.topLeft(), rect.bottomRight())
+    shade.setColorAt(0.0, _alpha(theme.shadow_dark, 54))
+    shade.setColorAt(0.40, QColor(0, 0, 0, 0))
+    shade.setColorAt(0.72, QColor(0, 0, 0, 0))
+    shade.setColorAt(1.0, _alpha(theme.shadow_light, 30))
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.fillPath(path, QBrush(dark))
+    painter.fillPath(path, QBrush(shade))
     painter.restore()
 
 
-def _paint_focus(painter: QPainter, widget: QWidget, radius: int) -> None:
+def _paint_focus(
+    painter: QPainter,
+    widget: QWidget,
+    radius: int,
+) -> None:
     painter.setPen(QPen(theme.qcolor(theme.accent), theme.focus_width))
     painter.setBrush(Qt.BrushStyle.NoBrush)
-    painter.drawPath(_rounded_path(widget, theme.focus_inset, radius))
+    painter.drawPath(_rounded_path(
+        widget, theme.focus_inset, radius
+    ))
 
 
 class NeumorphicButton(QPushButton):
-    """Pulsante estruso: luce + ombra in riposo, incavo quando premuto."""
+    """Pulsante rialzato, incavato durante la pressione."""
 
-    def __init__(self, text: str = "", parent: QWidget | None = None, *, danger: bool = False) -> None:
+    def __init__(
+        self,
+        text: str = "",
+        parent: QWidget | None = None,
+        *,
+        danger: bool = False,
+        variant: str = "neutral",
+    ) -> None:
         super().__init__(text, parent)
         self._hovered = False
         self._pressed = False
-        self._danger = danger
-        self.setFont(QFont(theme.font_family, theme.font_size, QFont.Weight.Medium))
-        self.setMinimumHeight(theme.control_height)
+        self._variant = "danger" if danger else variant
+        self.setFont(QFont(
+            theme.font_family,
+            theme.font_size,
+            QFont.Weight.Medium,
+        ))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFlat(True)
-        self._sync_effect()
-
-    def _sync_effect(self) -> None:
-        if not self.isEnabled():
-            effect = QGraphicsOpacityEffect(self)
-            effect.setOpacity(theme.disabled_opacity)
-            self.setGraphicsEffect(effect)
-        else:
-            self.setGraphicsEffect(None)
-        self.update()
 
     def setEnabled(self, enabled: bool) -> None:
         super().setEnabled(enabled)
-        self._sync_effect()
+        self.update()
 
     def enterEvent(self, event: QEvent) -> None:
         self._hovered = True
@@ -222,28 +278,135 @@ class NeumorphicButton(QPushButton):
             return
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        if self.isEnabled() and not self._pressed:
-            # Hover: meno profondità, ma entrambe le luci rimangono presenti.
-            margin = 3 if self._hovered else 5
-            _paint_raised_surface(painter, self, theme.radius_sm, margin, strong=not self._hovered)
-        else:
+        if not self.isEnabled():
+            _paint_raised_surface(
+                painter, self, theme.radius_sm, 5, strong=False
+            )
+        elif self._pressed:
             _paint_inset_surface(painter, self, theme.radius_sm)
+        else:
+            _paint_raised_surface(
+                painter,
+                self,
+                theme.radius_sm,
+                5,
+                strong=not self._hovered,
+            )
 
-        text_color = theme.danger if self._danger else theme.accent
+        if self._variant in {"orange_glow", "orange_text", "accent"}:
+            text_color = theme.accent
+        elif self._variant == "danger":
+            text_color = theme.danger
+        else:
+            text_color = (
+                theme.text_primary if self._hovered
+                else theme.text_secondary
+            )
         if not self.isEnabled():
             text_color = theme.text_disabled
+
         painter.setPen(theme.qcolor(text_color))
         painter.setFont(self.font())
-        dy = 1 if self._pressed else 0
-        painter.drawText(self.rect().adjusted(10, dy, -10, dy), Qt.AlignmentFlag.AlignCenter, self.text())
+        painter.drawText(
+            self.rect().adjusted(10, 0, -10, 0),
+            Qt.AlignmentFlag.AlignCenter,
+            self.text(),
+        )
+
+        if self.hasFocus() and self.isEnabled():
+            _paint_focus(painter, self, theme.radius_sm)
+        elif (
+            self.isEnabled()
+            and self._hovered
+            and self._variant == "orange_glow"
+        ):
+            painter.setPen(QPen(_alpha(theme.accent, 190), 1.35))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(_rounded_path(
+                self, 2.0, theme.radius_sm
+            ))
+
+        painter.end()
+
+
+class NeumorphicComboBox(QComboBox):
+    """ComboBox realmente incavato, con indicatore arancione minimale."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFrame(False)
+        self.setFont(QFont(theme.font_family, theme.font_size))
+        self.setAutoFillBackground(False)
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        if not painter.isActive():
+            return
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        _paint_inset_surface(painter, self, theme.radius_sm)
+
+        text_color = (
+            theme.text_primary if self.isEnabled()
+            else theme.text_disabled
+        )
+        painter.setPen(theme.qcolor(text_color))
+        painter.setFont(self.font())
+
+        text_rect = self.rect().adjusted(12, 0, -30, 0)
+        fm = QFontMetrics(self.font())
+        text = fm.elidedText(
+            self.currentText(),
+            Qt.TextElideMode.ElideRight,
+            max(0, text_rect.width()),
+        )
+        painter.drawText(
+            text_rect,
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+            text,
+        )
+
+        # Piccolo indicatore quadrato come nel mockup approvato.
+        side = 7
+        x = self.width() - 18
+        y = (self.height() - side) // 2
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(theme.qcolor(
+            theme.accent if self.isEnabled() else theme.text_disabled
+        ))
+        painter.drawRoundedRect(x, y, side, side, 2, 2)
 
         if self.hasFocus() and self.isEnabled():
             _paint_focus(painter, self, theme.radius_sm)
         painter.end()
 
 
+class NeumorphicLineEdit(QLineEdit):
+    """Campo monoriga incavato."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFrame(False)
+        self.setAutoFillBackground(False)
+        self.setFont(QFont(theme.font_family, theme.font_size))
+        pal = self.palette()
+        pal.setColor(pal.ColorRole.Base, QColor(0, 0, 0, 0))
+        pal.setColor(pal.ColorRole.Text, theme.qcolor(theme.text_primary))
+        self.setPalette(pal)
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        if painter.isActive():
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            _paint_inset_surface(painter, self, theme.radius_sm)
+            if self.hasFocus():
+                _paint_focus(painter, self, theme.radius_sm)
+            painter.end()
+        super().paintEvent(event)
+
+
 class NeumorphicTextEdit(QTextEdit):
-    """Campo multilinea incavato; usato per la trascrizione."""
+    """Campo multilinea incavato."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -268,124 +431,67 @@ class NeumorphicTextEdit(QTextEdit):
 
 
 class NeumorphicTranscriptionField(NeumorphicTextEdit):
-    """Campo dedicato alla trascrizione: l'unica superficie volutamente incavata."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("transcriptionField")
-        self.setViewportMargins(4, 4, 4, 4)
-
-
-class NeumorphicLineEdit(QLineEdit):
-    """Campo a riga singola incavato."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setFrame(False)
-        self.setAutoFillBackground(False)
-        self.setFont(QFont(theme.font_family, theme.font_size))
-        pal = self.palette()
-        pal.setColor(pal.ColorRole.Base, QColor(0, 0, 0, 0))
-        pal.setColor(pal.ColorRole.Text, theme.qcolor(theme.text_primary))
-        self.setPalette(pal)
-
-    def paintEvent(self, event) -> None:
-        painter = QPainter(self)
-        if painter.isActive():
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            _paint_raised_surface(painter, self, theme.radius_sm, 4, strong=True)
-            if self.hasFocus():
-                _paint_focus(painter, self, theme.radius_sm)
-            painter.end()
-        super().paintEvent(event)
-
-
-class NeumorphicComboBox(QComboBox):
-    """ComboBox con incavo costante e focus accentato."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setFrame(False)
-        self.setAutoFillBackground(False)
-        self.setFont(QFont(theme.font_family, theme.font_size))
-        pal = self.palette()
-        pal.setColor(pal.ColorRole.Base, QColor(0, 0, 0, 0))
-        pal.setColor(pal.ColorRole.Button, QColor(0, 0, 0, 0))
-        pal.setColor(pal.ColorRole.Text, theme.qcolor(theme.text_primary))
-        self.setPalette(pal)
-
-    def paintEvent(self, event) -> None:
-        painter = QPainter(self)
-        if painter.isActive():
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            _paint_raised_surface(painter, self, theme.radius_sm, 4, strong=True)
-            if self.hasFocus():
-                _paint_focus(painter, self, theme.radius_sm)
-            painter.end()
-        super().paintEvent(event)
+    pass
 
 
 class NeumorphicProgressBar(QProgressBar):
-    """Progress bar con pista incavata e avanzamento accentato."""
-
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         if not painter.isActive():
             return
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        _paint_raised_surface(painter, self, theme.radius_sm, 4, strong=True)
+        _paint_inset_surface(painter, self, theme.radius_sm)
         if self.maximum() > self.minimum():
-            ratio = (self.value() - self.minimum()) / (self.maximum() - self.minimum())
-            chunk = self.rect().adjusted(theme.progress_inset, theme.progress_inset,
-                                         -theme.progress_inset, -theme.progress_inset)
+            ratio = (
+                (self.value() - self.minimum())
+                / (self.maximum() - self.minimum())
+            )
+            chunk = self.rect().adjusted(
+                theme.progress_inset,
+                theme.progress_inset,
+                -theme.progress_inset,
+                -theme.progress_inset,
+            )
             chunk.setWidth(max(0, int(chunk.width() * ratio)))
             if chunk.width() > 0:
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(theme.qcolor(theme.accent))
-                painter.drawRoundedRect(chunk, theme.radius_sm - 4, theme.radius_sm - 4)
+                painter.drawRoundedRect(
+                    chunk, 3, 3
+                )
         painter.end()
 
 
 class NeumorphicPage(QWidget):
-    """Contenitore principale rialzato della scheda Live/File."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
-        self.setAutoFillBackground(False)
-
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
-        if not painter.isActive():
-            return
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        _paint_raised_surface(painter, self, theme.radius_lg, theme.page_shadow_margin, strong=True)
-        painter.end()
+        if painter.isActive():
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            _paint_raised_surface(
+                painter, self, theme.radius_lg,
+                theme.page_shadow_margin, strong=True
+            )
+            painter.end()
 
 
 class NeumorphicCard(QWidget):
-    """Sezione interna rialzata, con doppia ombra coerente con la pagina."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setAutoFillBackground(False)
-
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
-        if not painter.isActive():
-            return
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        _paint_raised_surface(painter, self, theme.radius_lg, theme.card_shadow_margin, strong=True)
-        painter.end()
+        if painter.isActive():
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            _paint_raised_surface(
+                painter, self, theme.radius_lg,
+                theme.card_shadow_margin, strong=True
+            )
+            painter.end()
 
 
 class NeumorphicFieldLabel(QWidget):
-    """Piccola superficie incavata usata per il percorso file."""
-
-    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+    def __init__(
+        self, text: str = "", parent: QWidget | None = None
+    ) -> None:
         super().__init__(parent)
         self._text = text
-        self.setMinimumHeight(theme.control_height)
         self.setFont(QFont(theme.font_family, theme.font_size))
 
     def setText(self, text: str) -> None:
@@ -400,91 +506,34 @@ class NeumorphicFieldLabel(QWidget):
         if not painter.isActive():
             return
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        _paint_raised_surface(painter, self, theme.radius_sm, 4, strong=True)
+        _paint_inset_surface(painter, self, theme.radius_sm)
         painter.setPen(theme.qcolor(theme.text_primary))
         painter.setFont(self.font())
-        painter.drawText(self.rect().adjusted(12, 0, -12, 0), Qt.AlignmentFlag.AlignVCenter, self._text)
+        painter.drawText(
+            self.rect().adjusted(12, 0, -12, 0),
+            Qt.AlignmentFlag.AlignVCenter,
+            self._text,
+        )
         painter.end()
 
 
 class NeumorphicTabBar(QTabBar):
-    """Linguette unite alla scheda sottostante."""
+    """Disponibile per futuri usi; non impone dimensioni al layout."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setDrawBase(False)
         self.setExpanding(False)
-        self.setElideMode(Qt.TextElideMode.ElideRight)
-        self.setFont(QFont(theme.font_family, theme.font_size))
         self.setUsesScrollButtons(False)
-        self.setDocumentMode(True)
-        self.setMinimumHeight(theme.tab_height)
-        self.setContentsMargins(0, 0, 0, 0)
-
-    def paintEvent(self, event) -> None:
-        painter = QPainter(self)
-        if not painter.isActive():
-            return
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        for index in range(self.count()):
-            selected = index == self.currentIndex()
-            tab = self.tabRect(index)
-            rect = tab.adjusted(3, 3, -3, 0)
-            path = QPainterPath()
-            path.addRoundedRect(rect, theme.radius_sm, theme.radius_sm)
-
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(theme.qcolor(theme.bg)))
-            painter.drawPath(path)
-
-            if selected:
-                # Il tab attivo è rialzato rispetto al fondo, ma resta aperto
-                # sul lato inferiore per continuare visivamente nella pagina.
-                _paint_external_relief(
-                    painter, path, theme.radius_sm, 4.0,
-                    theme.raised_light_alpha, theme.raised_dark_alpha,
-                    bottom_shadow=False,
-                )
-
-            painter.setPen(theme.qcolor(theme.text_primary if selected else theme.text_secondary))
-            painter.setFont(self.font())
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, self.tabText(index))
-        painter.end()
+        self.setFont(QFont(theme.font_family, theme.font_size))
 
 
 class NeumorphicCheckBox(QCheckBox):
-    """Checkbox coerente con il materiale neumorfico, senza QSS."""
+    """Checkbox custom senza cambiare le metriche imposte dal layout."""
 
-    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+    def __init__(
+        self, text: str = "", parent: QWidget | None = None
+    ) -> None:
         super().__init__(text, parent)
         self.setFont(QFont(theme.font_family, theme.font_size))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(theme.control_height)
-
-    def paintEvent(self, event) -> None:
-        painter = QPainter(self)
-        if not painter.isActive():
-            return
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        box = self.rect().adjusted(5, (self.height() - 18) // 2, -1, -(self.height() - 18) // 2)
-        box.setWidth(18)
-        box.setHeight(18)
-        path = _path_for_rect(box, 9)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(theme.qcolor(theme.bg)))
-        painter.drawPath(path)
-        _paint_external_relief(
-            painter, path, 9, 4.0, 155, 145, bottom_shadow=True
-        )
-        if self.isChecked():
-            painter.setPen(QPen(theme.qcolor(theme.accent), 2))
-            painter.drawArc(box.adjusted(4, 4, -4, -4), 45 * 16, 90 * 16)
-            painter.drawArc(box.adjusted(4, 4, -4, -4), -45 * 16, 90 * 16)
-        if self.hasFocus():
-            painter.setPen(QPen(theme.qcolor(theme.accent), theme.focus_width))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(box.adjusted(-2, -2, 2, 2), 10, 10)
-        painter.setPen(theme.qcolor(theme.text_primary if self.isEnabled() else theme.text_disabled))
-        painter.setFont(self.font())
-        painter.drawText(self.rect().adjusted(30, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, self.text())
-        painter.end()

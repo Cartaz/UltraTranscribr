@@ -1,14 +1,5 @@
 # ui/styles/breeze_dark.py
-"""Foglio di stile QSS per il tema Neumorphic Dark.
-
-Genera l'intero stylesheet dell'applicazione come stringa QSS per
-l'estetica Neumorphic Dark con colore di accento RGB(255, 102, 0) (#ff6600).
-Tutti i colori, font e raggi di curvatura provengono dai token semantici
-di config/theme.py.
-
-Functions:
-    build_stylesheet: Genera il foglio di stile QSS Neumorphic Dark.
-"""
+"""QSS complementare al renderer QPainter Dark Neumorphism."""
 
 from __future__ import annotations
 
@@ -16,28 +7,22 @@ from config.theme import ThemeColors
 
 
 def build_stylesheet() -> str:
-    """Genera il foglio di stile QSS per il tema Neumorphic Dark.
-
-    Returns:
-        Stringa QSS completa per l'applicazione.
-    """
     tc = ThemeColors
     ff = tc.FONT_FAMILY
     fs = tc.FONT_SIZE
 
     return f"""
-    /* ═══════════════════════════════════════════════════════════════
-       UltraTranscribr — Neumorphic Dark + Accent RGB(255, 102, 0)
-       ═══════════════════════════════════════════════════════════════ */
-
     QWidget {{
         font-family: "{ff}";
         font-size: {fs}px;
         color: {tc.TEXT_PRIMARY};
     }}
 
-    QMainWindow {{
+    QMainWindow,
+    QDialog,
+    QMessageBox {{
         background-color: {tc.BG_MAIN};
+        color: {tc.TEXT_PRIMARY};
     }}
 
     #centralContainer {{
@@ -45,26 +30,19 @@ def build_stylesheet() -> str:
         border: none;
     }}
 
-    /* ── Card Neumorfica Estrusa ───────────────────────────────────── */
-
+    /* Le Card vere sono dipinte da Card.paintEvent / QPainter. */
     QWidget#cardWidget {{
-        background-color: {tc.BG_CARD};
-        border-top: 1px solid {tc.BORDER_LIGHT};
-        border-left: 1px solid {tc.BORDER_LIGHT};
-        border-right: 1px solid {tc.BORDER_DARK};
-        border-bottom: 1px solid {tc.BORDER_DARK};
-        border-radius: 10px;
+        background: transparent;
+        border: none;
     }}
 
-    /* ── Schede Neumorfiche (QTabWidget) ──────────────────────────── */
-
     QTabWidget::pane {{
+        background-color: {tc.BG_CARD};
         border-top: 1px solid {tc.BORDER_LIGHT};
         border-left: 1px solid {tc.BORDER_LIGHT};
         border-right: 1px solid {tc.BORDER_DARK};
         border-bottom: 1px solid {tc.BORDER_DARK};
         border-radius: 14px;
-        background-color: {tc.BG_CARD};
         padding: 10px;
         top: -1px;
     }}
@@ -76,46 +54,43 @@ def build_stylesheet() -> str:
     }}
 
     QTabBar::tab {{
-        background-color: {tc.BG_SURFACE_ALT};
+        background-color: {tc.BG_CARD};
         color: {tc.TEXT_DISABLED};
         border-top: 1px solid {tc.BORDER_LIGHT};
         border-left: 1px solid {tc.BORDER_LIGHT};
         border-right: 1px solid {tc.BORDER_DARK};
         border-bottom: 1px solid {tc.BORDER_DARK};
-        border-radius: 8px;
+        border-radius: 9px;
         padding: 7px 30px;
         margin-right: 8px;
         min-width: 76px;
-        font-size: {fs}px;
         font-weight: 500;
     }}
 
     QTabBar::tab:selected {{
-        background-color: {tc.BG_CARD};
+        background-color: {tc.BG_ACTIVE};
         color: {tc.PRIMARY};
-        border: 1.5px solid {tc.PRIMARY};
-        font-weight: bold;
+        border: 2px solid {tc.PRIMARY};
+        font-weight: 700;
     }}
 
     QTabBar::tab:hover:!selected {{
         background-color: {tc.BG_HOVER};
-        color: {tc.TEXT_SECONDARY};
+        color: {tc.TEXT_PRIMARY};
+        border-top-color: {tc.SHADOW_LIGHT};
+        border-left-color: {tc.SHADOW_LIGHT};
     }}
-
-    /* ── Aree di testo Incavate (Inset / Recessed Surface) ───────── */
 
     QTextEdit#transcriptionArea,
     QTextEdit#fileTranscriptionArea {{
         background-color: {tc.BG_SURFACE};
         color: {tc.TEXT_PRIMARY};
-        border-top: 1px solid {tc.BORDER_DARK};
-        border-left: 1px solid {tc.BORDER_DARK};
+        border-top: 2px solid {tc.BORDER_DARK};
+        border-left: 2px solid {tc.BORDER_DARK};
         border-right: 1px solid {tc.BORDER_LIGHT};
         border-bottom: 1px solid {tc.BORDER_LIGHT};
-        border-radius: 10px;
+        border-radius: 11px;
         padding: 14px;
-        font-family: "{ff}";
-        font-size: {fs}px;
         selection-background-color: {tc.BG_SELECTION};
         selection-color: {tc.TEXT_ON_SELECTION};
     }}
@@ -125,11 +100,13 @@ def build_stylesheet() -> str:
         border: 1px solid {tc.BORDER_FOCUS};
     }}
 
-    /* ── Barra di stato Incavata ──────────────────────────────────── */
-
     #statusBar {{
-        background-color: transparent;
-        border: none;
+        background-color: {tc.BG_CARD};
+        border-top: 1px solid {tc.BORDER_LIGHT};
+        border-left: 1px solid {tc.BORDER_LIGHT};
+        border-right: 1px solid {tc.BORDER_DARK};
+        border-bottom: 1px solid {tc.BORDER_DARK};
+        border-radius: 12px;
         padding: 2px 4px;
         min-height: 24px;
     }}
@@ -139,10 +116,10 @@ def build_stylesheet() -> str:
         font-size: {fs - 1}px;
         padding: 0;
         background: transparent;
+        border: none;
     }}
 
-    /* ── Pulsanti Neumorfici ──────────────────────────────────────── */
-
+    /* Fallback per QPushButton standard; ActionButton usa QPainter. */
     QPushButton {{
         background-color: {tc.BG_CARD};
         color: {tc.TEXT_PRIMARY};
@@ -158,7 +135,6 @@ def build_stylesheet() -> str:
 
     QPushButton:hover {{
         background-color: {tc.BG_HOVER};
-        color: {tc.TEXT_PRIMARY};
     }}
 
     QPushButton:pressed {{
@@ -167,67 +143,52 @@ def build_stylesheet() -> str:
         border-left: 1px solid {tc.BORDER_DARK};
         border-right: 1px solid {tc.BORDER_LIGHT};
         border-bottom: 1px solid {tc.BORDER_LIGHT};
-        color: {tc.PRIMARY};
-        padding-top: 7px;
-        padding-left: 17px;
+    }}
+
+    QPushButton:focus {{
+        border: 1px solid {tc.BORDER_FOCUS};
     }}
 
     QPushButton:disabled {{
-        background-color: {tc.BG_SURFACE};
+        background-color: {tc.BG_ACTIVE};
         color: {tc.TEXT_DISABLED};
         border: 1px solid {tc.BORDER};
     }}
 
-    /* ── ComboBox Neumorfico (Incavato con indicatore arancione) ──── */
-
+    /*
+      QComboBox custom: il volto del controllo viene dipinto da QPainter.
+      QSS resta responsabile di metriche e popup.
+    */
     QComboBox {{
-        background-color: {tc.BG_SURFACE};
+        background: transparent;
         color: {tc.TEXT_PRIMARY};
-        border-top: 1px solid {tc.BORDER_DARK};
-        border-left: 1px solid {tc.BORDER_DARK};
-        border-right: 1px solid {tc.BORDER_LIGHT};
-        border-bottom: 1px solid {tc.BORDER_LIGHT};
-        border-radius: 7px;
+        border: none;
+        border-radius: 8px;
         padding: 6px 12px;
         min-height: 22px;
     }}
 
-    QComboBox:hover {{
-        border-color: {tc.BORDER_LIGHT};
-    }}
-
-    QComboBox:focus {{
-        border: 1px solid {tc.BORDER_FOCUS};
-    }}
-
     QComboBox::drop-down {{
+        width: 24px;
         border: none;
-        padding-right: 8px;
-        subcontrol-origin: padding;
-        subcontrol-position: top right;
+        background: transparent;
     }}
 
     QComboBox::down-arrow {{
         image: none;
-        width: 7px;
-        height: 7px;
-        background-color: {tc.PRIMARY};
-        border-radius: 1.5px;
-        margin-right: 8px;
+        width: 0;
+        height: 0;
     }}
 
     QComboBox QAbstractItemView {{
         background-color: {tc.BG_CARD};
         color: {tc.TEXT_PRIMARY};
-        border: 1px solid {tc.BORDER};
-        border-radius: 6px;
+        border: 1px solid {tc.BORDER_LIGHT};
         selection-background-color: {tc.BG_SELECTION};
         selection-color: {tc.TEXT_ON_SELECTION};
         outline: none;
         padding: 4px;
     }}
-
-    /* ── CheckBox Neumorfico ──────────────────────────────────────── */
 
     QCheckBox {{
         color: {tc.TEXT_PRIMARY};
@@ -238,12 +199,12 @@ def build_stylesheet() -> str:
     QCheckBox::indicator {{
         width: 18px;
         height: 18px;
+        background-color: {tc.BG_SURFACE};
         border-top: 1px solid {tc.BORDER_DARK};
         border-left: 1px solid {tc.BORDER_DARK};
         border-right: 1px solid {tc.BORDER_LIGHT};
         border-bottom: 1px solid {tc.BORDER_LIGHT};
-        border-radius: 4px;
-        background-color: {tc.BG_SURFACE};
+        border-radius: 5px;
     }}
 
     QCheckBox::indicator:checked {{
@@ -251,11 +212,9 @@ def build_stylesheet() -> str:
         border: 1px solid {tc.PRIMARY_LIGHT};
     }}
 
-    QCheckBox::indicator:hover {{
-        border-color: {tc.PRIMARY};
+    QCheckBox:focus {{
+        color: {tc.PRIMARY};
     }}
-
-    /* ── Titoli e Testi ───────────────────────────────────────────── */
 
     QLabel {{
         background: transparent;
@@ -264,7 +223,7 @@ def build_stylesheet() -> str:
 
     QLabel#titleLabel {{
         font-size: {fs + 7}px;
-        font-weight: bold;
+        font-weight: 700;
         color: {tc.PRIMARY};
         padding: 2px 0 0 0;
         letter-spacing: 0.3px;
@@ -275,29 +234,6 @@ def build_stylesheet() -> str:
         color: {tc.TEXT_DISABLED};
         padding: 0 0 6px 0;
     }}
-
-    /* ── ProgressBar Neumorfica Incavata ─────────────────────────── */
-
-    QProgressBar#fileProgressBar,
-    QProgressBar#bufferBar {{
-        background-color: {tc.BG_SURFACE};
-        border-top: 1px solid {tc.BORDER_DARK};
-        border-left: 1px solid {tc.BORDER_DARK};
-        border-right: 1px solid {tc.BORDER_LIGHT};
-        border-bottom: 1px solid {tc.BORDER_LIGHT};
-        border-radius: 5px;
-        min-height: 10px;
-        max-height: 10px;
-        text-align: center;
-    }}
-
-    QProgressBar#fileProgressBar::chunk,
-    QProgressBar#bufferBar::chunk {{
-        background-color: {tc.PRIMARY};
-        border-radius: 4px;
-    }}
-
-    /* ── ScrollBar Neumorfica ─────────────────────────────────────── */
 
     QScrollBar:vertical {{
         background: {tc.SCROLLBAR_BG};
@@ -326,7 +262,32 @@ def build_stylesheet() -> str:
         background: none;
     }}
 
-    /* ── Menu e Tooltip ───────────────────────────────────────────── */
+    QScrollBar:horizontal {{
+        background: {tc.SCROLLBAR_BG};
+        height: 10px;
+        border: none;
+        border-radius: 5px;
+    }}
+
+    QScrollBar::handle:horizontal {{
+        background: {tc.SCROLLBAR_HANDLE};
+        border-radius: 5px;
+        min-width: 30px;
+    }}
+
+    QScrollBar::handle:horizontal:hover {{
+        background: {tc.SCROLLBAR_HANDLE_HOVER};
+    }}
+
+    QScrollBar::add-line:horizontal,
+    QScrollBar::sub-line:horizontal {{
+        width: 0;
+    }}
+
+    QScrollBar::add-page:horizontal,
+    QScrollBar::sub-page:horizontal {{
+        background: none;
+    }}
 
     QMenu {{
         background-color: {tc.BG_CARD};
@@ -348,10 +309,8 @@ def build_stylesheet() -> str:
         color: {tc.TEXT_ON_SELECTION};
     }}
 
-    QMenu::separator {{
-        height: 1px;
-        background-color: {tc.BORDER};
-        margin: 4px 8px;
+    QMenu::item:disabled {{
+        color: {tc.TEXT_DISABLED};
     }}
 
     QToolTip {{

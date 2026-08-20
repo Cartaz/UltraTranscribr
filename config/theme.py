@@ -1,15 +1,5 @@
 # config/theme.py
-"""Token di colore semantici e helper per il tema Neumorphic Dark.
-
-Questo modulo definisce tutti i colori dell'applicazione come costanti
-semantiche e fornisce la configurazione per il rendering neumorfico
-(superfici estruse, incavi, luci soffuse e ombre scure) con colore
-accento RGB(255, 102, 0) (#ff6600).
-
-Classes:
-    ThemeColors: Token di colore centralizzati per Neumorphic Dark.
-    NeumorphicTheme: Configurazione e helper per il rendering neumorfico Qt.
-"""
+"""Token centralizzati per il tema Dark Neumorphism di UltraTranscribr."""
 
 from __future__ import annotations
 
@@ -19,7 +9,6 @@ try:
     from PySide6.QtGui import QColor
 except ImportError:
     class QColor:  # type: ignore[no-redef]
-        """Fallback mock QColor when PySide6 is not installed."""
         def __init__(self, *args, **kwargs) -> None:
             self._args = args
         def setAlpha(self, a: int) -> None:
@@ -29,88 +18,84 @@ except ImportError:
 
 
 class ThemeColors:
-    """Token di colore semantici per Neumorphic Dark.
+    """Palette Dark Neumorphism con accento obbligatorio #FF6600."""
 
-    Nessun componente UI deve usare valori hex al di fuori di questa classe.
-    I token sono organizzati per ruolo semantico con colore di accento
-    RGB(255, 102, 0) (#ff6600).
-    """
-
-    # ── Accento primario — Arancione Neumorphic (RGB: 255, 102, 0) ──
-    PRIMARY: str = "#ff6600"
-    PRIMARY_LIGHT: str = "#ff8533"
-    PRIMARY_DARK: str = "#cc5200"
+    # Accent
+    PRIMARY: str = "#FF6600"
+    PRIMARY_LIGHT: str = "#FF8533"
+    PRIMARY_DARK: str = "#CC5200"
     PRIMARY_DEEP: str = "#803300"
-    PRIMARY_GLOW: str = "rgba(255, 102, 0, 0.28)"
+    PRIMARY_GLOW: str = "rgba(255, 102, 0, 0.24)"
 
-    # ── Azioni distruttive / Avviso — Rosso Corallo Neumorfico ───────
-    DANGER: str = "#e63946"
-    DANGER_LIGHT: str = "#ff4d5a"
-    DANGER_DARK: str = "#991b24"
+    # Danger
+    DANGER: str = "#E63946"
+    DANGER_LIGHT: str = "#FF4D5A"
+    DANGER_DARK: str = "#991B24"
     DANGER_GLOW: str = "rgba(230, 57, 70, 0.25)"
 
-    # ── Colori neutrali e superfici neumorfiche ─────────────────────
-    BG_MAIN: str = "#181a1d"          # Sfondo finestra principale
-    BG_CARD: str = "#22262c"          # Superficie estrusa di base (materiale neumorfico)
-    BG_SURFACE: str = "#1a1d21"       # Superficie incavata / campi di input
-    BG_SURFACE_ALT: str = "#272c33"   # Superficie leggermente elevata per controlli
-    BG_HOVER: str = "#2d333b"         # Stato hover rialzato
-    BG_ACTIVE: str = "#191b1e"        # Stato premuto / depresso
+    # Base material — richiesto: RGB(20,20,20)
+    BG_MAIN: str = "#141414"
+    BG_CARD: str = "#202225"
+    BG_SURFACE: str = "#171819"
+    BG_SURFACE_ALT: str = "#24272B"
+    BG_HOVER: str = "#272A2F"
+    BG_ACTIVE: str = "#151617"
 
-    # ── Luci e ombre neumorfiche ─────────────────────────────────────
-    SHADOW_LIGHT: str = "#2f353d"     # Luce morbida alto/sinistra
-    SHADOW_DARK: str = "#101214"      # Ombra profonda basso/destra
-    BORDER: str = "#2c3138"           # Bordo di transizione morbido
-    BORDER_LIGHT: str = "#363c45"     # Bordo superiore chiaro
-    BORDER_DARK: str = "#141618"      # Bordo inferiore scuro
-    BORDER_FOCUS: str = "#ff6600"     # Bordo di focus accento (RGB 255,102,0)
+    # Neumorphic light/shadow pair
+    SHADOW_LIGHT: str = "#34383E"
+    SHADOW_DARK: str = "#070809"
+    BORDER: str = "#272A2E"
+    BORDER_LIGHT: str = "#383C42"
+    BORDER_DARK: str = "#090A0B"
+    BORDER_FOCUS: str = "#FF6600"
 
-    # ── Tipografia e contrasto ───────────────────────────────────────
-    TEXT_PRIMARY: str = "#f0f2f5"
-    TEXT_SECONDARY: str = "#9ba3af"
-    TEXT_DISABLED: str = "#555d68"
-    TEXT_ON_ACCENT: str = "#ffffff"
-    TEXT_ON_SELECTION: str = "#ffffff"
+    # Text
+    TEXT_PRIMARY: str = "#ECEFF1"
+    TEXT_SECONDARY: str = "#A7ADB4"
+    TEXT_DISABLED: str = "#6F757C"
+    TEXT_ON_ACCENT: str = "#111111"
+    TEXT_ON_SELECTION: str = "#ECEFF1"
 
-    # ── Elementi interattivi ─────────────────────────────────────────
-    BG_TOOLTIP: str = "#22262c"
-    BG_SELECTION: str = "#803300"
-    BG_BADGE: str = "rgba(255, 255, 255, 0.06)"
+    # Interactive
+    BG_TOOLTIP: str = "#202225"
+    BG_SELECTION: str = "#5A2A0A"
+    BG_BADGE: str = "rgba(255, 255, 255, 0.05)"
 
-    # ── Icona Tray ───────────────────────────────────────────────────
+    # Tray
     ICON_BORDER: str = "rgba(0, 0, 0, 80)"
     ICON_TEXT_SHADOW: str = "rgba(0, 0, 0, 180)"
 
-    # ── Indicatori di stato ──────────────────────────────────────────
-    STATUS_RUNNING: str = "#2ecc71"
-    STATUS_ERROR: str = "#e63946"
-    STATUS_STOPPED: str = "#555d68"
-    STATUS_PAUSED: str = "#ff6600"
-    STATUS_BUFFERING: str = "#f39c12"
-    STATUS_LOADING: str = "#ff6600"
+    # Status
+    STATUS_RUNNING: str = "#2ECC71"
+    STATUS_ERROR: str = "#E63946"
+    STATUS_STOPPED: str = "#747A82"
+    STATUS_PAUSED: str = "#FF6600"
+    STATUS_BUFFERING: str = "#F39C12"
+    STATUS_LOADING: str = "#FF6600"
 
-    # ── Scrollbar ────────────────────────────────────────────────────
-    SCROLLBAR_BG: str = "#1a1d21"
-    SCROLLBAR_HANDLE: str = "#363c45"
-    SCROLLBAR_HANDLE_HOVER: str = "#ff6600"
+    # Scrollbar
+    SCROLLBAR_BG: str = "#171819"
+    SCROLLBAR_HANDLE: str = "#34383E"
+    SCROLLBAR_HANDLE_HOVER: str = "#FF6600"
 
-    # ── Tipografia ───────────────────────────────────────────────────
+    # Typography
     FONT_FAMILY: str = "Noto Sans"
     FONT_FAMILY_MONO: str = "Sarasa Mono SC"
     FONT_SIZE: int = 13
 
-    # ── Animazioni ───────────────────────────────────────────────────
-    ANIM_DURATION_MS: int = 200
+    # Motion
+    ANIM_DURATION_MS: int = 160
     ANIM_PULSE_PERIOD_MS: int = 1500
 
 
 @dataclass(frozen=True)
 class NeumorphicTheme:
-    """Configurazione grafica e geometrica per il rendering neumorfico."""
+    """Rendering tokens. Non ridefinisce il layout dell'app."""
 
     bg: str = ThemeColors.BG_CARD
     bg_dark: str = ThemeColors.BG_MAIN
     bg_surface: str = ThemeColors.BG_SURFACE
+    bg_surface_alt: str = ThemeColors.BG_SURFACE_ALT
     accent: str = ThemeColors.PRIMARY
     accent_dark: str = ThemeColors.PRIMARY_DARK
     danger: str = ThemeColors.DANGER
@@ -121,32 +106,33 @@ class NeumorphicTheme:
     shadow_light: str = ThemeColors.SHADOW_LIGHT
     shadow_dark: str = ThemeColors.SHADOW_DARK
 
-    raised_light_alpha: int = 160
-    raised_dark_alpha: int = 180
-    inset_light_alpha: int = 90
-    inset_dark_alpha: int = 170
+    # Più marcati della v1 per avvicinarsi al mockup approvato.
+    raised_light_alpha: int = 178
+    raised_dark_alpha: int = 225
+    inset_light_alpha: int = 112
+    inset_dark_alpha: int = 218
 
-    shadow_offset: float = 6.0
+    shadow_offset: float = 7.0
     focus_width: float = 1.8
     focus_inset: float = 2.0
     progress_inset: int = 4
-    disabled_opacity: float = 0.45
+    disabled_opacity: float = 0.50
 
-    radius_sm: int = 6
-    radius_md: int = 8
-    radius_lg: int = 12
+    radius_sm: int = 8
+    radius_md: int = 10
+    radius_lg: int = 14
 
+    # Compatibilità con widget esistenti; non vengono imposte nuove geometrie.
     control_height: int = 34
     tab_height: int = 38
     page_shadow_margin: int = 8
-    card_shadow_margin: int = 6
+    card_shadow_margin: int = 8
 
     font_family: str = ThemeColors.FONT_FAMILY
     font_size: int = ThemeColors.FONT_SIZE
 
     @staticmethod
     def qcolor(color_spec: str) -> QColor:
-        """Converte una stringa hex o rgba in QColor."""
         if color_spec.startswith("rgba"):
             parts = color_spec.strip("rgba() ").split(",")
             if len(parts) == 4:
