@@ -107,7 +107,7 @@ class WhisperBackend:
                 body = self._build_multipart(
                     audio_data, language, boundary,
                     openai_compat=endpoint != "/inference",
-                    prompt=prompt, verbose=verbose, vad=vad,
+                    prompt=prompt, verbose=verbose,
                 )
                 req = urllib.request.Request(
                     f"{self.server_url}{endpoint}", data=body,
@@ -284,7 +284,7 @@ class WhisperBackend:
 
     def _build_multipart(self, audio_data: bytes, language: Optional[str], boundary: str,
                          openai_compat: bool = True, prompt: Optional[str] = None,
-                         verbose: bool = False, vad: Optional[bool] = None) -> bytes:
+                         verbose: bool = False) -> bytes:
         fields: list[tuple[str, str]] = []
         if language:
             fields.append(("language", language))
@@ -296,8 +296,6 @@ class WhisperBackend:
             ("response_format", "verbose_json" if verbose else "json"),
             ("beam_size", str(self._settings.beam_size)),
         ]
-        if vad is not None:
-            fields.append(("vad", "true" if vad else "false"))
         if openai_compat:
             fields.append(("model", "whisper-1"))
         parts: list[bytes] = [
