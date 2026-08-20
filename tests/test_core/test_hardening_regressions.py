@@ -1,10 +1,12 @@
 """Regression tests for bugs found by the August 2026 audit."""
 from __future__ import annotations
+from unittest.mock import MagicMock
 import numpy as np
 from config.constants import ProcessDefaults, SYCLDefaults
 from config.settings import Settings
 from core.audio_resampler import StreamingLinearResampler
 from core.buffer_manager import BufferManager
+from core.file_transcriber import FileTranscriberThread
 from core.text_dedup import deduplicate_text
 from core.whisper_backend import WhisperBackend
 
@@ -50,3 +52,23 @@ def test_backend_vad_command_requires_model(tmp_path):
 def test_endpoint_order_prefers_documented_inference():
     import core.whisper_backend as wb
     assert wb._ENDPOINTS[0]=="/inference"
+
+def test_multipart_does_not_send_undocumented_vad_field(tmp_path):
+    b=WhisperBackend(Settings(),tmp_path)
+    body=b._build_multipart(b"wav", "it", "BOUNDARY")
+    assert b'name="vad"' not in body
+
+def test_file_thread_uses_explicit_ui_language():
+    worker=FileTranscriberThread("audio.wav",MagicMock(),Settings(language="en"),language="it")
+    assert worker._language=="it"
+
+def test_demucs_output_is_the_file_actually_transcribed(monkeypatch):
+    worker=FileTranscriberThread(
+        "song.mp3",MagicMock(),Settings(),song_mode=True,isolate_vocals_flag=True
+    )
+    seen={}
+    monkeypatch.setattr(worker,"_run_vocal_isolation",lambda:"/tmp/vocals.wav")
+    monkeypatch.setattr(worker,"_transcribe_progressively",lambda source,start:seen.update(source=source))
+    monkeypatch.setattr(worker,"_cleanup",lambda:None)
+    worker.run()
+    assert seen["source"]=="/tmp/vocals.wav"
