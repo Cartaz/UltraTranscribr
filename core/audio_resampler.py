@@ -49,7 +49,11 @@ class StreamingLinearResampler:
         if limit <= 0 or self._next_pos > limit:
             return np.array([], dtype=np.float32)
 
-        positions = np.arange(self._next_pos, limit + (1e-12 if final else 0), self._step)
+        positions = np.arange(
+            self._next_pos,
+            limit + (1e-12 if final else 0),
+            self._step,
+        )
         if positions.size == 0:
             return np.array([], dtype=np.float32)
         positions = positions[positions <= self._buffer.size - 1]
@@ -74,26 +78,31 @@ class StreamingLinearResampler:
 
 
 def query_device_sample_rate(device: object) -> int:
-    """Usa 16 kHz direttamente se il device lo accetta; altrimenti il default."""
+    """Usa il sample rate nativo/default del device e resampla a 16 kHz.
+
+    Alcuni device ALSA/PipeWire accettano ``check_input_settings`` a 16 kHz ma
+    falliscono poi durante la preparazione dei buffer. Aprire il device al suo
+    rate predefinito evita quella falsa compatibilita; il resampler streaming
+    converte successivamente l'audio al rate richiesto da Whisper.
+    """
     try:
         info = sd.query_devices(device)
-        channels = max(1, min(int(info.get("max_input_channels", 1)), 2))
-        try:
-            sd.check_input_settings(
-                device=device,
-                channels=channels,
-                dtype="float32",
-                samplerate=WHISPER_SAMPLE_RATE,
-            )
-            logger.info("Dispositivo '%s' supporta 16 kHz nativamente", info.get("name", "?"))
-            return WHISPER_SAMPLE_RATE
-        except Exception:
-            default_sr = int(round(float(info.get("default_samplerate", 48000))))
-            logger.info(
-                "Dispositivo '%s': uso %d Hz con resampling a %d Hz",
-                info.get("name", "?"), default_sr, WHISPER_SAMPLE_RATE,
-            )
-            return default_sr
+        raw_rate = float(info.get("default_samplerate", 0) or 0)
+        if not np.isfinite(raw_rate) or raw_rate <= 0:
+            raise ValueError(f"default_samplerate non valido: {raw_rate}")
+        native_sr = int(round(raw_rate))
+        logger.info(
+            "Dispositivo '%s': uso sample rate nativo/default %d Hz"
+            " con resampling a %d Hz",
+            info.get("name", "?"),
+            native_sr,
+            WHISPER_SAMPLE_RATE,
+        )
+        return native_sr
     except Exception as exc:
-        logger.warning("Impossibile interrogare il sample rate del dispositivo: %s", exc)
+        logger.warning(
+            "Impossibile determinare il sample rate nativo del dispositivo: %s; "
+            "uso 48000 Hz",
+            exc,
+        )
         return 48000
