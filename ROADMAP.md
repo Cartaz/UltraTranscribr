@@ -25,7 +25,7 @@ Legend: `[ ]` planned · `[~]` in progress · `[x]` completed
 
 ### 1.3 Regression coverage
 - [x] Unit-test session persistence, atomic writes and recovery discovery.
- [x] Add full lifecycle tests for Live autosave and File autosave.
+- [x] Add full lifecycle tests for Live autosave and File autosave.
 - [x] Add UI contract tests for History/recovery actions.
 
 ## Phase 2 — Model management and clearer runtime state
