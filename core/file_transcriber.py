@@ -1,22 +1,41 @@
 """Progressive, bounded-memory file transcription worker."""
 from __future__ import annotations
-import logging, os, shutil, struct, subprocess, tempfile, threading, wave
+
+import logging
+import os
+import shutil
+import struct
+import subprocess
+import tempfile
+import threading
+import wave
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
+
 import numpy as np
+
 from config.constants import ProcessDefaults, SYCLDefaults
 from config.settings import Settings
 from core.event_bus import EventBus
 from core.models import StatusEnum
 from core.text_dedup import deduplicate_text, remove_chunk_overlap
+from core.transcript_export import normalize_segments
 from core.whisper_backend import WhisperBackend
+
 logger = logging.getLogger(__name__)
 DEMUCS_END = 48
 
+
 class FileTranscriberThread(threading.Thread):
-    def __init__(self, file_path: str, backend: WhisperBackend, settings: Settings,
-                 song_mode: bool = False, isolate_vocals_flag: bool = False,
-                 language: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        file_path: str,
+        backend: WhisperBackend,
+        settings: Settings,
+        song_mode: bool = False,
+        isolate_vocals_flag: bool = False,
+        language: Optional[str] = None,
+    ) -> None:
         super().__init__(daemon=True, name="FileTranscriberThread")
         self._file_path = file_path
         self._backend = backend
@@ -78,16 +97,22 @@ class FileTranscriberThread(threading.Thread):
 
     def _run_vocal_isolation(self) -> Optional[str]:
         from core.vocal_isolator import isolate_vocals, is_demucs_available
+
         bus = EventBus()
         if not is_demucs_available():
             logger.warning("Demucs non disponibile; continuo col file originale")
             return None
         bus.emit("file_transcriber_status_changed", StatusEnum.ISOLATING_VOCALS.value)
+
         def progress(value: int) -> None:
             bus.emit("file_transcriber_progress", min(DEMUCS_END, max(0, value)))
+
         self._vocal_path = isolate_vocals(
-            self._file_path, model_name="htdemucs", device="cpu",
-            stop_event=self._stop_event, progress_callback=progress,
+            self._file_path,
+            model_name="htdemucs",
+            device="cpu",
+            stop_event=self._stop_event,
+            progress_callback=progress,
         )
         return self._vocal_path
 
@@ -99,6 +124,7 @@ class FileTranscriberThread(threading.Thread):
         bus = EventBus()
         full_parts: list[str] = []
         previous = ""
+        last_segment_end_s = 0.0
         chunk_frames = int(ProcessDefaults.FILE_SEGMENT_LENGTH_S * 16000)
         overlap_frames = int(ProcessDefaults.FILE_OVERLAP_DURATION_S * 16000)
         step = max(1, chunk_frames - overlap_frames)
@@ -114,7 +140,10 @@ class FileTranscriberThread(threading.Thread):
                 raw = wf.readframes(min(chunk_frames, total - offset))
                 if not raw:
                     break
-                text = self._request_chunk(self._wrap_pcm16(raw), previous[-500:] or None)
+                text, raw_segments = self._request_chunk_verbose(
+                    self._wrap_pcm16(raw),
+                    previous[-500:] or None,
+                )
                 text = deduplicate_text(text, preserve_repetitions=self._song_mode)
                 text = remove_chunk_overlap(previous, text)
                 if text:
@@ -122,10 +151,27 @@ class FileTranscriberThread(threading.Thread):
                     previous = (previous + " " + text).strip()
                     bus.emit("file_transcriber_new_text", text)
                     bus.emit("file_transcriber_full_text", "\n".join(full_parts))
+
+                chunk_offset_s = offset / 16000.0
+                segments = self._normalize_chunk_segments(
+                    raw_segments,
+                    chunk_offset_s=chunk_offset_s,
+                    committed_before_s=last_segment_end_s,
+                )
+                if segments:
+                    last_segment_end_s = max(
+                        last_segment_end_s,
+                        max(float(segment["end"]) for segment in segments),
+                    )
+                    bus.emit("file_transcriber_segments", segments)
+
                 consumed = min(total, offset + len(raw) // 2)
                 frac = consumed / total
                 pct = start_pct + int(frac * (100 - start_pct))
-                bus.emit("file_transcriber_progress", min(99, pct) if consumed < total else 100)
+                bus.emit(
+                    "file_transcriber_progress",
+                    min(99, pct) if consumed < total else 100,
+                )
                 if consumed >= total:
                     break
                 offset += step
@@ -133,14 +179,18 @@ class FileTranscriberThread(threading.Thread):
             bus.emit("file_transcriber_progress", 100)
 
     def _request_chunk(self, wav_bytes: bytes, prompt: Optional[str]) -> str:
+        """Backward-compatible plain-text request used by existing callers/tests."""
         last: Exception | None = None
         for attempt in range(3):
             if self._stop_event.is_set():
                 return ""
             try:
                 result = self._backend.transcribe_audio(
-                    wav_bytes, language=self._language, prompt=prompt,
-                    verbose=False, timeout=SYCLDefaults.FILE_CHUNK_REQUEST_TIMEOUT_S,
+                    wav_bytes,
+                    language=self._language,
+                    prompt=prompt,
+                    verbose=False,
+                    timeout=SYCLDefaults.FILE_CHUNK_REQUEST_TIMEOUT_S,
                     vad=False if self._song_mode else self._settings.vad_filter,
                 )
                 return result if isinstance(result, str) else str(result.get("text", ""))
@@ -150,14 +200,106 @@ class FileTranscriberThread(threading.Thread):
                     self._stop_event.wait(ProcessDefaults.TRANSCRIBE_RETRY_DELAY_S)
         raise RuntimeError(f"chunk file fallito dopo 3 tentativi: {last}")
 
+    def _request_chunk_verbose(
+        self,
+        wav_bytes: bytes,
+        prompt: Optional[str],
+    ) -> tuple[str, list[dict[str, Any]]]:
+        last: Exception | None = None
+        for attempt in range(3):
+            if self._stop_event.is_set():
+                return "", []
+            try:
+                result = self._backend.transcribe_audio(
+                    wav_bytes,
+                    language=self._language,
+                    prompt=prompt,
+                    verbose=True,
+                    timeout=SYCLDefaults.FILE_CHUNK_REQUEST_TIMEOUT_S,
+                    vad=False if self._song_mode else self._settings.vad_filter,
+                )
+                if isinstance(result, str):
+                    return result, []
+                text = str(result.get("text", ""))
+                segments = result.get("segments", [])
+                return text, segments if isinstance(segments, list) else []
+            except RuntimeError as exc:
+                last = exc
+                if attempt < 2:
+                    self._stop_event.wait(ProcessDefaults.TRANSCRIBE_RETRY_DELAY_S)
+        raise RuntimeError(f"chunk file fallito dopo 3 tentativi: {last}")
+
+    @classmethod
+    def _normalize_chunk_segments(
+        cls,
+        raw_segments: list[dict[str, Any]],
+        *,
+        chunk_offset_s: float,
+        committed_before_s: float,
+    ) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        cutoff = max(0.0, float(committed_before_s))
+        for raw in raw_segments:
+            if not isinstance(raw, dict):
+                continue
+            text = str(raw.get("text") or "").strip()
+            if not text:
+                continue
+            timing = cls._segment_time_seconds(raw)
+            if timing is None:
+                continue
+            local_start, local_end = timing
+            start = max(0.0, float(chunk_offset_s) + local_start)
+            end = max(start, float(chunk_offset_s) + local_end)
+            if end <= cutoff + 0.001:
+                continue
+            if start < cutoff:
+                start = cutoff
+            result.append({"start": start, "end": end, "text": text})
+        return normalize_segments(result)
+
+    @staticmethod
+    def _segment_time_seconds(raw: dict[str, Any]) -> tuple[float, float] | None:
+        try:
+            if "start" in raw or "end" in raw:
+                start = float(raw.get("start", 0.0))
+                end = float(raw.get("end", start))
+                return max(0.0, start), max(max(0.0, start), end)
+            if "t0" in raw or "t1" in raw:
+                start = float(raw.get("t0", 0.0)) * 0.01
+                end = float(raw.get("t1", raw.get("t0", 0.0))) * 0.01
+                return max(0.0, start), max(max(0.0, start), end)
+            offsets = raw.get("offsets")
+            if isinstance(offsets, dict):
+                # CLI-style JSON offsets are expressed in milliseconds.
+                start = float(offsets.get("from", 0.0)) / 1000.0
+                end = float(offsets.get("to", offsets.get("from", 0.0))) / 1000.0
+                return max(0.0, start), max(max(0.0, start), end)
+        except (TypeError, ValueError):
+            return None
+        return None
+
     def _convert_to_pcm_wav(self, source: str) -> str:
         if not shutil.which("ffmpeg"):
             return self._convert_with_soundfile(source)
         tmp = tempfile.mkdtemp(prefix="ultratranscribr_pcm_")
         out = os.path.join(tmp, "audio.wav")
         cmd = [
-            "ffmpeg", "-y", "-i", source, "-vn", "-ar", "16000", "-ac", "1",
-            "-c:a", "pcm_s16le", "-hide_banner", "-loglevel", "error", out,
+            "ffmpeg",
+            "-y",
+            "-i",
+            source,
+            "-vn",
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-c:a",
+            "pcm_s16le",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            out,
         ]
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         with self._conversion_lock:
@@ -188,7 +330,9 @@ class FileTranscriberThread(threading.Thread):
 
     def _convert_with_soundfile(self, source: str) -> str:
         import soundfile as sf
+
         from core.audio_resampler import resample
+
         data, sr = sf.read(source, dtype="float32", always_2d=True)
         if self._stop_event.is_set():
             raise RuntimeError("conversione audio interrotta")
@@ -202,14 +346,27 @@ class FileTranscriberThread(threading.Thread):
     @staticmethod
     def _wrap_pcm16(raw: bytes) -> bytes:
         return struct.pack(
-            "<4sI4s4sIHHIIHH4sI", b"RIFF", 36 + len(raw), b"WAVE", b"fmt ", 16,
-            1, 1, 16000, 32000, 2, 16, b"data", len(raw),
+            "<4sI4s4sIHHIIHH4sI",
+            b"RIFF",
+            36 + len(raw),
+            b"WAVE",
+            b"fmt ",
+            16,
+            1,
+            1,
+            16000,
+            32000,
+            2,
+            16,
+            b"data",
+            len(raw),
         ) + raw
 
     def _cleanup(self) -> None:
         if self._vocal_path:
             try:
                 from core.vocal_isolator import cleanup_vocals
+
                 cleanup_vocals(self._vocal_path)
             except Exception:
                 logger.debug("Cleanup vocals fallito", exc_info=True)
