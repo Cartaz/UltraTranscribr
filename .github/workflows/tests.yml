@@ -22,4 +22,5 @@ jobs:
       - run: node --check ui/web/settings_cleanup.js
       - run: node --check ui/web/power_user.js
       - run: node --check ui/web/phase10.js
+      - run: node --check ui/web/phase10_hardening.js
       - run: pytest -q
