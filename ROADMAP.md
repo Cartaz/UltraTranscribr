@@ -106,11 +106,11 @@ The first multi-session architecture keeps one shared whisper-server while captu
 
 ## Phase 8 — Installer, logs and documentation
 
-- [ ] Make `install.sh` fully idempotent and skip unchanged expensive build steps.
-- [ ] Add a final environment self-check: oneAPI, Level Zero, Intel GPU, whisper-server, ffmpeg, models, optional Demucs.
-- [ ] Rotate application logs instead of allowing unbounded growth.
-- [ ] Replace the placeholder README with complete installation, usage and troubleshooting documentation.
-- [ ] Document supported CachyOS/Arch environment and optional components.
+- [x] Make `install.sh` fully idempotent and skip unchanged expensive build steps.
+- [x] Add a final environment self-check: oneAPI, Level Zero, Intel GPU, whisper-server, ffmpeg, models, optional Demucs.
+- [x] Rotate application logs instead of allowing unbounded growth.
+- [x] Replace the placeholder README with complete installation, usage and troubleshooting documentation.
+- [x] Document supported CachyOS/Arch environment and optional components.
 
 ## Phase 9 — Power-user features
 
