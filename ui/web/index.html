@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="models.css">
   <link rel="stylesheet" href="runtime.css">
   <link rel="stylesheet" href="multi_live.css">
+  <link rel="stylesheet" href="settings.css">
 </head>
 <body>
 <div class="shell">
@@ -145,18 +146,82 @@
 
     <section class="view scroll-view" data-panel="settings" hidden>
       <form id="settings-form">
-        <div class="settings-grid">
-          <section class="card"><div class="card-head"><div><p class="kicker">TRASCRIZIONE</p><h2>Riconoscimento</h2></div></div><div class="fields two">
-            <div><label for="s-model">Modello</label><select id="s-model" name="model_size"></select></div><div><label for="s-language">Lingua</label><input id="s-language" name="language" type="text" spellcheck="false"></div>
-            <div><label for="s-source">Sorgente predefinita</label><select id="s-source" name="audio_source"><option value="system">Audio di sistema</option><option value="application">Applicazione</option><option value="microphone">Microfono</option></select></div><div><label for="s-beam">Beam size</label><input id="s-beam" name="beam_size" type="number" min="1" max="64"></div>
-          </div><label class="toggle-row" for="s-vad"><span><strong>VAD</strong><small>Voice activity detection del server.</small></span><input id="s-vad" name="vad_filter" type="checkbox"><i></i></label><div class="fields two"><div><label for="s-vad-silence">Silenzio VAD (ms)</label><input id="s-vad-silence" name="vad_min_silence_ms" type="number" min="0" max="10000"></div><div><label for="s-buffer">Soglia buffer</label><input id="s-buffer" name="buffer_warn_threshold" type="number" min="1"></div></div></section>
-          <section class="card"><div class="card-head"><div><p class="kicker">AUDIO</p><h2>Acquisizione</h2></div></div><div class="fields two"><div><label for="s-chunk">Chunk (ms)</label><input id="s-chunk" name="chunk_ms" type="number" min="100" max="10000" step="100"></div><div><label for="s-channels">Canali</label><select id="s-channels" name="channels"><option value="1">Mono</option><option value="2">Stereo</option></select></div><div class="wide"><label for="s-sink">Sink/dispositivo forzato</label><input id="s-sink" name="sink_name" type="text" placeholder="Vuoto = automatico"></div><div class="wide"><label for="s-keyword">Filtro microfono (opzionale)</label><input id="s-keyword" name="sink_search_keyword" type="text" placeholder="Vuoto = microfono predefinito"></div></div></section>
-          <section class="card model-manager-card"><div class="card-head"><div><p class="kicker">MODELLI</p><h2>Gestione modelli Whisper</h2></div><div class="toolbar"><button type="button" id="models-refresh">Aggiorna</button></div></div><p class="help">Scarica in anticipo i modelli disponibili o libera spazio. I download interrotti vengono ripresi dal file parziale quando possibile.</p><div id="model-list" class="model-list" aria-live="polite"><p class="model-empty">Lettura modelli in corso…</p></div></section>
-          <section class="card"><div class="card-head"><div><p class="kicker">BACKEND</p><h2>SYCL</h2></div></div><div class="fields two"><div><label for="s-port">Porta server</label><input id="s-port" name="server_port" type="number" min="1" max="65535"></div><div><label for="s-gpu">GPU layers</label><input id="s-gpu" name="gpu_layers" type="number" min="0"></div><div><label for="s-compute">Compute type</label><input id="s-compute" name="compute_type" type="text"></div><div><label for="s-device">Device</label><input id="s-device" value="sycl" readonly></div><div><label for="s-rate">Sample rate</label><input id="s-rate" value="16000 Hz" readonly></div><div><label for="s-dtype">Formato</label><input id="s-dtype" value="float32" readonly></div></div><p class="help">I parametri di avvio di whisper-server vengono applicati integralmente al successivo avvio dell'app.</p></section>
-          <section class="card"><div class="card-head"><div><p class="kicker">FINESTRA</p><h2>Dimensioni</h2></div></div><div class="fields two"><div><label for="s-width">Larghezza</label><input id="s-width" name="window_width" type="number" min="1200"></div><div><label for="s-height">Altezza</label><input id="s-height" name="window_height" type="number" min="800"></div></div><p class="help">Dimensione minima supportata: 1200 × 800.</p></section>
-          <section class="card"><div class="card-head"><div><p class="kicker">CRONOLOGIA</p><h2>Conservazione</h2></div></div><div class="fields"><div><label for="s-retention">Conserva per giorni</label><input id="s-retention" name="history_retention_days" type="number" min="0" max="3650"></div></div><p class="help">Default 90 giorni. Imposta 0 per conservare le trascrizioni senza scadenza automatica.</p></section>
+        <div class="segmented settings-tabs" role="tablist" aria-label="Livello impostazioni">
+          <button type="button" class="segment settings-tab active" data-settings-tab="normal" role="tab" aria-selected="true">Normali</button>
+          <button type="button" class="segment settings-tab" data-settings-tab="advanced" role="tab" aria-selected="false">Avanzate</button>
         </div>
-        <section class="card save-card"><div><p class="kicker">SALVATGIO</p><h2>Applica configurazione</h2><p class="help">I valori vengono validati dal modello Settings Python.</p></div><button id="settings-save" class="button selected" type="submit">Salva impostazioni</button></section>
+
+        <div class="settings-pane" data-settings-pane="normal" role="tabpanel">
+          <div class="settings-grid">
+            <section class="card">
+              <div class="card-head"><div><p class="kicker">TRASCRIZIONE</p><h2>Riconoscimento</h2></div><div class="toolbar"><button type="button" class="settings-reset" data-reset-section="recognition">Ripristina</button></div></div>
+              <div class="fields two">
+                <div><label for="s-model">Modello</label><select id="s-model" name="model_size"></select></div>
+                <div><label for="s-language">Lingua</label><input id="s-language" name="language" type="text" spellcheck="false"></div>
+                <div class="wide"><label for="s-source">Sorgente predefinita</label><select id="s-source" name="audio_source"><option value="system">Audio di sistema</option><option value="application">Applicazione</option><option value="microphone">Microfono</option></select></div>
+              </div>
+              <label class="toggle-row" for="s-vad"><span><strong>VAD</strong><small>Voice activity detection del server.</small></span><input id="s-vad" name="vad_filter" type="checkbox"><i></i></label>
+            </section>
+
+            <section class="card model-manager-card">
+              <div class="card-head"><div><p class="kicker">MODELLI</p><h2>Gestione modelli Whisper</h2></div><div class="toolbar"><button type="button" id="models-refresh">Aggiorna</button></div></div>
+              <p class="help">Scarica in anticipo i modelli disponibili o libera spazio. I download interrotti vengono ripresi dal file parziale quando possibile.</p>
+              <div id="model-list" class="model-list" aria-live="polite"><p class="model-empty">Lettura modelli in corso…</p></div>
+            </section>
+
+            <section class="card">
+              <div class="card-head"><div><p class="kicker">CRONOLOGIA</p><h2>Conservazione</h2></div><div class="toolbar"><button type="button" class="settings-reset" data-reset-section="history">Ripristina</button></div></div>
+              <div class="fields"><div><label for="s-retention">Conserva per giorni</label><input id="s-retention" name="history_retention_days" type="number" min="0" max="3650"></div></div>
+              <p class="help">Default 90 giorni. Imposta 0 per conservare le trascrizioni senza scadenza automatica.</p>
+            </section>
+          </div>
+        </div>
+
+        <div class="settings-pane" data-settings-pane="advanced" role="tabpanel" hidden>
+          <div class="settings-grid">
+            <section class="card">
+              <div class="card-head"><div><p class="kicker">TRASCRIZIONE</p><h2>Regolazioni avanzate</h2></div><div class="toolbar"><button type="button" class="settings-reset" data-reset-section="tuning">Ripristina</button></div></div>
+              <div class="fields two">
+                <div><label for="s-beam">Beam size</label><input id="s-beam" name="beam_size" type="number" min="1" max="64"></div>
+                <div><label for="s-vad-silence">Silenzio VAD (ms)</label><input id="s-vad-silence" name="vad_min_silence_ms" type="number" min="0" max="10000"></div>
+                <div><label for="s-buffer">Soglia buffer</label><input id="s-buffer" name="buffer_warn_threshold" type="number" min="1"></div>
+              </div>
+            </section>
+
+            <section class="card">
+              <div class="card-head"><div><p class="kicker">AUDIO</p><h2>Acquisizione avanzata</h2></div><div class="toolbar"><button type="button" class="settings-reset" data-reset-section="audio">Ripristina</button></div></div>
+              <div class="fields two">
+                <div><label for="s-chunk">Chunk (ms)</label><input id="s-chunk" name="chunk_ms" type="number" min="100" max="10000" step="100"></div>
+                <div><label for="s-channels">Canali</label><select id="s-channels" name="channels"><option value="1">Mono</option><option value="2">Stereo</option></select></div>
+                <div class="wide"><label for="s-sink">Sink/dispositivo forzato</label><input id="s-sink" name="sink_name" type="text" placeholder="Vuoto = automatico"></div>
+                <div class="wide"><label for="s-keyword">Filtro microfono (opzionale)</label><input id="s-keyword" name="sink_search_keyword" type="text" placeholder="Vuoto = microfono predefinito"></div>
+              </div>
+            </section>
+
+            <section class="card">
+              <div class="card-head"><div><p class="kicker">BACKEND</p><h2>SYCL</h2></div><div class="toolbar"><button type="button" class="settings-reset" data-reset-section="backend">Ripristina</button></div></div>
+              <div class="fields two">
+                <div><label for="s-port">Porta server</label><input id="s-port" name="server_port" type="number" min="1" max="65535"></div>
+                <div><label for="s-gpu">GPU layers</label><input id="s-gpu" name="gpu_layers" type="number" min="0"></div>
+                <div><label for="s-compute">Compute type</label><input id="s-compute" name="compute_type" type="text"></div>
+                <div><label for="s-device">Device</label><input id="s-device" value="sycl" readonly></div>
+                <div><label for="s-rate">Sample rate</label><input id="s-rate" value="16000 Hz" readonly></div>
+                <div><label for="s-dtype">Formato</label><input id="s-dtype" value="float32" readonly></div>
+              </div>
+              <p class="help">I parametri di avvio di whisper-server vengono applicati integralmente al successivo avvio dell'app.</p>
+            </section>
+
+            <section class="card">
+              <div class="card-head"><div><p class="kicker">FINESTRA</p><h2>Geometria automatica</h2></div></div>
+              <div class="settings-geometry-note"><strong>Salvataggio automatico attivo</strong><span>UltraTranscribr memorizza l'ultima dimensione della finestra durante il ridimensionamento e rispetta sempre il minimo 1200 × 800.</span></div>
+            </section>
+          </div>
+        </div>
+
+        <input id="s-width" type="hidden" disabled aria-hidden="true">
+        <input id="s-height" type="hidden" disabled aria-hidden="true">
+
+        <section class="card save-card"><div><p class="kicker">SALVATAGGIO</p><h2>Applica configurazione</h2><p class="help">I valori vengono validati dal modello Settings Python. I reset agiscono solo sulla sezione scelta.</p></div><button id="settings-save" class="button selected" type="submit">Salva impostazioni</button></section>
       </form>
     </section>
 
@@ -171,5 +236,6 @@
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 <script src="app.js"></script>
 <script src="multi_live.js"></script>
+<script src="settings_cleanup.js"></script>
 </body>
 </html>
