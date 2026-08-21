@@ -10,6 +10,7 @@ def test_web_ui_files_and_native_stack_are_present() -> None:
     expected = [
         ROOT / "ui" / "__init__.py",
         ROOT / "ui" / "bridge.py",
+        ROOT / "ui" / "multi_session_bridge.py",
         ROOT / "ui" / "main_window.py",
         ROOT / "ui" / "tray_icon.py",
         WEB / "index.html",
@@ -17,7 +18,9 @@ def test_web_ui_files_and_native_stack_are_present() -> None:
         WEB / "history.css",
         WEB / "models.css",
         WEB / "runtime.css",
+        WEB / "multi_live.css",
         WEB / "app.js",
+        WEB / "multi_live.js",
     ]
     for path in expected:
         assert path.is_file(), f"missing UI file: {path.relative_to(ROOT)}"
@@ -25,48 +28,57 @@ def test_web_ui_files_and_native_stack_are_present() -> None:
     main_window = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
     assert "QWebEngineView" in main_window
     assert "QWebChannel" in main_window
+    assert "MultiSessionBackendBridge" in main_window
 
 
 def test_dark_neumorphism_uses_exact_surface_and_accent_without_gradients() -> None:
-    css = (WEB / "styles.css").read_text(encoding="utf-8").lower()
-    history_css = (WEB / "history.css").read_text(encoding="utf-8").lower()
-    models_css = (WEB / "models.css").read_text(encoding="utf-8").lower()
-    runtime_css = (WEB / "runtime.css").read_text(encoding="utf-8").lower()
+    styles = [
+        (WEB / name).read_text(encoding="utf-8").lower()
+        for name in ("styles.css", "history.css", "models.css", "runtime.css", "multi_live.css")
+    ]
+    css = styles[0]
     assert "--surface: rgb(20, 20, 20)" in css
     assert "--accent: rgb(255, 102, 0)" in css
     assert "box-shadow" in css
     assert "inset" in css
-    assert "gradient(" not in css
-    assert "gradient(" not in history_css
-    assert "gradient(" not in models_css
-    assert "gradient(" not in runtime_css
+    for stylesheet in styles:
+        assert "gradient(" not in stylesheet
 
 
 def test_frontend_is_wired_to_real_backend_operations() -> None:
     bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    multi_bridge = (ROOT / "ui" / "multi_session_bridge.py").read_text(encoding="utf-8")
     script = (WEB / "app.js").read_text(encoding="utf-8")
+    multi_script = (WEB / "multi_live.js").read_text(encoding="utf-8")
 
     for operation in (
-        "start_transcription",
-        "stop_transcription",
-        "stop_listening",
         "start_file_transcription",
         "stop_file_transcription",
         "update_settings",
     ):
         assert operation in bridge
-
-    for event in (
-        "transcriber_buffer_level",
-        "transcriber_new_text",
-        "file_transcriber_progress",
-        "file_transcriber_full_text",
+    for operation in (
+        "start_live_session",
+        "stop_live_session",
+        "stopAllLive",
+        "drainAllLive",
     ):
+        assert operation in multi_bridge
+
+    for event in ("file_transcriber_progress", "file_transcriber_full_text"):
         assert event in bridge
         assert event in script
+    for event in (
+        "live_session_buffer_level",
+        "live_session_text",
+        "live_session_queue_wait",
+    ):
+        assert event in multi_bridge
+        assert event in multi_script
 
     assert "setInterval(" not in script
     assert "Math.random(" not in script
+    assert "Math.random(" not in multi_script
 
 
 def test_navigation_and_accessibility_contract() -> None:
@@ -106,6 +118,7 @@ def test_history_and_recovery_are_backed_by_python_persistence() -> None:
     script = (WEB / "app.js").read_text(encoding="utf-8")
     bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
     controller = (ROOT / "core" / "app_controller.py").read_text(encoding="utf-8")
+    manager = (ROOT / "core" / "live_sessions.py").read_text(encoding="utf-8")
     transcriber = (ROOT / "core" / "transcriber.py").read_text(encoding="utf-8")
 
     for element_id in ("history-list", "recovery-list", "history-export", "history-delete", "s-retention"):
@@ -119,9 +132,10 @@ def test_history_and_recovery_are_backed_by_python_persistence() -> None:
         assert operation in script
 
     assert "TranscriptHistoryStore" in controller
-    assert "transcriber_new_text" in controller
     assert "history_retention_days" in controller
-    assert 'EventBus().emit("recovery_audio_saved"' in transcriber
+    assert 'self._emit("recovery_audio_saved"' in transcriber
+    assert "transcriber_new_text" in manager
+    assert "_history.append_text" in manager
     assert "refreshHistory" in script
 
 
@@ -192,6 +206,7 @@ def test_application_stream_ui_uses_real_routing_backend() -> None:
     script = (WEB / "app.js").read_text(encoding="utf-8")
     bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
     controller = (ROOT / "core" / "app_controller.py").read_text(encoding="utf-8")
+    live_manager = (ROOT / "core" / "live_sessions.py").read_text(encoding="utf-8")
     routing = (ROOT / "core" / "audio_routing.py").read_text(encoding="utf-8")
     runtime_css = (WEB / "runtime.css").read_text(encoding="utf-8")
 
@@ -201,8 +216,8 @@ def test_application_stream_ui_uses_real_routing_backend() -> None:
     assert "listPlaybackStreams" in bridge
     assert "listPlaybackStreams" in script
     assert "playback_stream_status_changed" in bridge
-    assert "playback_stream_status_changed" in controller
     assert "playback_stream_status_changed" in script
+    assert "live_session_route_status" in live_manager
     assert "PulseAudioRouter" in controller
     assert "module-null-sink" in routing
     assert "move-sink-input" in routing
