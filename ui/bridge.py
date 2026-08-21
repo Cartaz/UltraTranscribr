@@ -220,6 +220,37 @@ class BackendBridge(QObject):
         session = self._controller.get_history_session(session_id)
         return json.dumps(session, ensure_ascii=False, default=str)
 
+    @Slot(str, result=str)
+    def exportHistorySession(self, session_id: str) -> str:
+        try:
+            session = self._controller.get_history_session(session_id)
+            if not session:
+                raise KeyError("sessione non trovata")
+            source_path = str(session.get("source_path") or "")
+            stem = Path(source_path).stem if source_path else session_id
+            default_path = str(Path.home() / f"{stem or session_id}.txt")
+            target, _ = QFileDialog.getSaveFileName(
+                None,
+                "Esporta trascrizione",
+                default_path,
+                "Testo (*.txt)",
+            )
+            if not target:
+                return json.dumps({"ok": False, "cancelled": True}, ensure_ascii=False)
+            exported = self._controller.export_history_session(session_id, target)
+            return json.dumps({"ok": True, "path": exported}, ensure_ascii=False)
+        except Exception as exc:
+            logger.warning("Export cronologia fallito: %s", exc)
+            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    @Slot(str, result=str)
+    def deleteHistorySession(self, session_id: str) -> str:
+        try:
+            deleted = self._controller.delete_history_session(session_id)
+            return json.dumps({"ok": True, "deleted": deleted}, ensure_ascii=False)
+        except Exception as exc:
+            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
     @Slot(result=str)
     def listRecoveryAudio(self) -> str:
         return json.dumps(
@@ -227,6 +258,23 @@ class BackendBridge(QObject):
             ensure_ascii=False,
             default=str,
         )
+
+    @Slot(str, result=str)
+    def startRecovery(self, recovery_path: str) -> str:
+        try:
+            self._prepare_backend_for_selected_model()
+            self._controller.start_recovery_transcription(recovery_path)
+            return json.dumps({"ok": True}, ensure_ascii=False)
+        except Exception as exc:
+            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    @Slot(str, result=str)
+    def deleteRecovery(self, recovery_path: str) -> str:
+        try:
+            deleted = self._controller.delete_recovery_audio(recovery_path)
+            return json.dumps({"ok": True, "deleted": deleted}, ensure_ascii=False)
+        except Exception as exc:
+            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
 
     @Slot(str, result=str)
     def applySettings(self, payload_json: str) -> str:

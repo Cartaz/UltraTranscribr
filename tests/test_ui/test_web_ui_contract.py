@@ -102,11 +102,29 @@ def test_history_and_recovery_are_backed_by_python_persistence() -> None:
     controller = (ROOT / "core" / "app_controller.py").read_text(encoding="utf-8")
     transcriber = (ROOT / "core" / "transcriber.py").read_text(encoding="utf-8")
 
-    assert 'id="history-list"' in html
-    assert 'id="recovery-list"' in html
-    assert "listHistory" in bridge and "getHistorySession" in bridge
-    assert "listRecoveryAudio" in bridge
+    for element_id in (
+        "history-list",
+        "recovery-list",
+        "history-export",
+        "history-delete",
+        "s-retention",
+    ):
+        assert f'id="{element_id}"' in html
+
+    for operation in (
+        "listHistory",
+        "getHistorySession",
+        "exportHistorySession",
+        "deleteHistorySession",
+        "listRecoveryAudio",
+        "startRecovery",
+        "deleteRecovery",
+    ):
+        assert operation in bridge
+        assert operation in script
+
     assert "TranscriptHistoryStore" in controller
     assert "transcriber_new_text" in controller
+    assert "history_retention_days" in controller
     assert 'EventBus().emit("recovery_audio_saved"' in transcriber
     assert "refreshHistory" in script

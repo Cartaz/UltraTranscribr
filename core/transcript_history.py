@@ -1,6 +1,6 @@
 """Persistent, crash-resistant transcription history.
 
-The web UI is intentionally not the source of truth for transcripts.  This
+The web UI is intentionally not the source of truth for transcripts. This
 module stores session text and metadata under XDG_DATA_HOME so a completed or
 partially completed transcription survives a UI/app restart.
 """
@@ -13,7 +13,7 @@ import tempfile
 import threading
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -24,6 +24,18 @@ logger = logging.getLogger(__name__)
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 @dataclass
@@ -145,6 +157,73 @@ class TranscriptHistoryStore:
                     break
             return sessions
 
+    def delete_session(self, session_id: str) -> bool:
+        with self._lock:
+            path = self._path(session_id)
+            if not path.exists():
+                return False
+            path.unlink()
+            return True
+
+    def export_text(self, session_id: str, target_path: Path | str) -> Path:
+        """Export only the transcript text, never rewriting the history record."""
+        with self._lock:
+            session = self._read_session_required(session_id)
+            target = Path(target_path).expanduser()
+            if target.suffix.lower() != ".txt":
+                target = target.with_suffix(".txt")
+            if not target.parent.is_dir():
+                raise FileNotFoundError(f"directory di destinazione non trovata: {target.parent}")
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(session.text)
+                    if session.text and not session.text.endswith("\n"):
+                        handle.write("\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(tmp_name, target)
+            except Exception:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
+                raise
+            return target
+
+    def prune_older_than(self, retention_days: int) -> int:
+        """Delete session records older than the configured retention period.
+
+        A value of 0 disables automatic pruning.
+        """
+        days = int(retention_days)
+        if days <= 0:
+            return 0
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        deleted = 0
+        with self._lock:
+            try:
+                paths = list(self._root.glob("*.json"))
+            except OSError:
+                return 0
+            for path in paths:
+                try:
+                    session = self._read_path(path)
+                    timestamp = (
+                        _parse_timestamp(session.ended_at)
+                        or _parse_timestamp(session.updated_at)
+                        or _parse_timestamp(session.started_at)
+                    )
+                    if timestamp is None or timestamp >= cutoff:
+                        continue
+                    path.unlink()
+                    deleted += 1
+                except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+                    logger.warning("Retention cronologia ignorata per %s: %s", path, exc)
+        return deleted
+
     @staticmethod
     def list_recovery_audio(cache_dir: Optional[Path] = None) -> list[dict[str, Any]]:
         root = Path(cache_dir or AppMeta.CACHE_DIR)
@@ -174,9 +253,41 @@ class TranscriptHistoryStore:
             )
         return result
 
+    @staticmethod
+    def resolve_recovery_audio(path: Path | str, cache_dir: Optional[Path] = None) -> Path:
+        root = Path(cache_dir or AppMeta.CACHE_DIR).expanduser().resolve()
+        candidate = Path(path).expanduser()
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError as exc:
+            raise FileNotFoundError(f"recovery audio non trovato: {candidate}") from exc
+        if (
+            resolved.parent != root
+            or not resolved.name.startswith("recovery-live-")
+            or resolved.suffix.lower() != ".wav"
+        ):
+            raise ValueError("percorso recovery non valido")
+        if not resolved.is_file():
+            raise FileNotFoundError(f"recovery audio non trovato: {resolved}")
+        return resolved
+
+    @classmethod
+    def delete_recovery_audio(
+        cls, path: Path | str, cache_dir: Optional[Path] = None
+    ) -> bool:
+        try:
+            resolved = cls.resolve_recovery_audio(path, cache_dir)
+        except FileNotFoundError:
+            return False
+        resolved.unlink()
+        return True
+
     def _path(self, session_id: str) -> Path:
         safe_id = str(session_id)
-        if not safe_id or any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for ch in safe_id):
+        if not safe_id or any(
+            ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+            for ch in safe_id
+        ):
             raise ValueError("session id non valido")
         return self._root / f"{safe_id}.json"
 

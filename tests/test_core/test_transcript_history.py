@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -40,15 +41,9 @@ def test_recent_history_is_newest_first_and_uses_preview(tmp_path: Path) -> None
     second = store.create_session(kind="file", model="large-v3", language="en")
     store.append_text(second, "due " * 100)
 
-    # Ensure deterministic order independently of timestamp filesystem granularity.
     first_path = store.root / f"{first}.json"
     second_path = store.root / f"{second}.json"
-    first_path.touch()
-    second_path.touch()
-    first_path.touch()
-    # Explicit mtimes: second is newer.
     first_stat = first_path.stat()
-    import os
     os.utime(first_path, (first_stat.st_atime, 1000))
     os.utime(second_path, (first_stat.st_atime, 2000))
 
@@ -75,7 +70,40 @@ def test_corrupt_history_record_is_skipped(tmp_path: Path) -> None:
     assert [item["id"] for item in recent] == [valid]
 
 
-def test_recovery_audio_inventory(tmp_path: Path) -> None:
+def test_export_txt_is_atomic_and_session_can_be_deleted(tmp_path: Path) -> None:
+    store = TranscriptHistoryStore(tmp_path / "history")
+    session_id = store.create_session(kind="file", model="medium", language="it")
+    store.append_text(session_id, "testo persistente")
+
+    exported = store.export_text(session_id, tmp_path / "export")
+    assert exported == tmp_path / "export.txt"
+    assert exported.read_text(encoding="utf-8") == "testo persistente\n"
+
+    assert store.delete_session(session_id) is True
+    assert store.get_session(session_id) is None
+    assert store.delete_session(session_id) is False
+
+
+def test_retention_prunes_old_records_and_zero_disables_it(tmp_path: Path) -> None:
+    store = TranscriptHistoryStore(tmp_path / "history")
+    old_id = store.create_session(kind="live", model="medium", language="it")
+    recent_id = store.create_session(kind="file", model="medium", language="it")
+
+    old_path = store.root / f"{old_id}.json"
+    data = json.loads(old_path.read_text(encoding="utf-8"))
+    data["started_at"] = "2020-01-01T00:00:00+00:00"
+    data["updated_at"] = "2020-01-01T00:00:00+00:00"
+    data["ended_at"] = "2020-01-01T00:01:00+00:00"
+    old_path.write_text(json.dumps(data), encoding="utf-8")
+
+    assert store.prune_older_than(0) == 0
+    assert store.get_session(old_id) is not None
+    assert store.prune_older_than(30) == 1
+    assert store.get_session(old_id) is None
+    assert store.get_session(recent_id) is not None
+
+
+def test_recovery_audio_inventory_and_safe_delete(tmp_path: Path) -> None:
     cache = tmp_path / "cache"
     cache.mkdir()
     wav = cache / "recovery-live-123.wav"
@@ -87,3 +115,18 @@ def test_recovery_audio_inventory(tmp_path: Path) -> None:
     assert items[0]["name"] == wav.name
     assert items[0]["path"] == str(wav)
     assert items[0]["size_bytes"] == wav.stat().st_size
+    assert TranscriptHistoryStore.resolve_recovery_audio(wav, cache) == wav.resolve()
+
+    assert TranscriptHistoryStore.delete_recovery_audio(wav, cache) is True
+    assert not wav.exists()
+    assert TranscriptHistoryStore.delete_recovery_audio(wav, cache) is False
+
+
+def test_recovery_path_cannot_escape_cache(tmp_path: Path) -> None:
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    outside = tmp_path / "recovery-live-outside.wav"
+    outside.write_bytes(b"RIFF")
+
+    with pytest.raises(ValueError):
+        TranscriptHistoryStore.resolve_recovery_audio(outside, cache)
