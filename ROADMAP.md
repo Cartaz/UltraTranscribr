@@ -25,16 +25,16 @@ Legend: `[ ]` planned · `[~]` in progress · `[x]` completed
 
 ### 1.3 Regression coverage
 - [x] Unit-test session persistence, atomic writes and recovery discovery.
-- [x] Add full lifecycle tests for Live autosave and File autosave.
+ [x] Add full lifecycle tests for Live autosave and File autosave.
 - [x] Add UI contract tests for History/recovery actions.
 
 ## Phase 2 — Model management and clearer runtime state
 
 ### 2.1 Model manager UI
 - [x] Show only supported UI models: Large v3, Large v3 Turbo, Medium.
-- [ ] Show Installed / Not installed and size on disk.
-- [ ] Add Download and Delete actions.
-- [ ] Surface real download progress and download errors.
+- [x] Show Installed / Not installed and size on disk.
+- [x] Add Download and Delete actions.
+- [x] Surface real download progress and download errors.
 - [x] Keep resumable `.part` downloads and hash validation.
 - [ ] Optional preload-on-start setting.
 
