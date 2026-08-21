@@ -16,11 +16,7 @@ from core.audio_capture_monitor import monitor_callback, monitor_capture_loop
 from core.audio_resampler import WHISPER_SAMPLE_RATE, query_device_sample_rate
 from core.buffer_manager import BufferManager
 from core.event_bus import EventBus
-from core.pulse_helpers import (
-    resolve_monitor_device,
-    restore_pulse_source,
-    set_pulse_source,
-)
+from core.pulse_helpers import resolve_monitor_device, temporary_pulse_source
 
 logger = logging.getLogger(__name__)
 EventSink = Callable[[str, Any], None]
@@ -55,7 +51,6 @@ class AudioCaptureThread(threading.Thread):
         self._is_monitor = False
         self._cb_accumulator = [np.array([], dtype=np.float32)]
         self._cb_lock = threading.Lock()
-        self._pulse_source_set = False
 
     def _emit(self, event: str, payload: Any = None) -> None:
         if self._event_sink is not None:
@@ -115,9 +110,6 @@ class AudioCaptureThread(threading.Thread):
                     self._stop_event.wait(self._reconnect_delay)
         finally:
             self._close_stream()
-            if self._pulse_source_set:
-                restore_pulse_source()
-                self._pulse_source_set = False
             if fatal_error and not self._stop_event.is_set():
                 self._buffer.close_input()
                 self._emit(
@@ -147,20 +139,26 @@ class AudioCaptureThread(threading.Thread):
 
     def _open_stream_monitor(self) -> None:
         device, pulse_source = resolve_monitor_device(self.device_name or "")
-        if pulse_source:
-            set_pulse_source(pulse_source)
-            self._pulse_source_set = True
         self._cb_accumulator = [np.array([], dtype=np.float32)]
-        self._stream = sd.InputStream(
-            device=device,
-            samplerate=WHISPER_SAMPLE_RATE,
-            channels=self._settings.channels,
-            dtype=self._settings.dtype,
-            blocksize=0,
-            latency="low",
-            callback=self._monitor_cb_wrapper,
-        )
-        self._stream.start()
+
+        def open_stream() -> None:
+            self._stream = sd.InputStream(
+                device=device,
+                samplerate=WHISPER_SAMPLE_RATE,
+                channels=self._settings.channels,
+                dtype=self._settings.dtype,
+                blocksize=0,
+                latency="low",
+                callback=self._monitor_cb_wrapper,
+            )
+            self._stream.start()
+
+        if pulse_source:
+            with temporary_pulse_source(pulse_source):
+                open_stream()
+        else:
+            open_stream()
+
         self._native_sr = WHISPER_SAMPLE_RATE
         with self._lock:
             self._error = None
