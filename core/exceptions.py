@@ -30,6 +30,12 @@ class AppError(Exception):
         self.detail = detail
         super().__init__(message)
 
+    def __str__(self) -> str:
+        """Mantiene il dettaglio operativo quando l'errore attraversa thread/UI."""
+        if self.detail:
+            return f"{self.message}\n{self.detail}"
+        return self.message
+
 
 class ConfigError(AppError):
     """Errore nella configurazione o nelle impostazioni."""
