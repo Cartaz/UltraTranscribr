@@ -47,6 +47,7 @@ class ProcessDefaults:
     VAD_FILTER = True
     VAD_MIN_SILENCE_MS = 500
     BUFFER_WARN_THRESHOLD = 20
+    HISTORY_RETENTION_DAYS = 90
     # Mantiene in RAM ~6 minuti con chunk da 3 s; oltre questa soglia
     # BufferManager fa spill su un file temporaneo preservando l'ordine.
     BUFFER_MAX_MEMORY_CHUNKS = 120
