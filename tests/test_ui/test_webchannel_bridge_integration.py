@@ -58,11 +58,28 @@ class _QObject:
         self.parent = parent
 
 
+class _QUrl:
+    def __init__(self, value: str = "") -> None:
+        self.value = value
+
+    @classmethod
+    def fromLocalFile(cls, value: str):
+        return cls(f"file://{value}")
+
+    def toString(self) -> str:
+        return self.value
+
+
 class _QFileDialog:
     @staticmethod
     def getOpenFileName(*args, **kwargs):
         del args, kwargs
         return "", ""
+
+    @staticmethod
+    def getOpenFileNames(*args, **kwargs):
+        del args, kwargs
+        return [], ""
 
     @staticmethod
     def getSaveFileName(*args, **kwargs):
@@ -76,6 +93,7 @@ def _load_bridges(monkeypatch):
     qtcore.QObject = _QObject
     qtcore.Signal = _SignalDescriptor
     qtcore.Slot = _slot
+    qtcore.QUrl = _QUrl
     qtwidgets = ModuleType("PySide6.QtWidgets")
     qtwidgets.QFileDialog = _QFileDialog
     monkeypatch.setitem(sys.modules, "PySide6", pyside)
@@ -104,6 +122,7 @@ class _FakeController:
         self.settings = Settings(language="it", audio_source="system")
         self.backend = SimpleNamespace(is_running=False)
         self.buffer = SimpleNamespace(buffer_level=17)
+        self.history = SimpleNamespace()
         self.subscriptions = {}
         self.started = []
         self.updated = []
@@ -178,6 +197,7 @@ def test_bootstrap_contains_real_multi_session_runtime(monkeypatch) -> None:
     assert payload["runtime"]["liveSessionCount"] == 1
     assert payload["runtime"]["liveRunning"] is True
     assert payload["runtime"]["bufferLevel"] == 17
+    assert payload["runtime"]["meetingBusy"] is False
 
 
 def test_bridge_forwards_session_event_as_json(monkeypatch) -> None:
@@ -215,6 +235,7 @@ def test_start_live_application_converts_selection_to_stream_id(monkeypatch) -> 
         "_run_async",
         lambda name, operation, error_event: operation(),
     )
+    monkeypatch.setattr(bridge, "_prepare_backend_for_selected_model", lambda: None)
 
     bridge.startLive("application", "42", "en")
 
@@ -250,3 +271,5 @@ def test_settings_defaults_are_generated_from_settings_model(monkeypatch) -> Non
     assert defaults["model_size"] == Settings().model_size
     assert defaults["window_width"] == Settings().window_width
     assert defaults["window_height"] == Settings().window_height
+    assert defaults["live_microphone_recording"] is False
+    assert defaults["meeting_audio_retention_days"] == 30
