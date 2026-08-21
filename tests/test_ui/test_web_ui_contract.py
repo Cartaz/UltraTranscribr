@@ -74,3 +74,19 @@ def test_navigation_and_accessibility_contract() -> None:
     assert "aria-current" in script
     assert ":focus-visible" in css
     assert "prefers-reduced-motion" in css
+
+
+def test_compact_layout_has_no_page_scroll_or_redundant_session_settings() -> None:
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    script = (WEB / "app.js").read_text(encoding="utf-8")
+    css = (WEB / "styles.css").read_text(encoding="utf-8")
+
+    for element_id in ("live-language", "live-model", "file-language", "file-model", "title", "subtitle"):
+        assert f'id="{element_id}"' not in html
+
+    assert 'class="chip"' not in html
+    assert '[hidden] { display: none !important; }' in css
+    assert 'html, body { margin: 0; width: 100%; height: 100%; overflow: hidden;' in css
+    assert 'const allowedModelChoices = ["large-v3", "large-v3-turbo", "medium"]' in script
+    assert 'settings.language || "auto"' in script
+    assert 'settings.model_size || "large-v3-turbo"' in script
