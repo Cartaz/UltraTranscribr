@@ -126,8 +126,7 @@ class MainWindow(QMainWindow):
         self._geometry_save_timer.stop()
         self._persist_window_geometry()
         try:
-            self._bridge.closePowerUser()
-            self._controller.shutdown()
+            self._shutdown_runtime()
         finally:
             logging.getLogger().removeHandler(self._log_handler)
             app = QApplication.instance()
@@ -140,8 +139,7 @@ class MainWindow(QMainWindow):
             self._geometry_save_timer.stop()
             self._persist_window_geometry()
             try:
-                self._bridge.closePowerUser()
-                self._controller.shutdown()
+                self._shutdown_runtime()
             finally:
                 logging.getLogger().removeHandler(self._log_handler)
         event.accept()
@@ -150,6 +148,14 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         if self._geometry_tracking_ready and not self._closing:
             self._geometry_save_timer.start(350)
+
+    def _shutdown_runtime(self) -> None:
+        try:
+            self._bridge.closePowerUser()
+        except Exception:
+            logger.exception("Cleanup coordinatore batch fallito durante shutdown")
+        finally:
+            self._controller.shutdown()
 
     def _persist_window_geometry(self) -> None:
         width = max(UIConstraints.MIN_WINDOW_WIDTH, int(self.width()))
