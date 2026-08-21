@@ -20,6 +20,7 @@ from core.pulse_helpers import resolve_monitor_device, temporary_pulse_source
 
 logger = logging.getLogger(__name__)
 EventSink = Callable[[str, Any], None]
+SampleSink = Callable[[np.ndarray], None]
 
 
 class AudioCaptureThread(threading.Thread):
@@ -32,6 +33,7 @@ class AudioCaptureThread(threading.Thread):
         *,
         session_id: Optional[str] = None,
         event_sink: Optional[EventSink] = None,
+        sample_sink: Optional[SampleSink] = None,
     ) -> None:
         name = f"AudioCaptureThread-{session_id}" if session_id else "AudioCaptureThread"
         super().__init__(daemon=True, name=name)
@@ -41,6 +43,7 @@ class AudioCaptureThread(threading.Thread):
         self._audio_source = audio_source or settings.audio_source
         self._session_id = session_id
         self._event_sink = event_sink
+        self._sample_sink = sample_sink
         self._stop_event = threading.Event()
         self._stream: Optional[sd.InputStream] = None
         self._lock = threading.Lock()
@@ -223,4 +226,5 @@ class AudioCaptureThread(threading.Thread):
                 chunk_samples=self._settings.chunk_samples,
                 native_sr=self._native_sr,
                 needs_resample=self._native_sr != WHISPER_SAMPLE_RATE,
+                sample_sink=self._sample_sink,
             )
