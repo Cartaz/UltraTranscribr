@@ -6,12 +6,13 @@ import logging
 from dataclasses import asdict
 from pathlib import Path
 
-from PySide6.QtCore import Slot
+from PySide6.QtCore import QUrl, Slot
 from PySide6.QtWidgets import QFileDialog
 
 from config.settings import AudioSource, Settings
 from core.audio_source_health import evaluate_audio_source_health
 from core.file_batch import FileBatchCoordinator
+from core.meeting_manager import MeetingManager
 from core.sink_finder import debug_dump, find_source, list_available_devices
 from core.transcript_postprocess import process_text, profile_choices
 from ui.bridge import BackendBridge
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class MultiSessionBackendBridge(BackendBridge):
-    """Expose session-scoped Live operations plus File power-user workflows."""
+    """Expose Live, File power-user and Meeting workflows."""
 
     _EVENTS = BackendBridge._EVENTS + (
         "live_session_created",
@@ -34,15 +35,25 @@ class MultiSessionBackendBridge(BackendBridge):
         "file_transcriber_segments",
         "file_queue_changed",
         "file_queue_job_updated",
+        "microphone_recording_saved",
+        "meeting_started",
+        "meeting_updated",
+        "meeting_recording_saved",
+        "meeting_model_progress",
+        "meeting_completed",
+        "meeting_error",
+        "meeting_review_changed",
     )
 
     def __init__(self, controller, parent=None) -> None:
         super().__init__(controller, parent)
         self._file_batch = FileBatchCoordinator(controller)
+        self._meeting = MeetingManager(controller)
 
     def closePowerUser(self) -> None:
-        """Release non-Qt subscriptions owned by the power-user coordinator."""
+        """Release coordinator subscriptions/workers before controller shutdown."""
         self._file_batch.close()
+        self._meeting.shutdown()
 
     @Slot(result=str)
     def getBootstrap(self) -> str:
@@ -51,6 +62,8 @@ class MultiSessionBackendBridge(BackendBridge):
         payload["liveSessions"] = sessions
         payload["fileQueue"] = self._file_batch.list_jobs()
         payload["postprocessProfiles"] = profile_choices()
+        payload["meetingRuntime"] = self._meeting.snapshot()
+        payload["diarizationModels"] = self._meeting.models.status()
         runtime = payload.setdefault("runtime", {})
         runtime["liveSessionCount"] = sum(
             1 for session in sessions if not bool(session.get("terminal"))
@@ -58,11 +71,11 @@ class MultiSessionBackendBridge(BackendBridge):
         runtime["liveRunning"] = self._controller.is_running()
         runtime["liveDraining"] = self._controller.is_draining()
         runtime["bufferLevel"] = self._controller.buffer.buffer_level
+        runtime["meetingBusy"] = self._meeting.is_busy()
         return json.dumps(payload, ensure_ascii=False, default=str)
 
     @Slot(result=str)
     def getSettingsDefaults(self) -> str:
-        """Return validated application defaults for section-scoped resets."""
         return json.dumps(asdict(Settings()), ensure_ascii=False, default=str)
 
     @Slot(result=str)
@@ -75,7 +88,6 @@ class MultiSessionBackendBridge(BackendBridge):
 
     @Slot(str, str, result=str)
     def probeAudioSource(self, audio_source: str, selected_input: str) -> str:
-        """Return actionable availability for the currently selected Live source."""
         source = (
             audio_source
             if audio_source in AudioSource.choices()
@@ -112,12 +124,12 @@ class MultiSessionBackendBridge(BackendBridge):
             }
         return json.dumps(status, ensure_ascii=False, default=str)
 
-    @Slot(str, str, str)
-    def startLive(
+    def _start_live_impl(
         self,
         audio_source: str,
         selected_input: str,
         language: str,
+        record_audio: bool,
     ) -> None:
         source = (
             audio_source
@@ -145,21 +157,54 @@ class MultiSessionBackendBridge(BackendBridge):
                 return
         else:
             sink = selection or None
+        save_recording = bool(record_audio and source == AudioSource.MICROPHONE.value)
 
         def operation() -> None:
+            if self._meeting.is_busy():
+                raise RuntimeError("Termina la riunione prima di avviare una sessione Live")
             self._prepare_backend_for_selected_model()
-            self._controller.start_live_session(
-                sink_name=sink,
-                audio_source=source,
-                language=lang,
-                stream_id=stream_id,
-            )
+            if save_recording:
+                startup = getattr(self._controller, "_startup_thread", None)
+                if self._controller.is_file_transcribing() or (startup and startup.is_alive()):
+                    raise RuntimeError("Ferma la trascrizione File prima di avviare Live")
+                session_settings = self._controller.settings.with_(
+                    language=lang,
+                    live_microphone_recording=True,
+                )
+                self._controller.live_sessions.create_session(
+                    settings=session_settings,
+                    audio_source=source,
+                    sink_name=sink,
+                    language=lang,
+                    stream_id=stream_id,
+                )
+            else:
+                self._controller.start_live_session(
+                    sink_name=sink,
+                    audio_source=source,
+                    language=lang,
+                    stream_id=stream_id,
+                )
 
         self._run_async(
             "start-live-session",
             operation,
             "live_session_start_error",
         )
+
+    @Slot(str, str, str)
+    def startLive(self, audio_source: str, selected_input: str, language: str) -> None:
+        self._start_live_impl(audio_source, selected_input, language, False)
+
+    @Slot(str, str, str, bool)
+    def startLiveWithRecording(
+        self,
+        audio_source: str,
+        selected_input: str,
+        language: str,
+        record_audio: bool,
+    ) -> None:
+        self._start_live_impl(audio_source, selected_input, language, record_audio)
 
     @Slot(str)
     def stopLiveSession(self, session_id: str) -> None:
@@ -202,6 +247,94 @@ class MultiSessionBackendBridge(BackendBridge):
         )
 
     # ------------------------------------------------------------------
+    # Meeting workflow
+    # ------------------------------------------------------------------
+    @Slot(str, str, int, result=str)
+    def startMeeting(self, microphone: str, language: str, num_speakers: int) -> str:
+        try:
+            runtime = self._meeting.start(
+                microphone=microphone.strip() or None,
+                language=language.strip() or None,
+                num_speakers=max(0, int(num_speakers)),
+            )
+            return json.dumps({"ok": True, "meeting": runtime}, ensure_ascii=False)
+        except Exception as exc:
+            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    @Slot(result=str)
+    def finishMeeting(self) -> str:
+        try:
+            runtime = self._meeting.finish()
+            return json.dumps({"ok": True, "meeting": runtime}, ensure_ascii=False)
+        except Exception as exc:
+            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    @Slot(result=str)
+    def cancelMeeting(self) -> str:
+        self._meeting.cancel()
+        return json.dumps({"ok": True, "meeting": self._meeting.snapshot()}, ensure_ascii=False)
+
+    @Slot(str, result=str)
+    def getMeetingSession(self, session_id: str) -> str:
+        return json.dumps(self._meeting.get(session_id), ensure_ascii=False, default=str)
+
+    @Slot(str, result=str)
+    def getMeetingAudioUrl(self, session_id: str) -> str:
+        meeting = self._meeting.get(session_id)
+        if not meeting:
+            return ""
+        path = str((meeting.get("meeting") or {}).get("recording", {}).get("path") or "")
+        if not path or not Path(path).is_file():
+            return ""
+        return QUrl.fromLocalFile(path).toString()
+
+    @Slot(str, str, str, result=str)
+    def setMeetingSpeakerName(self, session_id: str, speaker_id: str, name: str) -> str:
+        try:
+            meeting = self._meeting.set_speaker_name(session_id, speaker_id, name)
+            return json.dumps({"ok": True, "meeting": meeting}, ensure_ascii=False, default=str)
+        except Exception as exc:
+            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    @Slot(str, int, str, result=str)
+    def editMeetingSegment(self, session_id: str, index: int, text: str) -> str:
+        try:
+            meeting = self._meeting.edit_segment(session_id, index, text)
+            return json.dumps({"ok": True, "meeting": meeting}, ensure_ascii=False, default=str)
+        except Exception as exc:
+            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    @Slot(str, result=str)
+    def deleteMeetingAudio(self, session_id: str) -> str:
+        try:
+            deleted = self._meeting.delete_audio(session_id)
+            return json.dumps({"ok": True, "deleted": deleted}, ensure_ascii=False)
+        except Exception as exc:
+            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    @Slot(str, str, result=str)
+    def exportMeetingFormat(self, session_id: str, format_name: str) -> str:
+        try:
+            meeting = self._meeting.get(session_id)
+            if not meeting:
+                raise KeyError("riunione non trovata")
+            fmt = str(format_name or "txt").lower().lstrip(".")
+            if fmt not in {"txt", "srt", "vtt"}:
+                raise ValueError("formato riunione non supportato")
+            target, _ = QFileDialog.getSaveFileName(
+                None,
+                "Esporta riunione",
+                str(Path.home() / f"meeting-{session_id}.{fmt}"),
+                {"txt": "Testo (*.txt)", "srt": "SubRip (*.srt)", "vtt": "WebVTT (*.vtt)"}[fmt],
+            )
+            if not target:
+                return json.dumps({"ok": False, "cancelled": True}, ensure_ascii=False)
+            exported = self._meeting.store.export(session_id, target, fmt)
+            return json.dumps({"ok": True, "path": str(exported)}, ensure_ascii=False)
+        except Exception as exc:
+            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    # ------------------------------------------------------------------
     # File batch / drag-and-drop
     # ------------------------------------------------------------------
     @Slot(result=str)
@@ -224,6 +357,8 @@ class MultiSessionBackendBridge(BackendBridge):
         isolate_vocals: bool,
     ) -> str:
         try:
+            if self._meeting.is_busy():
+                raise RuntimeError("Termina la riunione prima di accodare file")
             decoded = json.loads(paths_json)
             if not isinstance(decoded, list):
                 raise ValueError("elenco file non valido")
@@ -270,6 +405,13 @@ class MultiSessionBackendBridge(BackendBridge):
             default=str,
         )
 
+    @Slot(str, result=str)
+    def getHistorySession(self, session_id: str) -> str:
+        session = self._controller.get_history_session(session_id)
+        if session and session.get("kind") == "meeting":
+            session = self._meeting.get(session_id) or session
+        return json.dumps(session, ensure_ascii=False, default=str)
+
     @Slot(str, str, result=str)
     def generatePostprocess(self, session_id: str, profile: str) -> str:
         try:
@@ -300,6 +442,17 @@ class MultiSessionBackendBridge(BackendBridge):
             fmt = str(format_name or "txt").strip().lower().lstrip(".")
             if fmt not in {"txt", "srt", "vtt"}:
                 raise ValueError("formato export non supportato")
+            if session.get("kind") == "meeting":
+                target, _ = QFileDialog.getSaveFileName(
+                    None,
+                    "Esporta riunione",
+                    str(Path.home() / f"meeting-{session_id}.{fmt}"),
+                    {"txt": "Testo (*.txt)", "srt": "SubRip (*.srt)", "vtt": "WebVTT (*.vtt)"}[fmt],
+                )
+                if not target:
+                    return json.dumps({"ok": False, "cancelled": True}, ensure_ascii=False)
+                exported = self._meeting.store.export(session_id, target, fmt)
+                return json.dumps({"ok": True, "path": str(exported)}, ensure_ascii=False)
             source_path = str(session.get("source_path") or "")
             stem = Path(source_path).stem if source_path else session_id
             default_path = str(Path.home() / f"{stem or session_id}.{fmt}")
@@ -329,8 +482,6 @@ class MultiSessionBackendBridge(BackendBridge):
 
     @Slot()
     def runAudioDiagnostics(self) -> None:
-        """Include devices, streams and active per-session routing in one report."""
-
         def operation() -> None:
             report = debug_dump()
             report += "\n\n=== playback streams ==="
@@ -368,6 +519,9 @@ class MultiSessionBackendBridge(BackendBridge):
                     f"buffer={session.get('buffer_level', 0)}% "
                     f"queue_wait={session.get('queue_wait_ms', 0)}ms"
                 )
+            meeting = self._meeting.snapshot()
+            report += "\n\n=== meeting ==="
+            report += f"\n  {meeting if meeting else 'nessuna riunione runtime'}"
             self._emit_event("audio_diagnostics", report)
 
         self._run_async(
@@ -376,7 +530,6 @@ class MultiSessionBackendBridge(BackendBridge):
             "audio_diagnostics_error",
         )
 
-    # Legacy shell/tray operations now act on all Live sessions.
     @Slot()
     def stopLive(self) -> None:
         self.stopAllLive()
