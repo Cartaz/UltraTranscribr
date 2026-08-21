@@ -4,8 +4,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import QUrl
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtCore import QTimer, QUrl
+from PySide6.QtGui import QCloseEvent, QResizeEvent
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QMainWindow
@@ -24,6 +24,10 @@ class MainWindow(QMainWindow):
         self._controller = controller
         self._tray_icon = None
         self._closing = False
+        self._geometry_tracking_ready = False
+        self._geometry_save_timer = QTimer(self)
+        self._geometry_save_timer.setSingleShot(True)
+        self._geometry_save_timer.timeout.connect(self._persist_window_geometry)
 
         self.setWindowTitle(AppMeta.NAME)
         self.setMinimumSize(
@@ -37,7 +41,6 @@ class MainWindow(QMainWindow):
         )
 
         self._bridge = MultiSessionBackendBridge(controller, self)
-        self._bridge.windowResizeRequested.connect(self._resize_from_settings)
         self._bridge.eventReceived.connect(self._observe_backend_event)
 
         self._log_handler = BridgeLogHandler(self._bridge)
@@ -53,6 +56,7 @@ class MainWindow(QMainWindow):
 
         index_path = Path(__file__).resolve().parent / "web" / "index.html"
         self._web_view.setUrl(QUrl.fromLocalFile(str(index_path)))
+        self._geometry_tracking_ready = True
 
     def set_tray_icon(self, tray_icon) -> None:
         self._tray_icon = tray_icon
@@ -74,6 +78,8 @@ class MainWindow(QMainWindow):
         if self._closing:
             return
         self._closing = True
+        self._geometry_save_timer.stop()
+        self._persist_window_geometry()
         try:
             self._controller.shutdown()
         finally:
@@ -85,17 +91,32 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         if not self._closing:
             self._closing = True
+            self._geometry_save_timer.stop()
+            self._persist_window_geometry()
             try:
                 self._controller.shutdown()
             finally:
                 logging.getLogger().removeHandler(self._log_handler)
         event.accept()
 
-    def _resize_from_settings(self, width: int, height: int) -> None:
-        self.resize(
-            max(UIConstraints.MIN_WINDOW_WIDTH, width),
-            max(UIConstraints.MIN_WINDOW_HEIGHT, height),
-        )
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if self._geometry_tracking_ready and not self._closing:
+            self._geometry_save_timer.start(350)
+
+    def _persist_window_geometry(self) -> None:
+        width = max(UIConstraints.MIN_WINDOW_WIDTH, int(self.width()))
+        height = max(UIConstraints.MIN_WINDOW_HEIGHT, int(self.height()))
+        current = self._controller.settings
+        if current.window_width == width and current.window_height == height:
+            return
+        try:
+            self._controller.update_settings(
+                window_width=width,
+                window_height=height,
+            )
+        except Exception:
+            logger.exception("Salvataggio automatico geometria finestra fallito")
 
     def _observe_backend_event(self, event: str, payload_json: str) -> None:
         del payload_json
