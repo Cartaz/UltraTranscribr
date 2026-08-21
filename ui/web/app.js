@@ -13,6 +13,9 @@ const state = {
   fileText: "",
   historyText: "",
   historySelected: null,
+  models: [],
+  modelBusy: null,
+  modelProgress: {},
 };
 const views = {
   live: "TRASCRIZIONE LIVE",
@@ -45,6 +48,7 @@ function switchView(name) {
   });
   $("eyebrow").textContent = views[name];
   if (name === "history") refreshHistory();
+  if (name === "settings") refreshModels();
 }
 
 function setOrb(id, on) { $(id).classList.toggle("active", !!on); }
@@ -60,6 +64,7 @@ function liveUI(status) {
   $("live-drain").disabled = !state.live || state.draining;
   setOrb("live-orb", busy);
   lockSettings();
+  renderModels(state.models);
 }
 
 function fileUI(status) {
@@ -68,9 +73,10 @@ function fileUI(status) {
   $("file-stop").disabled = !state.file;
   setOrb("file-orb", state.file);
   lockSettings();
+  renderModels(state.models);
 }
 
-function lockSettings() { $("settings-save").disabled = state.live || state.draining || state.file; }
+function lockSettings() { $("settings-save").disabled = state.live || state.draining || state.file || !!state.modelBusy; }
 function sessionBusy() { return state.live || state.draining || state.file; }
 function options(select, values, current) { select.innerHTML = ""; values.forEach(value => { const option = document.createElement("option"); option.value = value; option.textContent = modelLabels[value] || value; option.selected = value === current; select.append(option); }); }
 
@@ -89,6 +95,7 @@ function devices(source, list) {
 
 function hydrate(bootstrap) {
   state.boot = bootstrap;
+  state.models = Array.isArray(bootstrap.models) ? bootstrap.models : [];
   $("version").textContent = "v" + bootstrap.app.version;
   const selectedModel = allowedModelChoices.includes(bootstrap.settings.model_size) ? bootstrap.settings.model_size : "large-v3-turbo";
   options($("s-model"), allowedModelChoices, selectedModel);
@@ -103,6 +110,7 @@ function hydrate(bootstrap) {
   state.draining = !!bootstrap.runtime.liveDraining;
   state.file = !!bootstrap.runtime.fileRunning;
   progress("buffer", bootstrap.runtime.bufferLevel);
+  renderModels(state.models);
   liveUI(state.draining ? "Completamento buffer" : state.live ? "In esecuzione" : "Idle");
   fileUI(state.file ? "In esecuzione" : "Idle");
   globalStatus(bootstrap.runtime.backendRunning ? "Pronto" : "Standby", bootstrap.runtime.backendRunning);
@@ -142,6 +150,11 @@ function event(name, payload) {
     case "history_changed": if (historyIsVisible()) refreshHistory(); break;
     case "history_error": notice("Autosave cronologia non riuscito: " + String(value), true); break;
     case "recovery_audio_saved": notice("Audio non trascritto salvato in Recovery", true); if (historyIsVisible()) refreshRecovery(); break;
+    case "model_download_started": state.modelBusy = value?.model || null; state.modelProgress[state.modelBusy] = {downloaded: 0, total: null, percent: 0}; renderModels(state.models); lockSettings(); break;
+    case "model_download_progress": updateModelProgress(value); break;
+    case "model_status_changed": state.modelBusy = null; state.modelProgress = {}; lockSettings(); refreshModels(); break;
+    case "model_download_error": state.modelBusy = null; state.modelProgress = {}; lockSettings(); notice("Download modello fallito: " + String(value), true); refreshModels(); break;
+    case "model_delete_error": state.modelBusy = null; lockSettings(); notice("Eliminazione modello fallita: " + String(value), true); refreshModels(); break;
   }
 }
 
@@ -309,7 +322,8 @@ function formatBytes(value) {
   const bytes = Number(value) || 0;
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KiB`;
-  return `${(bytes / 1048576).toFixed(1)} MiB`;
+  if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MiB`;
+  return `${(bytes / 1073741824).toFixed(2)} GiB`;
 }
 
 function startRecovery(item) {
@@ -392,6 +406,143 @@ function refreshHistory() {
   if (state.historySelected) loadHistorySession(state.historySelected);
 }
 
+function modelDetail(item) {
+  if (item.installed) {
+    return `${formatBytes(item.size_bytes)}${item.verified ? " · hash registrato" : ""}`;
+  }
+  if (Number(item.partial_bytes) > 0) return `Parziale: ${formatBytes(item.partial_bytes)}`;
+  return `Minimo atteso: ${formatBytes(item.min_bytes)}`;
+}
+
+function renderModels(items) {
+  const list = $("model-list");
+  if (!list) return;
+  list.replaceChildren();
+  if (!Array.isArray(items) || !items.length) {
+    const empty = document.createElement("p");
+    empty.className = "model-empty";
+    empty.textContent = "Nessun modello disponibile.";
+    list.append(empty);
+    return;
+  }
+
+  items.forEach(item => {
+    const row = document.createElement("div");
+    row.className = "model-row";
+    row.dataset.model = item.model;
+
+    const main = document.createElement("div");
+    main.className = "model-main";
+    const title = document.createElement("strong");
+    title.textContent = modelLabels[item.model] || item.model;
+    const detail = document.createElement("small");
+    detail.textContent = modelDetail(item);
+    main.append(title, detail);
+
+    const progressWrap = document.createElement("div");
+    progressWrap.className = "model-progress-wrap";
+    const statusLine = document.createElement("div");
+    statusLine.className = "model-status-line";
+    const orb = document.createElement("span");
+    orb.className = "orb" + (item.installed ? " active" : "");
+    const stateLabel = document.createElement("span");
+    stateLabel.className = "model-state" + (item.installed ? " installed" : "");
+    const active = state.modelBusy === item.model;
+    stateLabel.textContent = active ? "Operazione in corso" : item.installed ? "Installato" : "Non installato";
+    statusLine.append(orb, stateLabel);
+
+    const bar = document.createElement("div");
+    bar.className = "progress";
+    bar.setAttribute("role", "progressbar");
+    bar.setAttribute("aria-valuemin", "0");
+    bar.setAttribute("aria-valuemax", "100");
+    const fill = document.createElement("span");
+    const p = state.modelProgress[item.model] || null;
+    const percent = p?.percent == null ? 0 : Math.max(0, Math.min(100, Number(p.percent)));
+    fill.style.width = `${percent}%`;
+    bar.setAttribute("aria-valuenow", String(percent));
+    bar.append(fill);
+    const progressLabel = document.createElement("div");
+    progressLabel.className = "model-progress-label";
+    if (active && p) {
+      progressLabel.textContent = p.total ? `${formatBytes(p.downloaded)} / ${formatBytes(p.total)} · ${percent}%` : `${formatBytes(p.downloaded)} scaricati`;
+    } else if (!item.installed && Number(item.partial_bytes) > 0) {
+      progressLabel.textContent = `Download riprendibile da ${formatBytes(item.partial_bytes)}`;
+    } else {
+      progressLabel.textContent = item.installed ? "Pronto all'uso" : "Non scaricato";
+    }
+    progressWrap.append(statusLine, bar, progressLabel);
+
+    const actions = document.createElement("div");
+    actions.className = "model-actions";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "button" + (!item.installed ? " selected" : "");
+    button.textContent = active ? "Attendi…" : item.installed ? "Elimina" : (Number(item.partial_bytes) > 0 ? "Riprendi" : "Scarica");
+    button.disabled = sessionBusy() || !!state.modelBusy;
+    button.onclick = () => item.installed ? requestDeleteModel(item.model) : requestDownloadModel(item.model);
+    actions.append(button);
+
+    row.append(main, progressWrap, actions);
+    list.append(row);
+  });
+}
+
+function updateModelProgress(payload) {
+  if (!payload || !payload.model) return;
+  state.modelBusy = payload.model;
+  state.modelProgress[payload.model] = {
+    downloaded: Number(payload.downloaded) || 0,
+    total: payload.total == null ? null : Number(payload.total),
+    percent: payload.percent == null ? null : Number(payload.percent),
+  };
+  renderModels(state.models);
+  lockSettings();
+}
+
+function refreshModels() {
+  call("listModels", [], result => {
+    const models = json(result);
+    state.models = Array.isArray(models) ? models : [];
+    renderModels(state.models);
+  });
+}
+
+function requestDownloadModel(model) {
+  if (sessionBusy() || state.modelBusy) return;
+  state.modelBusy = model;
+  state.modelProgress[model] = {downloaded: 0, total: null, percent: 0};
+  renderModels(state.models);
+  lockSettings();
+  call("downloadModel", [model], result => {
+    const response = json(result);
+    if (!response?.ok) {
+      state.modelBusy = null;
+      state.modelProgress = {};
+      renderModels(state.models);
+      lockSettings();
+      notice(response?.error || "Download modello non avviato", true);
+    }
+  });
+}
+
+function requestDeleteModel(model) {
+  if (sessionBusy() || state.modelBusy) return;
+  if (!window.confirm(`Eliminare ${modelLabels[model] || model} dal disco?`)) return;
+  state.modelBusy = model;
+  renderModels(state.models);
+  lockSettings();
+  call("deleteModel", [model], result => {
+    const response = json(result);
+    if (!response?.ok) {
+      state.modelBusy = null;
+      renderModels(state.models);
+      lockSettings();
+      notice(response?.error || "Eliminazione modello non avviata", true);
+    }
+  });
+}
+
 function bind() {
   all(".nav").forEach(button => button.onclick = () => switchView(button.dataset.view));
   all(".segment").forEach(button => button.onclick = () => { state.source = button.dataset.source; sourceUI(); refreshDevices(); });
@@ -411,6 +562,7 @@ function bind() {
   $("history-copy").onclick = () => copyValue(state.historyText);
   $("history-export").onclick = exportSelectedHistory;
   $("history-delete").onclick = deleteSelectedHistory;
+  $("models-refresh").onclick = refreshModels;
   $("settings-form").onsubmit = saveSettings;
   $("log-refresh").onclick = () => call("readLogTail", [300], result => $("log-output").textContent = result || "Nessun log persistente disponibile.");
   $("log-copy").onclick = () => copyValue($("log-output").textContent);
