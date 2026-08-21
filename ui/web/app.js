@@ -16,6 +16,7 @@ const state = {
   models: [],
   modelBusy: null,
   modelProgress: {},
+  backendState: "standby",
 };
 const views = {
   live: "TRASCRIZIONE LIVE",
@@ -26,6 +27,16 @@ const views = {
 };
 const allowedModelChoices = ["large-v3", "large-v3-turbo", "medium"];
 const modelLabels = {"large-v3": "Large v3", "large-v3-turbo": "Large v3 Turbo", medium: "Medium"};
+const backendLabels = {
+  standby: "Standby",
+  preparing_vad: "Preparazione VAD",
+  configuring_backend: "Configurazione backend",
+  downloading_model: "Download modello",
+  loading_model: "Caricamento modello",
+  starting_backend: "Avvio backend",
+  ready: "Pronto",
+  error: "Errore",
+};
 
 function call(name, args = [], cb = null) {
   if (!backend || typeof backend[name] !== "function") return;
@@ -33,7 +44,11 @@ function call(name, args = [], cb = null) {
 }
 
 function json(value) { try { return JSON.parse(value); } catch { return value; } }
-function notice(textValue, error = false) { $("notice-text").textContent = textValue; $("notice").hidden = false; $("notice").classList.toggle("error", error); }
+function notice(textValue, error = false) {
+  $("notice-text").textContent = String(textValue || "");
+  $("notice").hidden = false;
+  $("notice").classList.toggle("error", error);
+}
 
 function switchView(name) {
   all(".nav").forEach(button => {
@@ -52,9 +67,45 @@ function switchView(name) {
 }
 
 function setOrb(id, on) { $(id).classList.toggle("active", !!on); }
-function globalStatus(textValue, on = false) { $("global-status").textContent = textValue; setOrb("global-orb", on); }
-function progress(kind, value) { const n = Math.max(0, Math.min(100, Number(value) || 0)); $(kind + "-fill").style.width = n + "%"; $(kind + "-progress").setAttribute("aria-valuenow", String(n)); $(kind === "buffer" ? "buffer-value" : "file-progress-value").textContent = Math.round(n) + "%"; }
-function text(kind, value, full = false) { const box = $(kind + "-transcript"); if (full) state[kind + "Text"] = String(value || ""); else state[kind + "Text"] += (state[kind + "Text"] ? " " : "") + String(value || ""); box.textContent = state[kind + "Text"] || "Il testo trascritto apparirà qui."; box.classList.toggle("placeholder", !state[kind + "Text"]); box.scrollTop = box.scrollHeight; }
+function globalStatus(textValue, mode = "idle") {
+  $("global-status").textContent = textValue;
+  const orb = $("global-orb");
+  orb.classList.remove("active", "working", "error");
+  if (mode === "active") orb.classList.add("active");
+  else if (mode === "working") orb.classList.add("working");
+  else if (mode === "error") orb.classList.add("error");
+}
+function setBackendStatus(value) {
+  const status = String(value || "standby");
+  state.backendState = status;
+  if (state.boot?.runtime) {
+    if (status === "ready") state.boot.runtime.backendRunning = true;
+    if (status === "standby" || status === "error") state.boot.runtime.backendRunning = false;
+  }
+  const mode = status === "ready" ? "active" : status === "error" ? "error" : status === "standby" ? "idle" : "working";
+  globalStatus(backendLabels[status] || label(status), mode);
+}
+function restoreBackendStatus() {
+  if (state.backendState === "error") {
+    setBackendStatus("error");
+    return;
+  }
+  setBackendStatus(state.boot?.runtime?.backendRunning ? "ready" : "standby");
+}
+function progress(kind, value) {
+  const n = Math.max(0, Math.min(100, Number(value) || 0));
+  $(kind + "-fill").style.width = n + "%";
+  $(kind + "-progress").setAttribute("aria-valuenow", String(n));
+  $(kind === "buffer" ? "buffer-value" : "file-progress-value").textContent = Math.round(n) + "%";
+}
+function text(kind, value, full = false) {
+  const box = $(kind + "-transcript");
+  if (full) state[kind + "Text"] = String(value || "");
+  else state[kind + "Text"] += (state[kind + "Text"] ? " " : "") + String(value || "");
+  box.textContent = state[kind + "Text"] || "Il testo trascritto apparirà qui.";
+  box.classList.toggle("placeholder", !state[kind + "Text"]);
+  box.scrollTop = box.scrollHeight;
+}
 
 function liveUI(status) {
   $("live-status").textContent = status;
@@ -78,7 +129,16 @@ function fileUI(status) {
 
 function lockSettings() { $("settings-save").disabled = state.live || state.draining || state.file || !!state.modelBusy; }
 function sessionBusy() { return state.live || state.draining || state.file; }
-function options(select, values, current) { select.innerHTML = ""; values.forEach(value => { const option = document.createElement("option"); option.value = value; option.textContent = modelLabels[value] || value; option.selected = value === current; select.append(option); }); }
+function options(select, values, current) {
+  select.innerHTML = "";
+  values.forEach(value => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = modelLabels[value] || value;
+    option.selected = value === current;
+    select.append(option);
+  });
+}
 
 function devices(source, list) {
   const select = $("live-device"), current = select.value;
@@ -91,6 +151,32 @@ function devices(source, list) {
     select.append(option);
   });
   if ([...select.options].some(option => option.value === current)) select.value = current;
+  updateLiveSummary();
+}
+
+function selectedDeviceLabel() {
+  const select = $("live-device");
+  if (!select.value) return "Automatico";
+  const selected = select.options[select.selectedIndex];
+  return selected?.textContent || select.value;
+}
+
+function updateLiveSummary(runtime = null) {
+  const settings = state.boot?.settings || {};
+  const source = runtime?.source || state.source || settings.audio_source || "firefox";
+  $("live-source-value").textContent = source === "microphone" ? "Microfono" : "Firefox";
+  $("live-device-value").textContent = runtime?.sink || selectedDeviceLabel();
+  $("live-model-value").textContent = modelLabels[settings.model_size] || settings.model_size || "—";
+  $("live-language-value").textContent = settings.language || "auto";
+}
+
+function updateFileSummary(path = null) {
+  const settings = state.boot?.settings || {};
+  const sourcePath = path || $("file-path").value || "";
+  $("file-model-value").textContent = modelLabels[settings.model_size] || settings.model_size || "—";
+  $("file-language-value").textContent = settings.language || "auto";
+  $("file-name-value").textContent = sourcePath ? fileName(sourcePath) : "—";
+  $("file-name-value").title = sourcePath;
 }
 
 function hydrate(bootstrap) {
@@ -102,7 +188,6 @@ function hydrate(bootstrap) {
   state.source = bootstrap.settings.audio_source;
   sourceUI();
   devices(state.source, bootstrap.devices);
-  $("live-model-value").textContent = modelLabels[bootstrap.settings.model_size] || bootstrap.settings.model_size;
   const map = {"s-language": "language", "s-source": "audio_source", "s-beam": "beam_size", "s-vad-silence": "vad_min_silence_ms", "s-buffer": "buffer_warn_threshold", "s-chunk": "chunk_ms", "s-channels": "channels", "s-sink": "sink_name", "s-keyword": "sink_search_keyword", "s-port": "server_port", "s-gpu": "gpu_layers", "s-compute": "compute_type", "s-width": "window_width", "s-height": "window_height", "s-retention": "history_retention_days"};
   for (const [id, key] of Object.entries(map)) $(id).value = bootstrap.settings[key] ?? "";
   $("s-vad").checked = !!bootstrap.settings.vad_filter;
@@ -111,63 +196,220 @@ function hydrate(bootstrap) {
   state.file = !!bootstrap.runtime.fileRunning;
   progress("buffer", bootstrap.runtime.bufferLevel);
   renderModels(state.models);
+  updateLiveSummary();
+  updateFileSummary();
   liveUI(state.draining ? "Completamento buffer" : state.live ? "In esecuzione" : "Idle");
   fileUI(state.file ? "In esecuzione" : "Idle");
-  globalStatus(bootstrap.runtime.backendRunning ? "Pronto" : "Standby", bootstrap.runtime.backendRunning);
+  setBackendStatus(bootstrap.runtime.backendRunning ? "ready" : "standby");
   $("log-output").textContent = bootstrap.logTail || "Nessun log persistente disponibile.";
 }
 
-function sourceUI() { all(".segment").forEach(button => { const active = button.dataset.source === state.source; button.classList.toggle("active", active); button.setAttribute("aria-pressed", String(active)); }); $("live-source-value").textContent = state.source === "firefox" ? "Firefox" : "Microfono"; }
+function sourceUI() {
+  all(".segment").forEach(button => {
+    const active = button.dataset.source === state.source;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  updateLiveSummary();
+}
 function refreshDevices() { call("refreshDevices", [state.source], result => devices(state.source, json(result))); }
-function appendLog(level, name, message) { const out = $("log-output"); if (out.textContent.startsWith("In attesa") || out.textContent.startsWith("Nessun log")) out.textContent = ""; out.textContent += `[${level}] ${name}: ${message}\n`; if ($("log-auto").checked) out.scrollTop = out.scrollHeight; }
+function appendLog(level, name, message) {
+  const out = $("log-output");
+  if (out.textContent.startsWith("In attesa") || out.textContent.startsWith("Nessun log")) out.textContent = "";
+  out.textContent += `[${level}] ${name}: ${message}\n`;
+  if ($("log-auto").checked) out.scrollTop = out.scrollHeight;
+}
 
 function historyIsVisible() {
   const panel = document.querySelector('[data-panel="history"]');
   return !!panel && panel.classList.contains("active");
 }
 
+function friendlyError(value, context = "") {
+  let raw = "";
+  if (value && typeof value === "object") {
+    raw = [value.message, value.detail, value.action].filter(Boolean).join("\n");
+  } else {
+    raw = String(value || "Errore sconosciuto");
+  }
+  const lower = raw.toLowerCase();
+
+  if (lower.includes("sink di firefox") || (context === "live" && lower.includes("firefox"))) {
+    return "Firefox non è stato rilevato come sorgente audio.\nAvvia una riproduzione in Firefox e riprova, oppure scegli manualmente un dispositivo audio.";
+  }
+  if (lower.includes("microfono") && (lower.includes("impossibile") || lower.includes("non trovato"))) {
+    return "Microfono non rilevato.\nControlla che sia collegato e disponibile in PipeWire/PulseAudio, poi riprova o selezionalo manualmente.";
+  }
+  if (lower.includes("download modello fallito") || lower.includes("download modello non riuscito")) {
+    return "Download del modello non riuscito.\nVerifica la connessione e usa Impostazioni → Gestione modelli per riprendere il download interrotto.";
+  }
+  if (lower.includes("whisper-server non trovato")) {
+    return "Backend whisper-server non trovato.\nEsegui ./install.sh dalla directory di UltraTranscribr e riavvia l'applicazione.";
+  }
+  if (lower.includes("non compilato con sycl")) {
+    return "Il backend whisper-server non dispone del supporto SYCL richiesto.\nReinstalla UltraTranscribr con ./install.sh e verifica Intel oneAPI/Level Zero.";
+  }
+  if (lower.includes("health check") || lower.includes("whisper-server terminato")) {
+    return "whisper-server non si è avviato correttamente.\nApri la tab Log per i dettagli e verifica GPU Intel, oneAPI, porta del server e modello selezionato.";
+  }
+  if (lower.includes("ffmpeg conversion fallita")) {
+    return "Conversione del file non riuscita.\nVerifica che il file sia leggibile e che ffmpeg supporti il codec utilizzato.";
+  }
+  if (lower.includes("chunk file fallito dopo")) {
+    return "La trascrizione del file è fallita dopo più tentativi.\nControlla la tab Log e verifica che il backend sia ancora disponibile.";
+  }
+  return raw;
+}
+function showError(value, context = "") { notice(friendlyError(value, context), true); }
+
 function event(name, payload) {
   const value = json(payload);
   switch (name) {
-    case "backend_status_changed": globalStatus(String(value || "Backend"), String(value).toLowerCase().includes("ready") || String(value).toLowerCase().includes("running")); break;
-    case "process_started": state.live = true; state.draining = false; globalStatus("Trascrizione live", true); liveUI("In esecuzione"); break;
-    case "capture_stopped": state.live = false; state.draining = true; liveUI("Completamento buffer"); break;
-    case "process_stopped": state.live = false; state.draining = false; progress("buffer", 0); liveUI("Fermata"); globalStatus("Pronto", true); break;
-    case "transcriber_drained": state.live = false; state.draining = false; progress("buffer", 0); liveUI("Completata"); globalStatus("Pronto", true); break;
+    case "backend_status_changed":
+      setBackendStatus(value);
+      break;
+    case "process_started":
+      state.live = true;
+      state.draining = false;
+      if (state.boot?.runtime) state.boot.runtime.backendRunning = true;
+      updateLiveSummary(value && typeof value === "object" ? value : null);
+      globalStatus("In uso · Live", "active");
+      liveUI("In esecuzione");
+      break;
+    case "capture_stopped":
+      state.live = false;
+      state.draining = true;
+      liveUI("Completamento buffer");
+      break;
+    case "process_stopped":
+      state.live = false;
+      state.draining = false;
+      progress("buffer", 0);
+      liveUI("Fermata");
+      restoreBackendStatus();
+      break;
+    case "transcriber_drained":
+      state.live = false;
+      state.draining = false;
+      progress("buffer", 0);
+      liveUI("Completata");
+      restoreBackendStatus();
+      break;
     case "transcriber_status_changed": liveUI(label(value)); break;
     case "transcriber_buffer_level": progress("buffer", value); break;
     case "transcriber_new_text": text("live", value); break;
-    case "transcriber_error": state.live = false; state.draining = false; liveUI("Errore"); notice(String(value), true); break;
-    case "file_transcriber_status_changed": state.file = !["completed", "stopped", "error"].includes(String(value)); fileUI(label(value)); if (state.file) globalStatus("Trascrizione file", true); break;
+    case "transcriber_error":
+      state.live = false;
+      state.draining = false;
+      liveUI("Errore");
+      showError(value, "live");
+      break;
+    case "file_transcriber_status_changed":
+      state.file = !["completed", "stopped", "error"].includes(String(value));
+      fileUI(label(value));
+      if (state.file) globalStatus("In uso · File", "active");
+      else restoreBackendStatus();
+      break;
     case "file_transcriber_progress": progress("file", value); break;
     case "file_transcriber_new_text": text("file", value); break;
     case "file_transcriber_full_text": text("file", value, true); break;
-    case "file_transcriber_completed": state.file = false; fileUI("Completata"); progress("file", 100); globalStatus("Pronto", true); break;
-    case "file_transcriber_error": state.file = false; fileUI("Errore"); notice(String(value), true); break;
-    case "config_changed": if (state.boot && value && typeof value === "object") { state.boot.settings = {...state.boot.settings, ...value}; $("live-model-value").textContent = modelLabels[state.boot.settings.model_size] || state.boot.settings.model_size; } break;
+    case "file_transcriber_completed":
+      state.file = false;
+      fileUI("Completata");
+      progress("file", 100);
+      restoreBackendStatus();
+      break;
+    case "file_transcriber_error":
+      state.file = false;
+      fileUI("Errore");
+      showError(value, "file");
+      break;
+    case "config_changed":
+      if (state.boot && value && typeof value === "object") {
+        state.boot.settings = {...state.boot.settings, ...value};
+        updateLiveSummary();
+        updateFileSummary();
+      }
+      break;
     case "audio_diagnostics": $("diagnostics-output").textContent = String(value); break;
-    case "audio_diagnostics_error": $("diagnostics-output").textContent = String(value); notice(String(value), true); break;
+    case "audio_diagnostics_error": $("diagnostics-output").textContent = String(value); showError(value, "audio"); break;
     case "history_changed": if (historyIsVisible()) refreshHistory(); break;
     case "history_error": notice("Autosave cronologia non riuscito: " + String(value), true); break;
     case "recovery_audio_saved": notice("Audio non trascritto salvato in Recovery", true); if (historyIsVisible()) refreshRecovery(); break;
-    case "model_download_started": state.modelBusy = value?.model || null; state.modelProgress[state.modelBusy] = {downloaded: 0, total: null, percent: 0}; renderModels(state.models); lockSettings(); break;
-    case "model_download_progress": updateModelProgress(value); break;
-    case "model_status_changed": state.modelBusy = null; state.modelProgress = {}; lockSettings(); refreshModels(); break;
-    case "model_download_error": state.modelBusy = null; state.modelProgress = {}; lockSettings(); notice("Download modello fallito: " + String(value), true); refreshModels(); break;
-    case "model_delete_error": state.modelBusy = null; lockSettings(); notice("Eliminazione modello fallita: " + String(value), true); refreshModels(); break;
+    case "model_download_started":
+      state.modelBusy = value?.model || null;
+      state.modelProgress[state.modelBusy] = {downloaded: 0, total: null, percent: 0};
+      renderModels(state.models);
+      lockSettings();
+      break;
+    case "model_download_progress":
+      updateModelProgress(value);
+      if (state.backendState === "downloading_model" && value?.model) {
+        const pct = value.percent == null ? "" : ` · ${Math.max(0, Math.min(100, Number(value.percent) || 0))}%`;
+        globalStatus(`Download ${modelLabels[value.model] || value.model}${pct}`, "working");
+      }
+      break;
+    case "model_status_changed":
+      state.modelBusy = null;
+      state.modelProgress = {};
+      lockSettings();
+      refreshModels();
+      break;
+    case "model_download_error":
+      state.modelBusy = null;
+      state.modelProgress = {};
+      lockSettings();
+      showError(value, "model");
+      refreshModels();
+      break;
+    case "model_delete_error":
+      state.modelBusy = null;
+      lockSettings();
+      showError(value, "model");
+      refreshModels();
+      break;
   }
 }
 
-function label(value) { return ({idle: "Idle", starting: "Avvio", running: "In esecuzione", draining: "Completamento buffer", buffering: "Buffering", error: "Errore", loading_model: "Caricamento modello", isolating_vocals: "Isolamento voce", stopped: "Fermata", completed: "Completata"})[String(value)] || String(value); }
+function label(value) {
+  return ({
+    idle: "Idle",
+    starting: "Avvio",
+    running: "In esecuzione",
+    draining: "Completamento buffer",
+    buffering: "Buffering",
+    error: "Errore",
+    preparing_vad: "Preparazione VAD",
+    configuring_backend: "Configurazione backend",
+    downloading_model: "Download modello",
+    loading_model: "Caricamento modello",
+    starting_backend: "Avvio backend",
+    ready: "Pronto",
+    standby: "Standby",
+    isolating_vocals: "Isolamento voce",
+    stopped: "Fermata",
+    completed: "Completata",
+  })[String(value)] || String(value);
+}
 
 async function copyValue(value) {
   const textValue = String(value || "");
   try { await navigator.clipboard.writeText(textValue); notice("Copiato negli appunti"); }
-  catch { const area = document.createElement("textarea"); area.value = textValue; document.body.append(area); area.select(); document.execCommand("copy"); area.remove(); notice("Copiato negli appunti"); }
+  catch {
+    const area = document.createElement("textarea");
+    area.value = textValue;
+    document.body.append(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+    notice("Copiato negli appunti");
+  }
 }
 
 function startLive() {
   const settings = state.boot?.settings || {};
+  updateLiveSummary();
+  liveUI("Avvio");
   call("startLive", [state.source, $("live-device").value, settings.language || "auto"]);
 }
 
@@ -175,6 +417,8 @@ function startFile() {
   const path = $("file-path").value;
   if (!path) { notice("Seleziona un file da trascrivere", true); return; }
   const settings = state.boot?.settings || {};
+  updateFileSummary(path);
+  fileUI("Avvio");
   call("startFile", [path, settings.language || "auto", settings.model_size || "large-v3-turbo", $("song-mode").checked, $("isolate-vocals").checked]);
 }
 
@@ -189,9 +433,10 @@ function saveSettings(eventObject) {
   }
   call("applySettings", [JSON.stringify(payload)], result => {
     const response = json(result);
-    if (!response.ok) { notice(response.error, true); return; }
+    if (!response.ok) { showError(response.error, "settings"); return; }
     state.boot.settings = response.settings;
-    $("live-model-value").textContent = modelLabels[response.settings.model_size] || response.settings.model_size;
+    updateLiveSummary();
+    updateFileSummary();
     notice("Impostazioni salvate");
   });
 }
@@ -296,7 +541,7 @@ function exportSelectedHistory() {
   call("exportHistorySession", [state.historySelected], result => {
     const response = json(result);
     if (response?.cancelled) return;
-    if (!response?.ok) { notice(response?.error || "Export non riuscito", true); return; }
+    if (!response?.ok) { showError(response?.error || "Export non riuscito", "history"); return; }
     notice("Trascrizione esportata: " + response.path);
   });
 }
@@ -307,16 +552,14 @@ function deleteSelectedHistory() {
   const sessionId = state.historySelected;
   call("deleteHistorySession", [sessionId], result => {
     const response = json(result);
-    if (!response?.ok) { notice(response?.error || "Eliminazione non riuscita", true); return; }
+    if (!response?.ok) { showError(response?.error || "Eliminazione non riuscita", "history"); return; }
     clearHistorySelection();
     refreshHistoryList();
     notice(response.deleted ? "Trascrizione eliminata" : "Trascrizione già assente");
   });
 }
 
-function refreshHistoryList() {
-  call("listHistory", [80], result => renderHistory(json(result)));
-}
+function refreshHistoryList() { call("listHistory", [80], result => renderHistory(json(result))); }
 
 function formatBytes(value) {
   const bytes = Number(value) || 0;
@@ -330,7 +573,7 @@ function startRecovery(item) {
   if (sessionBusy()) { notice("Ferma la trascrizione attiva prima di recuperare l'audio", true); return; }
   call("startRecovery", [item.path], result => {
     const response = json(result);
-    if (!response?.ok) { notice(response?.error || "Recovery non avviato", true); return; }
+    if (!response?.ok) { showError(response?.error || "Recovery non avviato", "file"); return; }
     state.file = true;
     state.fileText = "";
     text("file", "", true);
@@ -339,6 +582,7 @@ function startRecovery(item) {
     $("song-mode").checked = false;
     $("isolate-vocals").checked = false;
     $("isolate-vocals").disabled = true;
+    updateFileSummary(item.path);
     fileUI("Avvio");
     switchView("file");
     notice("Ritrascrizione recovery avviata");
@@ -350,7 +594,7 @@ function deleteRecovery(item) {
   if (!window.confirm(`Eliminare definitivamente ${item.name || "questo recovery WAV"}?`)) return;
   call("deleteRecovery", [item.path], result => {
     const response = json(result);
-    if (!response?.ok) { notice(response?.error || "Eliminazione recovery non riuscita", true); return; }
+    if (!response?.ok) { showError(response?.error || "Eliminazione recovery non riuscita", "history"); return; }
     refreshRecovery();
     notice(response.deleted ? "Recovery eliminato" : "Recovery già assente");
   });
@@ -396,10 +640,7 @@ function renderRecovery(items) {
   });
 }
 
-function refreshRecovery() {
-  call("listRecoveryAudio", [], result => renderRecovery(json(result)));
-}
-
+function refreshRecovery() { call("listRecoveryAudio", [], result => renderRecovery(json(result))); }
 function refreshHistory() {
   refreshHistoryList();
   refreshRecovery();
@@ -407,9 +648,7 @@ function refreshHistory() {
 }
 
 function modelDetail(item) {
-  if (item.installed) {
-    return `${formatBytes(item.size_bytes)}${item.verified ? " · hash registrato" : ""}`;
-  }
+  if (item.installed) return `${formatBytes(item.size_bytes)}${item.verified ? " · hash registrato" : ""}`;
   if (Number(item.partial_bytes) > 0) return `Parziale: ${formatBytes(item.partial_bytes)}`;
   return `Minimo atteso: ${formatBytes(item.min_bytes)}`;
 }
@@ -521,7 +760,7 @@ function requestDownloadModel(model) {
       state.modelProgress = {};
       renderModels(state.models);
       lockSettings();
-      notice(response?.error || "Download modello non avviato", true);
+      showError(response?.error || "Download modello non avviato", "model");
     }
   });
 }
@@ -538,7 +777,7 @@ function requestDeleteModel(model) {
       state.modelBusy = null;
       renderModels(state.models);
       lockSettings();
-      notice(response?.error || "Eliminazione modello non avviata", true);
+      showError(response?.error || "Eliminazione modello non avviata", "model");
     }
   });
 }
@@ -547,10 +786,11 @@ function bind() {
   all(".nav").forEach(button => button.onclick = () => switchView(button.dataset.view));
   all(".segment").forEach(button => button.onclick = () => { state.source = button.dataset.source; sourceUI(); refreshDevices(); });
   $("notice-close").onclick = () => $("notice").hidden = true;
+  $("live-device").onchange = updateLiveSummary;
   $("live-start").onclick = startLive;
   $("live-stop").onclick = () => call("stopLive");
   $("live-drain").onclick = () => call("stopListening");
-  $("file-pick").onclick = () => call("chooseAudioFile", [], path => { if (path) $("file-path").value = path; });
+  $("file-pick").onclick = () => call("chooseAudioFile", [], path => { if (path) { $("file-path").value = path; updateFileSummary(path); } });
   $("file-start").onclick = startFile;
   $("file-stop").onclick = () => call("stopFile");
   $("song-mode").onchange = eventObject => { $("isolate-vocals").disabled = !eventObject.target.checked; if (!eventObject.target.checked) $("isolate-vocals").checked = false; };
