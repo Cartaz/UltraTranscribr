@@ -10,7 +10,7 @@ import tempfile
 import threading
 import wave
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 
@@ -24,6 +24,7 @@ from core.whisper_backend import WhisperBackend
 
 logger = logging.getLogger(__name__)
 DEMUCS_END = 48
+EventSink = Callable[[str, Any], None]
 
 
 class FileTranscriberThread(threading.Thread):
@@ -35,20 +36,30 @@ class FileTranscriberThread(threading.Thread):
         song_mode: bool = False,
         isolate_vocals_flag: bool = False,
         language: Optional[str] = None,
+        *,
+        event_sink: Optional[EventSink] = None,
+        thread_name: str = "FileTranscriberThread",
     ) -> None:
-        super().__init__(daemon=True, name="FileTranscriberThread")
+        super().__init__(daemon=True, name=thread_name)
         self._file_path = file_path
         self._backend = backend
         self._settings = settings
         self._language = language or settings.language
         self._song_mode = bool(song_mode)
         self._isolate_vocals = bool(isolate_vocals_flag)
+        self._event_sink = event_sink
         self._stop_event = threading.Event()
         self._vocal_path: Optional[str] = None
         self._pcm_wav_path: Optional[str] = None
         self._terminal_state: str | None = None
         self._conversion_process: Optional[subprocess.Popen[bytes]] = None
         self._conversion_lock = threading.Lock()
+
+    def _emit(self, event: str, payload: Any = None) -> None:
+        if self._event_sink is not None:
+            self._event_sink(event, payload)
+        else:
+            EventBus().emit(event, payload)
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -67,7 +78,6 @@ class FileTranscriberThread(threading.Thread):
                 pass
 
     def run(self) -> None:
-        bus = EventBus()
         try:
             source = self._file_path
             if self._isolate_vocals and self._song_mode:
@@ -76,36 +86,35 @@ class FileTranscriberThread(threading.Thread):
                     return
                 if isolated:
                     source = isolated
-            bus.emit("file_transcriber_status_changed", StatusEnum.RUNNING.value)
+            self._emit("file_transcriber_status_changed", StatusEnum.RUNNING.value)
             start_pct = DEMUCS_END if self._vocal_path else 0
-            bus.emit("file_transcriber_progress", start_pct)
+            self._emit("file_transcriber_progress", start_pct)
             self._transcribe_progressively(source, start_pct)
             if not self._stop_event.is_set():
                 self._terminal_state = StatusEnum.COMPLETED.value
-                bus.emit("file_transcriber_status_changed", self._terminal_state)
-                bus.emit("file_transcriber_completed", None)
+                self._emit("file_transcriber_status_changed", self._terminal_state)
+                self._emit("file_transcriber_completed", None)
         except Exception as exc:
             if not self._stop_event.is_set():
                 self._terminal_state = StatusEnum.ERROR.value
                 logger.exception("Errore trascrizione file")
-                bus.emit("file_transcriber_error", f"Errore trascrizione: {exc}")
-                bus.emit("file_transcriber_status_changed", self._terminal_state)
+                self._emit("file_transcriber_error", f"Errore trascrizione: {exc}")
+                self._emit("file_transcriber_status_changed", self._terminal_state)
         finally:
             if self._stop_event.is_set() and self._terminal_state is None:
-                bus.emit("file_transcriber_status_changed", StatusEnum.STOPPED.value)
+                self._emit("file_transcriber_status_changed", StatusEnum.STOPPED.value)
             self._cleanup()
 
     def _run_vocal_isolation(self) -> Optional[str]:
         from core.vocal_isolator import isolate_vocals, is_demucs_available
 
-        bus = EventBus()
         if not is_demucs_available():
             logger.warning("Demucs non disponibile; continuo col file originale")
             return None
-        bus.emit("file_transcriber_status_changed", StatusEnum.ISOLATING_VOCALS.value)
+        self._emit("file_transcriber_status_changed", StatusEnum.ISOLATING_VOCALS.value)
 
         def progress(value: int) -> None:
-            bus.emit("file_transcriber_progress", min(DEMUCS_END, max(0, value)))
+            self._emit("file_transcriber_progress", min(DEMUCS_END, max(0, value)))
 
         self._vocal_path = isolate_vocals(
             self._file_path,
@@ -121,7 +130,6 @@ class FileTranscriberThread(threading.Thread):
         if self._stop_event.is_set():
             return
         self._pcm_wav_path = wav_path
-        bus = EventBus()
         full_parts: list[str] = []
         previous = ""
         last_segment_end_s = 0.0
@@ -149,8 +157,8 @@ class FileTranscriberThread(threading.Thread):
                 if text:
                     full_parts.append(text)
                     previous = (previous + " " + text).strip()
-                    bus.emit("file_transcriber_new_text", text)
-                    bus.emit("file_transcriber_full_text", "\n".join(full_parts))
+                    self._emit("file_transcriber_new_text", text)
+                    self._emit("file_transcriber_full_text", "\n".join(full_parts))
 
                 chunk_offset_s = offset / 16000.0
                 segments = self._normalize_chunk_segments(
@@ -163,12 +171,12 @@ class FileTranscriberThread(threading.Thread):
                         last_segment_end_s,
                         max(float(segment["end"]) for segment in segments),
                     )
-                    bus.emit("file_transcriber_segments", segments)
+                    self._emit("file_transcriber_segments", segments)
 
                 consumed = min(total, offset + len(raw) // 2)
                 frac = consumed / total
                 pct = start_pct + int(frac * (100 - start_pct))
-                bus.emit(
+                self._emit(
                     "file_transcriber_progress",
                     min(99, pct) if consumed < total else 100,
                 )
@@ -176,7 +184,7 @@ class FileTranscriberThread(threading.Thread):
                     break
                 offset += step
         if not self._stop_event.is_set():
-            bus.emit("file_transcriber_progress", 100)
+            self._emit("file_transcriber_progress", 100)
 
     def _request_chunk(self, wav_bytes: bytes, prompt: Optional[str]) -> str:
         """Backward-compatible plain-text request used by existing callers/tests."""
