@@ -116,9 +116,40 @@ The first multi-session architecture keeps one shared whisper-server while captu
 
 Only after the safety/session architecture is stable:
 
-- [ ] Batch file queue.
-- [ ] Drag-and-drop multiple files.
-- [ ] Timestamp-preserving transcription output.
-- [ ] `.srt` / `.vtt` export.
-- [ ] Search across transcription history.
-- [ ] Optional transcript post-processing profiles that never overwrite the original raw transcript.
+- [x] Batch file queue.
+- [x] Drag-and-drop multiple files.
+- [x] Timestamp-preserving transcription output.
+- [x] `.srt` / `.vtt` export.
+- [x] Search across transcription history.
+- [x] Optional transcript post-processing profiles that never overwrite the original raw transcript.
+
+## Phase 10 — Meeting recording, diarization and review
+
+The existing **Live → Microphone** workflow remains unchanged. Meeting-specific recording and diarization live in a separate **Riunione** tab and session type.
+
+### 10.1 Meeting capture and persistence
+- [ ] Add a dedicated `meeting` session type and Riunione tab.
+- [ ] Record the selected microphone for the whole meeting without changing normal Live microphone behavior.
+- [ ] Store microphone audio progressively in a crash-resistant local format, targeting lossless FLAC mono 16 kHz.
+- [ ] Keep recording metadata, duration, audio path and processing status with the meeting session.
+- [ ] Allow deleting only the retained audio while preserving the transcript.
+- [ ] Add an audio-retention setting independent from transcript-history retention.
+
+### 10.2 Post-meeting transcription and diarization
+- [ ] Produce a timestamp-preserving final transcription from the complete recording.
+- [ ] Run speaker diarization after recording and persist stable speaker IDs such as `SPEAKER_00`.
+- [ ] Align diarization intervals with transcript segments without overwriting raw Whisper output.
+- [ ] Support overlapping/uncertain speaker regions explicitly rather than inventing an identity.
+
+### 10.3 Manual review UI
+- [ ] Show detected speakers as `Speaker 1`, `Speaker 2`, etc. until manually named.
+- [ ] Let the user assign or change a display name for each speaker and propagate it through the rendered transcript.
+- [ ] Persist speaker-name mappings separately from diarization results.
+- [ ] Add an audio player with seek controls in the meeting review view.
+- [ ] Clicking a transcript intervention seeks the player to that timestamp.
+- [ ] Allow manual correction of transcription text during review while retaining the original raw transcript separately.
+
+### 10.4 Meeting export and regression coverage
+- [ ] Export reviewed meetings as speaker-aware `.txt`, `.srt` and `.vtt`.
+- [ ] Fall back to `Speaker N` wherever no manual name has been assigned.
+- [ ] Test crash recovery, long recordings, diarization alignment, speaker renaming, manual transcript edits, audio deletion/retention and exports.
