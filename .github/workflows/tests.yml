@@ -18,4 +18,5 @@ jobs:
       - run: pip install -r requirements.txt pytest
       - run: node --check ui/web/app.js
       - run: node --check ui/web/multi_live.js
+      - run: node --check ui/web/settings_cleanup.js
       - run: pytest -q
