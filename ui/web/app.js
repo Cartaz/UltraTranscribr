@@ -3,9 +3,10 @@
 let backend = null;
 const $ = id => document.getElementById(id);
 const all = selector => [...document.querySelectorAll(selector)];
+
 const state = {
   boot: null,
-  source: "firefox",
+  source: "system",
   live: false,
   draining: false,
   file: false,
@@ -18,6 +19,7 @@ const state = {
   modelProgress: {},
   backendState: "standby",
 };
+
 const views = {
   live: "TRASCRIZIONE LIVE",
   file: "TRASCRIZIONE FILE",
@@ -26,7 +28,11 @@ const views = {
   logs: "LOG E DIAGNOSTICA",
 };
 const allowedModelChoices = ["large-v3", "large-v3-turbo", "medium"];
-const modelLabels = {"large-v3": "Large v3", "large-v3-turbo": "Large v3 Turbo", medium: "Medium"};
+const modelLabels = {
+  "large-v3": "Large v3",
+  "large-v3-turbo": "Large v3 Turbo",
+  medium: "Medium",
+};
 const backendLabels = {
   standby: "Standby",
   preparing_vad: "Preparazione VAD",
@@ -40,12 +46,17 @@ const backendLabels = {
 
 function call(name, args = [], cb = null) {
   if (!backend || typeof backend[name] !== "function") return;
-  if (cb) backend[name](...args, cb); else backend[name](...args);
+  if (cb) backend[name](...args, cb);
+  else backend[name](...args);
 }
 
-function json(value) { try { return JSON.parse(value); } catch { return value; } }
-function notice(textValue, error = false) {
-  $("notice-text").textContent = String(textValue || "");
+function json(value) {
+  try { return JSON.parse(value); }
+  catch { return value; }
+}
+
+function notice(value, error = false) {
+  $("notice-text").textContent = String(value || "");
   $("notice").hidden = false;
   $("notice").classList.toggle("error", error);
 }
@@ -54,7 +65,8 @@ function switchView(name) {
   all(".nav").forEach(button => {
     const active = button.dataset.view === name;
     button.classList.toggle("active", active);
-    if (active) button.setAttribute("aria-current", "page"); else button.removeAttribute("aria-current");
+    if (active) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
   });
   all(".view").forEach(panel => {
     const active = panel.dataset.panel === name;
@@ -67,6 +79,7 @@ function switchView(name) {
 }
 
 function setOrb(id, on) { $(id).classList.toggle("active", !!on); }
+
 function globalStatus(textValue, mode = "idle") {
   $("global-status").textContent = textValue;
   const orb = $("global-orb");
@@ -75,6 +88,7 @@ function globalStatus(textValue, mode = "idle") {
   else if (mode === "working") orb.classList.add("working");
   else if (mode === "error") orb.classList.add("error");
 }
+
 function setBackendStatus(value) {
   const status = String(value || "standby");
   state.backendState = status;
@@ -82,29 +96,37 @@ function setBackendStatus(value) {
     if (status === "ready") state.boot.runtime.backendRunning = true;
     if (status === "standby" || status === "error") state.boot.runtime.backendRunning = false;
   }
-  const mode = status === "ready" ? "active" : status === "error" ? "error" : status === "standby" ? "idle" : "working";
+  const mode = status === "ready" ? "active"
+    : status === "error" ? "error"
+      : status === "standby" ? "idle" : "working";
   globalStatus(backendLabels[status] || label(status), mode);
 }
+
 function restoreBackendStatus() {
-  if (state.backendState === "error") {
-    setBackendStatus("error");
-    return;
-  }
-  setBackendStatus(state.boot?.runtime?.backendRunning ? "ready" : "standby");
+  if (state.backendState === "error") setBackendStatus("error");
+  else setBackendStatus(state.boot?.runtime?.backendRunning ? "ready" : "standby");
 }
+
 function progress(kind, value) {
   const n = Math.max(0, Math.min(100, Number(value) || 0));
   $(kind + "-fill").style.width = n + "%";
   $(kind + "-progress").setAttribute("aria-valuenow", String(n));
   $(kind === "buffer" ? "buffer-value" : "file-progress-value").textContent = Math.round(n) + "%";
 }
+
 function text(kind, value, full = false) {
+  const key = kind + "Text";
   const box = $(kind + "-transcript");
-  if (full) state[kind + "Text"] = String(value || "");
-  else state[kind + "Text"] += (state[kind + "Text"] ? " " : "") + String(value || "");
-  box.textContent = state[kind + "Text"] || "Il testo trascritto apparirà qui.";
-  box.classList.toggle("placeholder", !state[kind + "Text"]);
+  if (full) state[key] = String(value || "");
+  else state[key] += (state[key] ? " " : "") + String(value || "");
+  box.textContent = state[key] || "Il testo trascritto apparirà qui.";
+  box.classList.toggle("placeholder", !state[key]);
   box.scrollTop = box.scrollHeight;
+}
+
+function sessionBusy() { return state.live || state.draining || state.file; }
+function lockSettings() {
+  $("settings-save").disabled = sessionBusy() || !!state.modelBusy;
 }
 
 function liveUI(status) {
@@ -120,17 +142,15 @@ function liveUI(status) {
 
 function fileUI(status) {
   $("file-status").textContent = status;
-  $("file-start").disabled = state.file || state.live || state.draining;
+  $("file-start").disabled = sessionBusy();
   $("file-stop").disabled = !state.file;
   setOrb("file-orb", state.file);
   lockSettings();
   renderModels(state.models);
 }
 
-function lockSettings() { $("settings-save").disabled = state.live || state.draining || state.file || !!state.modelBusy; }
-function sessionBusy() { return state.live || state.draining || state.file; }
 function options(select, values, current) {
-  select.innerHTML = "";
+  select.replaceChildren();
   values.forEach(value => {
     const option = document.createElement("option");
     option.value = value;
@@ -140,11 +160,16 @@ function options(select, values, current) {
   });
 }
 
+function sourceLabel(source) {
+  return source === "microphone" ? "Microfono" : "Audio di sistema";
+}
+
 function devices(source, list) {
-  const select = $("live-device"), current = select.value;
+  const select = $("live-device");
+  const current = select.value;
   select.innerHTML = '<option value="">Rilevamento automatico</option>';
-  const key = source === "firefox" ? "is_monitor" : "is_mic";
-  (list || []).filter(device => device[key]).forEach(device => {
+  const key = source === "system" ? "is_monitor" : "is_mic";
+  (list || []).filter(device => !!device[key]).forEach(device => {
     const option = document.createElement("option");
     option.value = device.name;
     option.textContent = device.name + (device.hostapi_name ? " · " + device.hostapi_name : "");
@@ -157,14 +182,13 @@ function devices(source, list) {
 function selectedDeviceLabel() {
   const select = $("live-device");
   if (!select.value) return "Automatico";
-  const selected = select.options[select.selectedIndex];
-  return selected?.textContent || select.value;
+  return select.options[select.selectedIndex]?.textContent || select.value;
 }
 
 function updateLiveSummary(runtime = null) {
   const settings = state.boot?.settings || {};
-  const source = runtime?.source || state.source || settings.audio_source || "firefox";
-  $("live-source-value").textContent = source === "microphone" ? "Microfono" : "Firefox";
+  const source = runtime?.source || state.source || settings.audio_source || "system";
+  $("live-source-value").textContent = sourceLabel(source);
   $("live-device-value").textContent = runtime?.sink || selectedDeviceLabel();
   $("live-model-value").textContent = modelLabels[settings.model_size] || settings.model_size || "—";
   $("live-language-value").textContent = settings.language || "auto";
@@ -179,18 +203,50 @@ function updateFileSummary(path = null) {
   $("file-name-value").title = sourcePath;
 }
 
+function sourceUI() {
+  all(".segment").forEach(button => {
+    const active = button.dataset.source === state.source;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  updateLiveSummary();
+}
+
+function refreshDevices() {
+  call("refreshDevices", [state.source], result => devices(state.source, json(result)));
+}
+
 function hydrate(bootstrap) {
   state.boot = bootstrap;
   state.models = Array.isArray(bootstrap.models) ? bootstrap.models : [];
   $("version").textContent = "v" + bootstrap.app.version;
-  const selectedModel = allowedModelChoices.includes(bootstrap.settings.model_size) ? bootstrap.settings.model_size : "large-v3-turbo";
+  const selectedModel = allowedModelChoices.includes(bootstrap.settings.model_size)
+    ? bootstrap.settings.model_size : "large-v3-turbo";
   options($("s-model"), allowedModelChoices, selectedModel);
-  state.source = bootstrap.settings.audio_source;
+  state.source = bootstrap.settings.audio_source === "microphone" ? "microphone" : "system";
   sourceUI();
   devices(state.source, bootstrap.devices);
-  const map = {"s-language": "language", "s-source": "audio_source", "s-beam": "beam_size", "s-vad-silence": "vad_min_silence_ms", "s-buffer": "buffer_warn_threshold", "s-chunk": "chunk_ms", "s-channels": "channels", "s-sink": "sink_name", "s-keyword": "sink_search_keyword", "s-port": "server_port", "s-gpu": "gpu_layers", "s-compute": "compute_type", "s-width": "window_width", "s-height": "window_height", "s-retention": "history_retention_days"};
+
+  const map = {
+    "s-language": "language",
+    "s-source": "audio_source",
+    "s-beam": "beam_size",
+    "s-vad-silence": "vad_min_silence_ms",
+    "s-buffer": "buffer_warn_threshold",
+    "s-chunk": "chunk_ms",
+    "s-channels": "channels",
+    "s-sink": "sink_name",
+    "s-keyword": "sink_search_keyword",
+    "s-port": "server_port",
+    "s-gpu": "gpu_layers",
+    "s-compute": "compute_type",
+    "s-width": "window_width",
+    "s-height": "window_height",
+    "s-retention": "history_retention_days",
+  };
   for (const [id, key] of Object.entries(map)) $(id).value = bootstrap.settings[key] ?? "";
   $("s-vad").checked = !!bootstrap.settings.vad_filter;
+
   state.live = !!bootstrap.runtime.liveRunning;
   state.draining = !!bootstrap.runtime.liveDraining;
   state.file = !!bootstrap.runtime.fileRunning;
@@ -204,15 +260,6 @@ function hydrate(bootstrap) {
   $("log-output").textContent = bootstrap.logTail || "Nessun log persistente disponibile.";
 }
 
-function sourceUI() {
-  all(".segment").forEach(button => {
-    const active = button.dataset.source === state.source;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-pressed", String(active));
-  });
-  updateLiveSummary();
-}
-function refreshDevices() { call("refreshDevices", [state.source], result => devices(state.source, json(result))); }
 function appendLog(level, name, message) {
   const out = $("log-output");
   if (out.textContent.startsWith("In attesa") || out.textContent.startsWith("Nessun log")) out.textContent = "";
@@ -220,22 +267,19 @@ function appendLog(level, name, message) {
   if ($("log-auto").checked) out.scrollTop = out.scrollHeight;
 }
 
-function historyIsVisible() {
-  const panel = document.querySelector('[data-panel="history"]');
-  return !!panel && panel.classList.contains("active");
-}
-
 function friendlyError(value, context = "") {
-  let raw = "";
-  if (value && typeof value === "object") {
-    raw = [value.message, value.detail, value.action].filter(Boolean).join("\n");
-  } else {
-    raw = String(value || "Errore sconosciuto");
-  }
+  const raw = value && typeof value === "object"
+    ? [value.message, value.detail, value.action].filter(Boolean).join("\n")
+    : String(value || "Errore sconosciuto");
   const lower = raw.toLowerCase();
 
-  if (lower.includes("sink di firefox") || (context === "live" && lower.includes("firefox"))) {
-    return "Firefox non è stato rilevato come sorgente audio.\nAvvia una riproduzione in Firefox e riprova, oppure scegli manualmente un dispositivo audio.";
+  if (
+    lower.includes("audio di sistema")
+    || lower.includes("uscita predefinita")
+    || lower.includes("sink di firefox")
+    || (context === "live" && lower.includes("firefox"))
+  ) {
+    return "Audio di sistema non rilevato.\nVerifica che PipeWire/PulseAudio abbia un'uscita audio predefinita oppure seleziona manualmente un dispositivo monitor.";
   }
   if (lower.includes("microfono") && (lower.includes("impossibile") || lower.includes("non trovato"))) {
     return "Microfono non rilevato.\nControlla che sia collegato e disponibile in PipeWire/PulseAudio, poi riprova o selezionalo manualmente.";
@@ -265,9 +309,7 @@ function showError(value, context = "") { notice(friendlyError(value, context), 
 function event(name, payload) {
   const value = json(payload);
   switch (name) {
-    case "backend_status_changed":
-      setBackendStatus(value);
-      break;
+    case "backend_status_changed": setBackendStatus(value); break;
     case "process_started":
       state.live = true;
       state.draining = false;
@@ -327,7 +369,8 @@ function event(name, payload) {
     case "config_changed":
       if (state.boot && value && typeof value === "object") {
         state.boot.settings = {...state.boot.settings, ...value};
-        updateLiveSummary();
+        if (value.audio_source) state.source = value.audio_source === "microphone" ? "microphone" : "system";
+        sourceUI();
         updateFileSummary();
       }
       break;
@@ -356,14 +399,9 @@ function event(name, payload) {
       refreshModels();
       break;
     case "model_download_error":
-      state.modelBusy = null;
-      state.modelProgress = {};
-      lockSettings();
-      showError(value, "model");
-      refreshModels();
-      break;
     case "model_delete_error":
       state.modelBusy = null;
+      state.modelProgress = {};
       lockSettings();
       showError(value, "model");
       refreshModels();
@@ -394,8 +432,10 @@ function label(value) {
 
 async function copyValue(value) {
   const textValue = String(value || "");
-  try { await navigator.clipboard.writeText(textValue); notice("Copiato negli appunti"); }
-  catch {
+  try {
+    await navigator.clipboard.writeText(textValue);
+    notice("Copiato negli appunti");
+  } catch {
     const area = document.createElement("textarea");
     area.value = textValue;
     document.body.append(area);
@@ -424,8 +464,8 @@ function startFile() {
 
 function saveSettings(eventObject) {
   eventObject.preventDefault();
-  const form = eventObject.currentTarget, payload = {};
-  for (const element of form.elements) {
+  const payload = {};
+  for (const element of eventObject.currentTarget.elements) {
     if (!element.name) continue;
     if (element.type === "checkbox") payload[element.name] = element.checked;
     else if (element.type === "number") payload[element.name] = Number(element.value);
@@ -435,7 +475,9 @@ function saveSettings(eventObject) {
     const response = json(result);
     if (!response.ok) { showError(response.error, "settings"); return; }
     state.boot.settings = response.settings;
-    updateLiveSummary();
+    state.source = response.settings.audio_source === "microphone" ? "microphone" : "system";
+    sourceUI();
+    refreshDevices();
     updateFileSummary();
     notice("Impostazioni salvate");
   });
@@ -453,12 +495,18 @@ function fileName(path) {
   return parts[parts.length - 1] || String(path || "");
 }
 
+function historyIsVisible() {
+  const panel = document.querySelector('[data-panel="history"]');
+  return !!panel && panel.classList.contains("active");
+}
+
 function historyTitle(session) {
   if (session.kind === "file") {
     const name = fileName(session.source_path) || "Trascrizione file";
     return session.source === "recovery" ? `Recovery · ${name}` : name;
   }
-  return session.source === "microphone" ? "Trascrizione microfono" : "Trascrizione live";
+  if (session.source === "microphone") return "Trascrizione microfono";
+  return "Trascrizione audio di sistema";
 }
 
 function renderHistory(items) {
@@ -496,9 +544,8 @@ function clearHistorySelection() {
   $("history-copy").disabled = true;
   $("history-export").disabled = true;
   $("history-delete").disabled = true;
-  const transcript = $("history-transcript");
-  transcript.textContent = "Il contenuto della sessione selezionata apparirà qui.";
-  transcript.classList.add("placeholder");
+  $("history-transcript").textContent = "Il contenuto della sessione selezionata apparirà qui.";
+  $("history-transcript").classList.add("placeholder");
   all(".history-item").forEach(item => item.classList.remove("active"));
 }
 
@@ -512,7 +559,7 @@ function showHistorySession(session) {
   $("history-model").textContent = modelLabels[session.model] || session.model || "—";
   $("history-language").textContent = session.language || "—";
   $("history-started").textContent = formatDate(session.started_at);
-  $("history-source").textContent = session.kind === "file" ? (session.source_path || "—") : (session.source_path || session.source || "—");
+  $("history-source").textContent = session.kind === "file" ? (session.source_path || "—") : (session.source_path || sourceLabel(session.source));
   $("history-meta").hidden = false;
   $("history-copy").disabled = !state.historyText;
   $("history-export").disabled = false;
@@ -549,8 +596,7 @@ function exportSelectedHistory() {
 function deleteSelectedHistory() {
   if (!state.historySelected) return;
   if (!window.confirm("Eliminare definitivamente questa trascrizione dalla cronologia?")) return;
-  const sessionId = state.historySelected;
-  call("deleteHistorySession", [sessionId], result => {
+  call("deleteHistorySession", [state.historySelected], result => {
     const response = json(result);
     if (!response?.ok) { showError(response?.error || "Eliminazione non riuscita", "history"); return; }
     clearHistorySelection();
@@ -622,19 +668,18 @@ function renderRecovery(items) {
 
     const actions = document.createElement("div");
     actions.className = "recovery-actions";
-    const transcribe = document.createElement("button");
-    transcribe.type = "button";
-    transcribe.className = "button selected compact-button";
-    transcribe.textContent = "Trascrivi";
-    transcribe.disabled = sessionBusy();
-    transcribe.onclick = () => startRecovery(item);
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "button compact-button";
-    remove.textContent = "Elimina";
-    remove.disabled = sessionBusy();
-    remove.onclick = () => deleteRecovery(item);
-    actions.append(transcribe, remove);
+    for (const [caption, handler, selected] of [
+      ["Trascrivi", () => startRecovery(item), true],
+      ["Elimina", () => deleteRecovery(item), false],
+    ]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "button compact-button" + (selected ? " selected" : "");
+      button.textContent = caption;
+      button.disabled = sessionBusy();
+      button.onclick = handler;
+      actions.append(button);
+    }
     row.append(info, actions);
     list.append(row);
   });
@@ -695,16 +740,19 @@ function renderModels(items) {
     bar.setAttribute("role", "progressbar");
     bar.setAttribute("aria-valuemin", "0");
     bar.setAttribute("aria-valuemax", "100");
-    const fill = document.createElement("span");
     const p = state.modelProgress[item.model] || null;
     const percent = p?.percent == null ? 0 : Math.max(0, Math.min(100, Number(p.percent)));
+    const fill = document.createElement("span");
     fill.style.width = `${percent}%`;
     bar.setAttribute("aria-valuenow", String(percent));
     bar.append(fill);
+
     const progressLabel = document.createElement("div");
     progressLabel.className = "model-progress-label";
     if (active && p) {
-      progressLabel.textContent = p.total ? `${formatBytes(p.downloaded)} / ${formatBytes(p.total)} · ${percent}%` : `${formatBytes(p.downloaded)} scaricati`;
+      progressLabel.textContent = p.total
+        ? `${formatBytes(p.downloaded)} / ${formatBytes(p.total)} · ${percent}%`
+        : `${formatBytes(p.downloaded)} scaricati`;
     } else if (!item.installed && Number(item.partial_bytes) > 0) {
       progressLabel.textContent = `Download riprendibile da ${formatBytes(item.partial_bytes)}`;
     } else {
@@ -717,7 +765,7 @@ function renderModels(items) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "button" + (!item.installed ? " selected" : "");
-    button.textContent = active ? "Attendi…" : item.installed ? "Elimina" : (Number(item.partial_bytes) > 0 ? "Riprendi" : "Scarica");
+    button.textContent = active ? "Attendi…" : item.installed ? "Elimina" : Number(item.partial_bytes) > 0 ? "Riprendi" : "Scarica";
     button.disabled = sessionBusy() || !!state.modelBusy;
     button.onclick = () => item.installed ? requestDeleteModel(item.model) : requestDownloadModel(item.model);
     actions.append(button);
@@ -728,7 +776,7 @@ function renderModels(items) {
 }
 
 function updateModelProgress(payload) {
-  if (!payload || !payload.model) return;
+  if (!payload?.model) return;
   state.modelBusy = payload.model;
   state.modelProgress[payload.model] = {
     downloaded: Number(payload.downloaded) || 0,
@@ -784,16 +832,28 @@ function requestDeleteModel(model) {
 
 function bind() {
   all(".nav").forEach(button => button.onclick = () => switchView(button.dataset.view));
-  all(".segment").forEach(button => button.onclick = () => { state.source = button.dataset.source; sourceUI(); refreshDevices(); });
+  all(".segment").forEach(button => button.onclick = () => {
+    state.source = button.dataset.source;
+    sourceUI();
+    refreshDevices();
+  });
   $("notice-close").onclick = () => $("notice").hidden = true;
   $("live-device").onchange = updateLiveSummary;
   $("live-start").onclick = startLive;
   $("live-stop").onclick = () => call("stopLive");
   $("live-drain").onclick = () => call("stopListening");
-  $("file-pick").onclick = () => call("chooseAudioFile", [], path => { if (path) { $("file-path").value = path; updateFileSummary(path); } });
+  $("file-pick").onclick = () => call("chooseAudioFile", [], path => {
+    if (path) {
+      $("file-path").value = path;
+      updateFileSummary(path);
+    }
+  });
   $("file-start").onclick = startFile;
   $("file-stop").onclick = () => call("stopFile");
-  $("song-mode").onchange = eventObject => { $("isolate-vocals").disabled = !eventObject.target.checked; if (!eventObject.target.checked) $("isolate-vocals").checked = false; };
+  $("song-mode").onchange = eventObject => {
+    $("isolate-vocals").disabled = !eventObject.target.checked;
+    if (!eventObject.target.checked) $("isolate-vocals").checked = false;
+  };
   $("live-copy").onclick = () => copyValue(state.liveText);
   $("file-copy").onclick = () => copyValue(state.fileText);
   $("live-clear").onclick = () => { state.liveText = ""; text("live", "", true); };
@@ -804,14 +864,22 @@ function bind() {
   $("history-delete").onclick = deleteSelectedHistory;
   $("models-refresh").onclick = refreshModels;
   $("settings-form").onsubmit = saveSettings;
-  $("log-refresh").onclick = () => call("readLogTail", [300], result => $("log-output").textContent = result || "Nessun log persistente disponibile.");
+  $("log-refresh").onclick = () => call("readLogTail", [300], result => {
+    $("log-output").textContent = result || "Nessun log persistente disponibile.";
+  });
   $("log-copy").onclick = () => copyValue($("log-output").textContent);
-  $("diagnostics-run").onclick = () => { $("diagnostics-output").textContent = "Diagnostica in corso…"; call("runAudioDiagnostics"); };
+  $("diagnostics-run").onclick = () => {
+    $("diagnostics-output").textContent = "Diagnostica in corso…";
+    call("runAudioDiagnostics");
+  };
 }
 
 function init() {
   bind();
-  if (typeof QWebChannel === "undefined") { notice("Qt WebChannel non disponibile", true); return; }
+  if (typeof QWebChannel === "undefined") {
+    notice("Qt WebChannel non disponibile", true);
+    return;
+  }
   new QWebChannel(qt.webChannelTransport, channel => {
     backend = channel.objects.backend;
     backend.eventReceived.connect(event);
