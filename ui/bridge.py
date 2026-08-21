@@ -43,6 +43,9 @@ class BackendBridge(QObject):
         "file_transcriber_completed",
         "file_transcriber_error",
         "config_changed",
+        "history_changed",
+        "history_error",
+        "recovery_audio_saved",
     )
 
     def __init__(self, controller: AppController, parent: QObject | None = None) -> None:
@@ -203,6 +206,27 @@ class BackendBridge(QObject):
     @Slot()
     def stopFile(self) -> None:
         self._run_async("stop-file", self._controller.stop_file_transcription, "file_transcriber_error")
+
+    @Slot(int, result=str)
+    def listHistory(self, limit: int = 50) -> str:
+        return json.dumps(
+            self._controller.list_history(max(1, min(int(limit), 500))),
+            ensure_ascii=False,
+            default=str,
+        )
+
+    @Slot(str, result=str)
+    def getHistorySession(self, session_id: str) -> str:
+        session = self._controller.get_history_session(session_id)
+        return json.dumps(session, ensure_ascii=False, default=str)
+
+    @Slot(result=str)
+    def listRecoveryAudio(self) -> str:
+        return json.dumps(
+            self._controller.list_recovery_audio(),
+            ensure_ascii=False,
+            default=str,
+        )
 
     @Slot(str, result=str)
     def applySettings(self, payload_json: str) -> str:

@@ -2,7 +2,7 @@
 from __future__ import annotations
 import logging, threading
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 from config.settings import AudioSource, Settings
 from core.audio_capture import AudioCaptureThread
 from core.buffer_manager import BufferManager
@@ -12,6 +12,7 @@ from core.file_transcriber import FileTranscriberThread
 from core.models import StatusEnum
 from core.sink_finder import find_source
 from core.transcriber import TranscriberThread
+from core.transcript_history import TranscriptHistoryStore
 from core.whisper_backend import WhisperBackend
 from core.whisper_gpu_detect import detect_gpu_backend
 from core.whisper_models import WhisperModelManager
@@ -30,6 +31,7 @@ class AppController:
             )
         self._model_manager = WhisperModelManager()
         self._backend = WhisperBackend(settings, self._project_root)
+        self._history = TranscriptHistoryStore()
         self._capture_thread: Optional[AudioCaptureThread] = None
         self._transcriber_thread: Optional[TranscriberThread] = None
         self._file_thread: Optional[FileTranscriberThread] = None
@@ -38,6 +40,10 @@ class AppController:
         self._lock = threading.RLock()
         self._backend_init_lock = threading.Lock()
         self._generation = 0
+        self._live_history_id: Optional[str] = None
+        self._file_history_id: Optional[str] = None
+        self._history_subscriptions: list[tuple[str, Callable[[Any], None]]] = []
+        self._subscribe_history_events()
 
     @property
     def settings(self): return self._settings
@@ -45,6 +51,8 @@ class AppController:
     def buffer(self): return self._buffer
     @property
     def backend(self): return self._backend
+    @property
+    def history(self): return self._history
 
     def _next_generation(self) -> int:
         with self._lock:
@@ -107,6 +115,13 @@ class AppController:
         sink = self._resolve_sink(sink_name, src)
         lang = language or self._settings.language
         self._buffer.clear()
+        self._start_history_session(
+            "live",
+            model=self._settings.model_size,
+            language=lang,
+            source=src,
+            source_path=sink,
+        )
         def start() -> None:
             self.ensure_backend_started(vad=self._settings.vad_filter)
             if not self._is_current(generation):
@@ -171,6 +186,13 @@ class AppController:
         lang = language or self._settings.language
         cfg = (self._settings.with_(model_size=model_size)
                if model_size and model_size != self._settings.model_size else self._settings)
+        self._start_history_session(
+            "file",
+            model=cfg.model_size,
+            language=lang,
+            source="file",
+            source_path=str(file_path),
+        )
         def start() -> None:
             self.ensure_backend_started(vad=False if song_mode else cfg.vad_filter, settings=cfg)
             if not self._is_current(generation):
@@ -198,6 +220,7 @@ class AppController:
                 self._backend_started = False
             if worker is not threading.current_thread():
                 worker.join(timeout=5.0)
+        self._finish_history_session("file", StatusEnum.STOPPED.value)
 
     def is_file_transcribing(self) -> bool:
         t = self._file_thread
@@ -208,6 +231,15 @@ class AppController:
         self._settings.save()
         self._bus.emit("config_changed", overrides)
 
+    def list_history(self, limit: int = 50) -> list[dict[str, Any]]:
+        return self._history.list_recent(limit)
+
+    def get_history_session(self, session_id: str) -> Optional[dict[str, Any]]:
+        return self._history.get_session(session_id)
+
+    def list_recovery_audio(self) -> list[dict[str, Any]]:
+        return self._history.list_recovery_audio()
+
     def subscribe(self, event: str, handler: Callable) -> None:
         self._bus.subscribe(event, handler)
 
@@ -216,6 +248,9 @@ class AppController:
         self.stop_transcription()
         self.stop_backend()
         self._buffer.close()
+        for event, handler in self._history_subscriptions:
+            self._bus.unsubscribe(event, handler)
+        self._history_subscriptions.clear()
 
     def _resolve_sink(self, sink_name: Optional[str], audio_source: str) -> str:
         if sink_name is not None:
@@ -232,3 +267,83 @@ class AppController:
             "Impossibile trovare automaticamente il microfono",
             detail="Assicurati che il microfono sia collegato e funzionante",
         )
+
+    def _subscribe_history_events(self) -> None:
+        handlers: tuple[tuple[str, Callable[[Any], None]], ...] = (
+            ("process_started", lambda _p: self._set_history_status("live", StatusEnum.RUNNING.value)),
+            ("process_stopped", lambda _p: self._finish_history_session("live", StatusEnum.STOPPED.value)),
+            ("capture_stopped", lambda _p: self._set_history_status("live", "draining")),
+            ("transcriber_new_text", lambda p: self._append_history_text("live", p)),
+            ("transcriber_error", lambda _p: self._finish_history_session("live", StatusEnum.ERROR.value)),
+            ("transcriber_drained", lambda _p: self._finish_history_session("live", StatusEnum.COMPLETED.value)),
+            ("file_transcriber_new_text", lambda p: self._append_history_text("file", p)),
+            ("file_transcriber_status_changed", self._on_file_history_status),
+            ("file_transcriber_error", lambda _p: self._finish_history_session("file", StatusEnum.ERROR.value)),
+            ("file_transcriber_completed", lambda _p: self._finish_history_session("file", StatusEnum.COMPLETED.value)),
+        )
+        for event, handler in handlers:
+            self._bus.subscribe(event, handler)
+            self._history_subscriptions.append((event, handler))
+
+    def _start_history_session(self, kind: str, **metadata: Any) -> None:
+        try:
+            session_id = self._history.create_session(kind=kind, **metadata)
+        except Exception as exc:
+            logger.exception("Impossibile creare la cronologia %s", kind)
+            self._bus.emit("history_error", str(exc))
+            return
+        with self._lock:
+            if kind == "live":
+                self._live_history_id = session_id
+            else:
+                self._file_history_id = session_id
+        self._bus.emit("history_changed", session_id)
+
+    def _history_id(self, kind: str) -> Optional[str]:
+        with self._lock:
+            return self._live_history_id if kind == "live" else self._file_history_id
+
+    def _append_history_text(self, kind: str, payload: Any) -> None:
+        session_id = self._history_id(kind)
+        if session_id is None:
+            return
+        try:
+            self._history.append_text(session_id, str(payload or ""))
+        except Exception as exc:
+            logger.exception("Autosave trascrizione %s fallito", kind)
+            self._bus.emit("history_error", str(exc))
+
+    def _set_history_status(self, kind: str, status: str) -> None:
+        session_id = self._history_id(kind)
+        if session_id is None:
+            return
+        try:
+            self._history.set_status(session_id, status)
+        except Exception as exc:
+            logger.exception("Aggiornamento cronologia %s fallito", kind)
+            self._bus.emit("history_error", str(exc))
+
+    def _finish_history_session(self, kind: str, status: str) -> None:
+        with self._lock:
+            if kind == "live":
+                session_id = self._live_history_id
+                self._live_history_id = None
+            else:
+                session_id = self._file_history_id
+                self._file_history_id = None
+        if session_id is None:
+            return
+        try:
+            self._history.set_status(session_id, status, terminal=True)
+        except Exception as exc:
+            logger.exception("Chiusura cronologia %s fallita", kind)
+            self._bus.emit("history_error", str(exc))
+            return
+        self._bus.emit("history_changed", session_id)
+
+    def _on_file_history_status(self, payload: Any) -> None:
+        status = str(payload)
+        if status in {StatusEnum.COMPLETED.value, StatusEnum.STOPPED.value, StatusEnum.ERROR.value}:
+            self._finish_history_session("file", status)
+        else:
+            self._set_history_status("file", status)

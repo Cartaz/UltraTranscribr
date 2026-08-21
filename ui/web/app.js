@@ -3,8 +3,24 @@
 let backend = null;
 const $ = id => document.getElementById(id);
 const all = selector => [...document.querySelectorAll(selector)];
-const state = {boot: null, source: "firefox", live: false, draining: false, file: false, liveText: "", fileText: ""};
-const views = {live: "TRASCRIZIONE LIVE", file: "TRASCRIZIONE FILE", settings: "IMPOSTAZIONI", logs: "LOG E DIAGNOSTICA"};
+const state = {
+  boot: null,
+  source: "firefox",
+  live: false,
+  draining: false,
+  file: false,
+  liveText: "",
+  fileText: "",
+  historyText: "",
+  historySelected: null,
+};
+const views = {
+  live: "TRASCRIZIONE LIVE",
+  file: "TRASCRIZIONE FILE",
+  history: "CRONOLOGIA",
+  settings: "IMPOSTAZIONI",
+  logs: "LOG E DIAGNOSTICA",
+};
 const allowedModelChoices = ["large-v3", "large-v3-turbo", "medium"];
 const modelLabels = {"large-v3": "Large v3", "large-v3-turbo": "Large v3 Turbo", medium: "Medium"};
 
@@ -14,7 +30,7 @@ function call(name, args = [], cb = null) {
 }
 
 function json(value) { try { return JSON.parse(value); } catch { return value; } }
-function notice(text, error = false) { $("notice-text").textContent = text; $("notice").hidden = false; $("notice").classList.toggle("error", error); }
+function notice(textValue, error = false) { $("notice-text").textContent = textValue; $("notice").hidden = false; $("notice").classList.toggle("error", error); }
 
 function switchView(name) {
   all(".nav").forEach(button => {
@@ -28,10 +44,11 @@ function switchView(name) {
     panel.classList.toggle("active", active);
   });
   $("eyebrow").textContent = views[name];
+  if (name === "history") refreshHistory();
 }
 
 function setOrb(id, on) { $(id).classList.toggle("active", !!on); }
-function globalStatus(text, on = false) { $("global-status").textContent = text; setOrb("global-orb", on); }
+function globalStatus(textValue, on = false) { $("global-status").textContent = textValue; setOrb("global-orb", on); }
 function progress(kind, value) { const n = Math.max(0, Math.min(100, Number(value) || 0)); $(kind + "-fill").style.width = n + "%"; $(kind + "-progress").setAttribute("aria-valuenow", String(n)); $(kind === "buffer" ? "buffer-value" : "file-progress-value").textContent = Math.round(n) + "%"; }
 function text(kind, value, full = false) { const box = $(kind + "-transcript"); if (full) state[kind + "Text"] = String(value || ""); else state[kind + "Text"] += (state[kind + "Text"] ? " " : "") + String(value || ""); box.textContent = state[kind + "Text"] || "Il testo trascritto apparirà qui."; box.classList.toggle("placeholder", !state[kind + "Text"]); box.scrollTop = box.scrollHeight; }
 
@@ -95,6 +112,11 @@ function sourceUI() { all(".segment").forEach(button => { const active = button.
 function refreshDevices() { call("refreshDevices", [state.source], result => devices(state.source, json(result))); }
 function appendLog(level, name, message) { const out = $("log-output"); if (out.textContent.startsWith("In attesa") || out.textContent.startsWith("Nessun log")) out.textContent = ""; out.textContent += `[${level}] ${name}: ${message}\n`; if ($("log-auto").checked) out.scrollTop = out.scrollHeight; }
 
+function historyIsVisible() {
+  const panel = document.querySelector('[data-panel="history"]');
+  return !!panel && panel.classList.contains("active");
+}
+
 function event(name, payload) {
   const value = json(payload);
   switch (name) {
@@ -116,10 +138,13 @@ function event(name, payload) {
     case "config_changed": if (state.boot && value && typeof value === "object") { state.boot.settings = {...state.boot.settings, ...value}; $("live-model-value").textContent = modelLabels[state.boot.settings.model_size] || state.boot.settings.model_size; } break;
     case "audio_diagnostics": $("diagnostics-output").textContent = String(value); break;
     case "audio_diagnostics_error": $("diagnostics-output").textContent = String(value); notice(String(value), true); break;
+    case "history_changed": if (historyIsVisible()) refreshHistory(); break;
+    case "history_error": notice("Autosave cronologia non riuscito: " + String(value), true); break;
+    case "recovery_audio_saved": notice("Audio non trascritto salvato in Recovery", true); if (historyIsVisible()) refreshRecovery(); break;
   }
 }
 
-function label(value) { return ({idle: "Idle", running: "In esecuzione", buffering: "Buffering", error: "Errore", loading_model: "Caricamento modello", isolating_vocals: "Isolamento voce", stopped: "Fermata", completed: "Completata"})[String(value)] || String(value); }
+function label(value) { return ({idle: "Idle", starting: "Avvio", running: "In esecuzione", draining: "Completamento buffer", buffering: "Buffering", error: "Errore", loading_model: "Caricamento modello", isolating_vocals: "Isolamento voce", stopped: "Fermata", completed: "Completata"})[String(value)] || String(value); }
 
 async function copyValue(value) {
   const textValue = String(value || "");
@@ -157,6 +182,125 @@ function saveSettings(eventObject) {
   });
 }
 
+function formatDate(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("it-IT", {dateStyle: "short", timeStyle: "medium"});
+}
+
+function fileName(path) {
+  const parts = String(path || "").split(/[\\/]/);
+  return parts[parts.length - 1] || String(path || "");
+}
+
+function historyTitle(session) {
+  if (session.kind === "file") return fileName(session.source_path) || "Trascrizione file";
+  return session.source === "microphone" ? "Trascrizione microfono" : "Trascrizione live";
+}
+
+function renderHistory(items) {
+  const list = $("history-list");
+  list.replaceChildren();
+  if (!Array.isArray(items) || !items.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "Nessuna trascrizione salvata.";
+    list.append(empty);
+    return;
+  }
+  items.forEach(item => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "history-item" + (item.id === state.historySelected ? " active" : "");
+    button.dataset.sessionId = item.id;
+    const title = document.createElement("strong");
+    title.textContent = historyTitle(item);
+    const meta = document.createElement("span");
+    meta.textContent = `${formatDate(item.started_at)} · ${label(item.status)} · ${modelLabels[item.model] || item.model}`;
+    const preview = document.createElement("small");
+    preview.textContent = item.text_preview || "Nessun testo salvato";
+    button.append(title, meta, preview);
+    button.onclick = () => loadHistorySession(item.id);
+    list.append(button);
+  });
+}
+
+function showHistorySession(session) {
+  if (!session) return;
+  state.historySelected = session.id;
+  state.historyText = String(session.text || "");
+  $("history-title").textContent = historyTitle(session);
+  $("history-kind").textContent = session.kind === "file" ? "File" : "Live";
+  $("history-status").textContent = label(session.status);
+  $("history-model").textContent = modelLabels[session.model] || session.model || "—";
+  $("history-language").textContent = session.language || "—";
+  $("history-started").textContent = formatDate(session.started_at);
+  $("history-source").textContent = session.kind === "file" ? (session.source_path || "—") : (session.source_path || session.source || "—");
+  $("history-meta").hidden = false;
+  $("history-copy").disabled = !state.historyText;
+  const transcript = $("history-transcript");
+  transcript.textContent = state.historyText || "Nessun testo salvato per questa sessione.";
+  transcript.classList.toggle("placeholder", !state.historyText);
+  all(".history-item").forEach(item => item.classList.toggle("active", item.dataset.sessionId === session.id));
+}
+
+function loadHistorySession(sessionId) {
+  call("getHistorySession", [sessionId], result => {
+    const session = json(result);
+    if (!session) { notice("Sessione non più disponibile", true); refreshHistory(); return; }
+    showHistorySession(session);
+  });
+}
+
+function refreshHistoryList() {
+  call("listHistory", [80], result => renderHistory(json(result)));
+}
+
+function formatBytes(value) {
+  const bytes = Number(value) || 0;
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / 1048576).toFixed(1)} MiB`;
+}
+
+function renderRecovery(items) {
+  const list = $("recovery-list");
+  list.replaceChildren();
+  if (!Array.isArray(items) || !items.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "Nessun audio da recuperare.";
+    list.append(empty);
+    return;
+  }
+  items.forEach(item => {
+    const row = document.createElement("div");
+    row.className = "recovery-item";
+    const info = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = item.name || "Recovery audio";
+    const detail = document.createElement("small");
+    detail.textContent = `${formatDate(item.modified_at)} · ${formatBytes(item.size_bytes)} · ${item.path || ""}`;
+    info.append(title, detail);
+    const badge = document.createElement("span");
+    badge.className = "state";
+    badge.textContent = "WAV";
+    row.append(info, badge);
+    list.append(row);
+  });
+}
+
+function refreshRecovery() {
+  call("listRecoveryAudio", [], result => renderRecovery(json(result)));
+}
+
+function refreshHistory() {
+  refreshHistoryList();
+  refreshRecovery();
+  if (state.historySelected) loadHistorySession(state.historySelected);
+}
+
 function bind() {
   all(".nav").forEach(button => button.onclick = () => switchView(button.dataset.view));
   all(".segment").forEach(button => button.onclick = () => { state.source = button.dataset.source; sourceUI(); refreshDevices(); });
@@ -172,6 +316,8 @@ function bind() {
   $("file-copy").onclick = () => copyValue(state.fileText);
   $("live-clear").onclick = () => { state.liveText = ""; text("live", "", true); };
   $("file-clear").onclick = () => { state.fileText = ""; text("file", "", true); };
+  $("history-refresh").onclick = refreshHistory;
+  $("history-copy").onclick = () => copyValue(state.historyText);
   $("settings-form").onsubmit = saveSettings;
   $("log-refresh").onclick = () => call("readLogTail", [300], result => $("log-output").textContent = result || "Nessun log persistente disponibile.");
   $("log-copy").onclick = () => copyValue($("log-output").textContent);
