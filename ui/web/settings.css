@@ -1,0 +1,52 @@
+.settings-tabs {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(430px, 100%);
+  margin: 2px 0 18px;
+}
+
+.settings-tab {
+  text-align: center;
+}
+
+.settings-tab[aria-selected="true"] {
+  color: var(--accent);
+  box-shadow: var(--shadow-active);
+}
+
+.settings-pane {
+  min-width: 0;
+}
+
+.settings-pane .settings-grid {
+  align-items: start;
+}
+
+.settings-reset {
+  white-space: nowrap;
+}
+
+.settings-geometry-note {
+  display: grid;
+  gap: 8px;
+  padding: 12px 13px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-inset-small);
+}
+
+.settings-geometry-note strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.settings-geometry-note span {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+@media (max-width: 1120px) {
+  .settings-pane .settings-grid {
+    grid-template-columns: 1fr;
+  }
+}
