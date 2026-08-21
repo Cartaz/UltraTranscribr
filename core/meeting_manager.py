@@ -67,7 +67,7 @@ class MeetingManager:
     def is_busy(self) -> bool:
         with self._lock:
             runtime = self._runtime
-            return bool(runtime and runtime.status not in {"completed", "error", "cancelled"})
+            return bool(runtime and runtime.status not in {"completed", "error", "cancelled", "interrupted"})
 
     def snapshot(self) -> Optional[dict[str, Any]]:
         with self._lock:
@@ -85,7 +85,7 @@ class MeetingManager:
     ) -> dict[str, Any]:
         if self.is_busy():
             raise RuntimeError("Una riunione è già in corso")
-        if self._controller.active_live_count() > 0 or self._controller.is_file_transcribing():
+        if self._controller.active_live_count() > 0 or self._controller._file_busy():
             raise RuntimeError("Ferma Live/File prima di avviare una riunione")
         settings = self._controller.settings.with_(
             audio_source=AudioSource.MICROPHONE.value,
@@ -130,18 +130,16 @@ class MeetingManager:
         return self._snapshot(runtime)
 
     def finish(self) -> dict[str, Any]:
-        with self._lock:
-            runtime = self._runtime
-        if runtime is None or runtime.status != "recording":
-            raise RuntimeError("Nessuna riunione in registrazione")
+        runtime = self._require_runtime("recording")
         runtime.capture.stop()
         if runtime.capture.is_alive() and runtime.capture is not threading.current_thread():
             runtime.capture.join(timeout=8.0)
-        info = runtime.recorder.finalize()
+        if runtime.capture.is_alive():
+            raise RuntimeError("Il microfono non si è arrestato in tempo; la registrazione resta aperta")
+        info = self._finalize_recording(runtime)
         if info is None:
             self._fail(runtime, "Registrazione riunione vuota")
             return self._snapshot(runtime)
-        self.store.set_recording(runtime.id, info.to_dict())
         runtime.status = "transcribing"
         runtime.progress = 0
         self.store.set_status(runtime.id, runtime.status)
@@ -160,23 +158,29 @@ class MeetingManager:
     def cancel(self) -> None:
         with self._lock:
             runtime = self._runtime
-        if runtime is None:
+        if runtime is None or runtime.status in {"completed", "error", "cancelled", "interrupted"}:
             return
         runtime.stop_event.set()
         runtime.capture.stop()
+        if runtime.capture.is_alive() and runtime.capture is not threading.current_thread():
+            runtime.capture.join(timeout=5.0)
         transcriber = runtime.transcriber
         if transcriber is not None:
             transcriber.stop()
-        if runtime.status == "recording":
+            if transcriber.is_alive():
+                self._controller.backend.abort_active_request()
+            if transcriber.is_alive() and transcriber is not threading.current_thread():
+                transcriber.join(timeout=5.0)
+        if runtime.status == "recording" and not runtime.capture.is_alive():
             try:
-                info = runtime.recorder.finalize()
-                if info is not None:
-                    self.store.set_recording(runtime.id, info.to_dict())
+                self._finalize_recording(runtime)
             except Exception:
                 logger.exception("Finalizzazione registrazione riunione annullata fallita")
+                runtime.recorder.abandon()
         runtime.status = "cancelled"
         self.store.set_status(runtime.id, runtime.status, terminal=True)
         self._emit("meeting_updated", self._snapshot(runtime))
+        self._emit("history_changed", runtime.id)
 
     def get(self, session_id: str) -> Optional[dict[str, Any]]:
         return self.store.get(session_id)
@@ -212,23 +216,38 @@ class MeetingManager:
             return
         runtime.stop_event.set()
         runtime.capture.stop()
-        if runtime.transcriber is not None:
-            runtime.transcriber.stop()
+        if runtime.capture.is_alive() and runtime.capture is not threading.current_thread():
+            runtime.capture.join(timeout=5.0)
+        transcriber = runtime.transcriber
+        if transcriber is not None:
+            transcriber.stop()
+            if transcriber.is_alive():
+                self._controller.backend.abort_active_request()
+            if transcriber.is_alive() and transcriber is not threading.current_thread():
+                transcriber.join(timeout=5.0)
         if runtime.status == "recording":
             try:
-                info = runtime.recorder.finalize()
-                if info is not None:
-                    self.store.set_recording(runtime.id, info.to_dict())
+                if runtime.capture.is_alive():
+                    runtime.recorder.abandon()
+                else:
+                    self._finalize_recording(runtime)
+                runtime.status = "interrupted"
                 self.store.set_status(runtime.id, "interrupted", terminal=True)
+                self._emit("history_changed", runtime.id)
             except Exception:
                 logger.exception("Shutdown registrazione Meeting fallito")
                 runtime.recorder.abandon()
+        processing = runtime.processing_thread
+        if processing and processing.is_alive() and processing is not threading.current_thread():
+            processing.join(timeout=2.0)
 
     def _process(self, runtime: MeetingRuntime, info: RecordingInfo) -> None:
         try:
             if runtime.stop_event.is_set():
                 return
             self._controller.ensure_backend_started(vad=runtime.settings.vad_filter, settings=runtime.settings)
+            if runtime.stop_event.is_set():
+                return
             worker = FileTranscriberThread(
                 info.path,
                 self._controller.backend,
@@ -266,6 +285,8 @@ class MeetingManager:
                 num_speakers=runtime.num_speakers if runtime.num_speakers > 0 else -1,
                 progress=lambda percent: self._diarization_progress(runtime, percent),
             )
+            if runtime.stop_event.is_set():
+                return
             review = align_speakers(raw_segments, diarization)
             self.store.set_diarization(
                 runtime.id,
@@ -281,10 +302,14 @@ class MeetingManager:
             self._emit("history_changed", runtime.id)
             self.prune_audio()
         except Exception as exc:
+            if runtime.stop_event.is_set():
+                return
             logger.exception("Elaborazione riunione %s fallita", runtime.id)
             self._fail(runtime, str(exc))
 
     def _transcription_event(self, runtime: MeetingRuntime, event: str, payload: Any) -> None:
+        if runtime.stop_event.is_set():
+            return
         if event == "file_transcriber_new_text":
             text = str(payload or "").strip()
             if text:
@@ -310,16 +335,32 @@ class MeetingManager:
             self._fail(runtime, str(payload or "Errore cattura microfono"))
 
     def _model_progress(self, runtime: MeetingRuntime, label: str, percent: int) -> None:
+        if runtime.stop_event.is_set():
+            return
         self._emit(
             "meeting_model_progress",
             {"session_id": runtime.id, "model": label, "percent": int(percent)},
         )
 
     def _diarization_progress(self, runtime: MeetingRuntime, percent: int) -> None:
+        if runtime.stop_event.is_set():
+            return
         runtime.diarization_progress = max(0, min(100, int(percent)))
         self._emit("meeting_updated", self._snapshot(runtime))
 
     def _fail(self, runtime: MeetingRuntime, error: str) -> None:
+        if runtime.status == "recording":
+            runtime.capture.stop()
+            try:
+                if runtime.capture is not threading.current_thread() and runtime.capture.is_alive():
+                    runtime.capture.join(timeout=2.0)
+                if not runtime.capture.is_alive():
+                    self._finalize_recording(runtime)
+                else:
+                    runtime.recorder.abandon()
+            except Exception:
+                logger.exception("Salvataggio audio dopo errore Meeting fallito")
+                runtime.recorder.abandon()
         runtime.error = str(error)
         runtime.status = "error"
         try:
@@ -328,6 +369,20 @@ class MeetingManager:
             logger.exception("Persistenza errore Meeting fallita")
         self._emit("meeting_error", {"session_id": runtime.id, "error": runtime.error})
         self._emit("meeting_updated", self._snapshot(runtime))
+        self._emit("history_changed", runtime.id)
+
+    def _finalize_recording(self, runtime: MeetingRuntime) -> Optional[RecordingInfo]:
+        info = runtime.recorder.finalize()
+        if info is not None:
+            self.store.set_recording(runtime.id, info.to_dict())
+        return info
+
+    def _require_runtime(self, status: str) -> MeetingRuntime:
+        with self._lock:
+            runtime = self._runtime
+        if runtime is None or runtime.status != status:
+            raise RuntimeError("Nessuna riunione in registrazione")
+        return runtime
 
     @staticmethod
     def _snapshot(runtime: MeetingRuntime) -> dict[str, Any]:
