@@ -4,8 +4,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, QUrl
-from PySide6.QtGui import QCloseEvent, QResizeEvent
+from PySide6.QtCore import QTimer, QUrl, Signal
+from PySide6.QtGui import QCloseEvent, QDragEnterEvent, QDragMoveEvent, QDropEvent, QResizeEvent
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QMainWindow
@@ -16,6 +16,50 @@ from ui.bridge import BridgeLogHandler
 from ui.multi_session_bridge import MultiSessionBackendBridge
 
 logger = logging.getLogger(__name__)
+
+
+class DropAwareWebView(QWebEngineView):
+    """Capture local file URLs before Chromium attempts to navigate to them."""
+
+    filesDropped = Signal(list)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    @staticmethod
+    def _local_files(event) -> list[str]:
+        mime = event.mimeData()
+        if mime is None or not mime.hasUrls():
+            return []
+        paths: list[str] = []
+        for url in mime.urls():
+            if not url.isLocalFile():
+                continue
+            path = Path(url.toLocalFile())
+            if path.is_file():
+                paths.append(str(path))
+        return paths
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if self._local_files(event):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        if self._local_files(event):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        paths = self._local_files(event)
+        if paths:
+            self.filesDropped.emit(paths)
+            event.acceptProposedAction()
+            return
+        super().dropEvent(event)
 
 
 class MainWindow(QMainWindow):
@@ -46,7 +90,8 @@ class MainWindow(QMainWindow):
         self._log_handler = BridgeLogHandler(self._bridge)
         logging.getLogger().addHandler(self._log_handler)
 
-        self._web_view = QWebEngineView(self)
+        self._web_view = DropAwareWebView(self)
+        self._web_view.filesDropped.connect(self._bridge.emitDroppedFiles)
         self.setCentralWidget(self._web_view)
 
         channel = QWebChannel(self._web_view.page())
@@ -72,6 +117,7 @@ class MainWindow(QMainWindow):
 
     def on_stop(self) -> None:
         self._bridge.stopAllLive()
+        self._bridge.cancelFileQueue()
         self._bridge.stopFile()
 
     def force_quit(self) -> None:
