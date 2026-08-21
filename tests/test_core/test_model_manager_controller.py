@@ -54,7 +54,9 @@ def test_download_model_emits_real_progress_events(controller: AppController) ->
 
 
 def test_model_operations_are_rejected_while_transcribing(controller: AppController) -> None:
-    with patch.object(controller, "is_running", return_value=True):
+    # Phase 4 uses the session manager as the source of truth so even a Live
+    # session still preparing its workers blocks model mutation.
+    with patch.object(controller._live_sessions, "has_active_sessions", return_value=True):
         with pytest.raises(RuntimeError):
             controller.download_model("medium")
         with pytest.raises(RuntimeError):
