@@ -42,6 +42,7 @@ class ComputeDevice(str, Enum):
 
 class AudioSource(str, Enum):
     SYSTEM = "system"
+    APPLICATION = "application"
     # Alias interno temporaneo: consente ai componenti non ancora rinominati
     # di interpretare il vecchio simbolo come la nuova sorgente di sistema.
     FIREFOX = "system"

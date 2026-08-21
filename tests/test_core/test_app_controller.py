@@ -15,7 +15,8 @@ from core.exceptions import SinkNotFoundError
 def controller() -> AppController:
     with patch("core.app_controller.detect_gpu_backend", return_value="sycl"), \
          patch("core.app_controller.WhisperModelManager"), \
-         patch("core.app_controller.WhisperBackend"):
+         patch("core.app_controller.WhisperBackend"), \
+         patch("core.app_controller.PulseAudioRouter"):
         return AppController(settings=Settings())
 
 
@@ -55,6 +56,15 @@ class TestAppController:
         with patch("core.app_controller.find_source", return_value=None):
             with pytest.raises(SinkNotFoundError):
                 controller._resolve_sink(None, "microphone")
+
+    def test_application_source_requires_selected_stream(self, controller: AppController) -> None:
+        with pytest.raises(SinkNotFoundError, match="Seleziona uno stream"):
+            controller.start_transcription(audio_source="application")
+
+    def test_list_playback_streams_delegates_to_router(self, controller: AppController) -> None:
+        controller._audio_router.list_streams.return_value = []
+        assert controller.list_playback_streams() == []
+        controller._audio_router.list_streams.assert_called_once_with()
 
     def test_stop_transcription_when_idle(self, controller: AppController) -> None:
         controller.stop_transcription()

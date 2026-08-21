@@ -18,6 +18,9 @@ const state = {
   modelBusy: null,
   modelProgress: {},
   backendState: "standby",
+  streams: [],
+  selectedStreamId: null,
+  routeStatus: "idle",
 };
 
 const views = {
@@ -125,14 +128,13 @@ function text(kind, value, full = false) {
 }
 
 function sessionBusy() { return state.live || state.draining || state.file; }
-function lockSettings() {
-  $("settings-save").disabled = sessionBusy() || !!state.modelBusy;
-}
+function lockSettings() { $("settings-save").disabled = sessionBusy() || !!state.modelBusy; }
 
 function liveUI(status) {
   $("live-status").textContent = status;
   const busy = state.live || state.draining;
-  $("live-start").disabled = busy || state.file;
+  const missingStream = state.source === "application" && !$("live-stream").value;
+  $("live-start").disabled = busy || state.file || missingStream;
   $("live-stop").disabled = !busy;
   $("live-drain").disabled = !state.live || state.draining;
   setOrb("live-orb", busy);
@@ -160,8 +162,14 @@ function options(select, values, current) {
   });
 }
 
+function normalizeSource(source) {
+  return ["system", "application", "microphone"].includes(source) ? source : "system";
+}
+
 function sourceLabel(source) {
-  return source === "microphone" ? "Microfono" : "Audio di sistema";
+  if (source === "microphone") return "Microfono";
+  if (source === "application") return "Applicazione";
+  return "Audio di sistema";
 }
 
 function devices(source, list) {
@@ -185,11 +193,92 @@ function selectedDeviceLabel() {
   return select.options[select.selectedIndex]?.textContent || select.value;
 }
 
+function streamMeta(stream) {
+  if (!stream) return "Seleziona uno stream PipeWire/PulseAudio. Verrà isolato e ripristinato automaticamente al termine.";
+  const pid = stream.process_id ? `PID ${stream.process_id}` : "PID —";
+  const binary = stream.process_binary || "binario —";
+  const sink = stream.sink_name || "sink —";
+  const status = stream.state === "paused" ? "in pausa" : "in riproduzione";
+  return `${pid} · ${binary} · ${sink} · ${status}`;
+}
+
+function selectedStream() {
+  const id = Number($("live-stream").value);
+  if (!Number.isFinite(id)) return null;
+  return state.streams.find(stream => Number(stream.id) === id) || null;
+}
+
+function updateSelectedStreamMeta() {
+  const stream = selectedStream();
+  state.selectedStreamId = stream ? Number(stream.id) : null;
+  $("live-stream-meta").textContent = streamMeta(stream);
+  updateLiveSummary();
+  liveUI($("live-status").textContent || "Idle");
+}
+
+function renderPlaybackStreams(items) {
+  const streams = Array.isArray(items) ? items : [];
+  const select = $("live-stream");
+  const previous = select.value || (state.selectedStreamId == null ? "" : String(state.selectedStreamId));
+  state.streams = streams;
+  select.replaceChildren();
+
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = streams.length ? "Seleziona uno stream" : "Nessuno stream in riproduzione";
+  select.append(placeholder);
+
+  streams.forEach(stream => {
+    const option = document.createElement("option");
+    option.value = String(stream.id);
+    const pid = stream.process_id ? `PID ${stream.process_id}` : "PID —";
+    const stateText = stream.state === "paused" ? "pausa" : "playing";
+    option.textContent = `${stream.display_name || `Stream #${stream.id}`} · ${pid} · ${stateText}`;
+    option.title = `${stream.process_binary || ""} · ${stream.sink_name || ""}`;
+    select.append(option);
+  });
+
+  if ([...select.options].some(option => option.value === previous)) select.value = previous;
+  else select.value = "";
+  updateSelectedStreamMeta();
+}
+
+function refreshStreams() {
+  call("listPlaybackStreams", [], result => {
+    const response = json(result);
+    if (Array.isArray(response)) {
+      renderPlaybackStreams(response);
+      return;
+    }
+    renderPlaybackStreams(response?.streams || []);
+    if (response && response.ok === false) showError(response.error, "stream");
+  });
+}
+
+function refreshDevices() {
+  if (state.source === "application") {
+    refreshStreams();
+    return;
+  }
+  call("refreshDevices", [state.source], result => devices(state.source, json(result)));
+}
+
+function selectedInputValue() {
+  return state.source === "application" ? $("live-stream").value : $("live-device").value;
+}
+
+function selectedInputLabel() {
+  if (state.source === "application") return selectedStream()?.display_name || "Nessuno stream";
+  return selectedDeviceLabel();
+}
+
 function updateLiveSummary(runtime = null) {
   const settings = state.boot?.settings || {};
-  const source = runtime?.source || state.source || settings.audio_source || "system";
+  const source = normalizeSource(runtime?.source || state.source || settings.audio_source || "system");
   $("live-source-value").textContent = sourceLabel(source);
-  $("live-device-value").textContent = runtime?.sink || selectedDeviceLabel();
+  if (runtime?.stream) $("live-device-value").textContent = runtime.stream.display_name || `Stream #${runtime.stream.id}`;
+  else if (source === "application") $("live-device-value").textContent = selectedInputLabel();
+  else $("live-device-value").textContent = runtime?.sink || selectedDeviceLabel();
   $("live-model-value").textContent = modelLabels[settings.model_size] || settings.model_size || "—";
   $("live-language-value").textContent = settings.language || "auto";
 }
@@ -209,23 +298,24 @@ function sourceUI() {
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   });
+  $("live-device-field").hidden = state.source === "application";
+  $("live-stream-field").hidden = state.source !== "application";
   updateLiveSummary();
-}
-
-function refreshDevices() {
-  call("refreshDevices", [state.source], result => devices(state.source, json(result)));
+  liveUI($("live-status").textContent || "Idle");
 }
 
 function hydrate(bootstrap) {
   state.boot = bootstrap;
   state.models = Array.isArray(bootstrap.models) ? bootstrap.models : [];
+  state.streams = Array.isArray(bootstrap.playbackStreams) ? bootstrap.playbackStreams : [];
   $("version").textContent = "v" + bootstrap.app.version;
   const selectedModel = allowedModelChoices.includes(bootstrap.settings.model_size)
     ? bootstrap.settings.model_size : "large-v3-turbo";
   options($("s-model"), allowedModelChoices, selectedModel);
-  state.source = bootstrap.settings.audio_source === "microphone" ? "microphone" : "system";
+  state.source = normalizeSource(bootstrap.settings.audio_source);
+  devices(state.source === "application" ? "system" : state.source, bootstrap.devices);
+  renderPlaybackStreams(state.streams);
   sourceUI();
-  devices(state.source, bootstrap.devices);
 
   const map = {
     "s-language": "language",
@@ -273,12 +363,13 @@ function friendlyError(value, context = "") {
     : String(value || "Errore sconosciuto");
   const lower = raw.toLowerCase();
 
-  if (
-    lower.includes("audio di sistema")
-    || lower.includes("uscita predefinita")
-    || lower.includes("sink di firefox")
-    || (context === "live" && lower.includes("firefox"))
-  ) {
+  if (lower.includes("stream audio #") || lower.includes("seleziona uno stream") || lower.includes("stream applicazione")) {
+    return "Stream applicazione non disponibile.\nAggiorna l'elenco degli stream, avvia la riproduzione nell'applicazione e seleziona di nuovo lo stream desiderato.";
+  }
+  if (lower.includes("move-sink-input") || lower.includes("module-null-sink") || lower.includes("comando pipewire/pulseaudio fallito")) {
+    return "Impossibile isolare lo stream applicazione.\nVerifica che pactl e PipeWire/PulseAudio siano disponibili; nessun routing permanente viene mantenuto dopo l'errore.";
+  }
+  if (lower.includes("audio di sistema") || lower.includes("uscita predefinita") || lower.includes("sink di firefox")) {
     return "Audio di sistema non rilevato.\nVerifica che PipeWire/PulseAudio abbia un'uscita audio predefinita oppure seleziona manualmente un dispositivo monitor.";
   }
   if (lower.includes("microfono") && (lower.includes("impossibile") || lower.includes("non trovato"))) {
@@ -306,6 +397,33 @@ function friendlyError(value, context = "") {
 }
 function showError(value, context = "") { notice(friendlyError(value, context), true); }
 
+function handleRouteStatus(value) {
+  if (!value || typeof value !== "object") return;
+  const status = String(value.status || "");
+  state.routeStatus = status;
+  if (value.stream) {
+    const idx = state.streams.findIndex(stream => Number(stream.id) === Number(value.stream.id));
+    if (idx >= 0) state.streams[idx] = value.stream;
+    updateLiveSummary({source: "application", stream: value.stream});
+    $("live-stream-meta").textContent = streamMeta(value.stream);
+  }
+  if (status === "isolating") liveUI("Isolamento stream");
+  else if (status === "playing") liveUI("In esecuzione · stream attivo");
+  else if (status === "paused") liveUI("In esecuzione · stream in pausa");
+  else if (status === "disconnected") {
+    liveUI("Stream disconnesso");
+    notice("Lo stream applicazione è scomparso. UltraTranscribr resta in ascolto e proverà a riconnetterlo se ricompare senza ambiguità.", true);
+  } else if (status === "ambiguous") {
+    liveUI("Stream da riselezionare");
+    notice("Sono comparsi più stream compatibili: per sicurezza UltraTranscribr non ne ha scelto uno automaticamente. Ferma la sessione e seleziona lo stream corretto.", true);
+  } else if (status === "reconnected") {
+    liveUI("In esecuzione · riconnesso");
+    notice("Stream applicazione riconnesso e nuovamente isolato.");
+  } else if (status === "restored") {
+    state.routeStatus = "idle";
+  }
+}
+
 function event(name, payload) {
   const value = json(payload);
   switch (name) {
@@ -326,6 +444,7 @@ function event(name, payload) {
     case "process_stopped":
       state.live = false;
       state.draining = false;
+      state.routeStatus = "idle";
       progress("buffer", 0);
       liveUI("Fermata");
       restoreBackendStatus();
@@ -346,6 +465,7 @@ function event(name, payload) {
       liveUI("Errore");
       showError(value, "live");
       break;
+    case "playback_stream_status_changed": handleRouteStatus(value); break;
     case "file_transcriber_status_changed":
       state.file = !["completed", "stopped", "error"].includes(String(value));
       fileUI(label(value));
@@ -369,8 +489,10 @@ function event(name, payload) {
     case "config_changed":
       if (state.boot && value && typeof value === "object") {
         state.boot.settings = {...state.boot.settings, ...value};
-        if (value.audio_source) state.source = value.audio_source === "microphone" ? "microphone" : "system";
+        if (value.audio_source) state.source = normalizeSource(value.audio_source);
         sourceUI();
+        if (state.source === "application") refreshStreams();
+        else refreshDevices();
         updateFileSummary();
       }
       break;
@@ -448,9 +570,14 @@ async function copyValue(value) {
 
 function startLive() {
   const settings = state.boot?.settings || {};
+  const input = selectedInputValue();
+  if (state.source === "application" && !input) {
+    notice("Seleziona uno stream applicazione da trascrivere", true);
+    return;
+  }
   updateLiveSummary();
-  liveUI("Avvio");
-  call("startLive", [state.source, $("live-device").value, settings.language || "auto"]);
+  liveUI(state.source === "application" ? "Preparazione routing" : "Avvio");
+  call("startLive", [state.source, input, settings.language || "auto"]);
 }
 
 function startFile() {
@@ -475,7 +602,7 @@ function saveSettings(eventObject) {
     const response = json(result);
     if (!response.ok) { showError(response.error, "settings"); return; }
     state.boot.settings = response.settings;
-    state.source = response.settings.audio_source === "microphone" ? "microphone" : "system";
+    state.source = normalizeSource(response.settings.audio_source);
     sourceUI();
     refreshDevices();
     updateFileSummary();
@@ -506,6 +633,7 @@ function historyTitle(session) {
     return session.source === "recovery" ? `Recovery · ${name}` : name;
   }
   if (session.source === "microphone") return "Trascrizione microfono";
+  if (session.source === "application") return session.source_path ? `Applicazione · ${session.source_path}` : "Trascrizione applicazione";
   return "Trascrizione audio di sistema";
 }
 
@@ -665,7 +793,6 @@ function renderRecovery(items) {
     const detail = document.createElement("small");
     detail.textContent = `${formatDate(item.modified_at)} · ${formatBytes(item.size_bytes)} · ${item.path || ""}`;
     info.append(title, detail);
-
     const actions = document.createElement("div");
     actions.className = "recovery-actions";
     for (const [caption, handler, selected] of [
@@ -709,12 +836,10 @@ function renderModels(items) {
     list.append(empty);
     return;
   }
-
   items.forEach(item => {
     const row = document.createElement("div");
     row.className = "model-row";
     row.dataset.model = item.model;
-
     const main = document.createElement("div");
     main.className = "model-main";
     const title = document.createElement("strong");
@@ -746,7 +871,6 @@ function renderModels(items) {
     fill.style.width = `${percent}%`;
     bar.setAttribute("aria-valuenow", String(percent));
     bar.append(fill);
-
     const progressLabel = document.createElement("div");
     progressLabel.className = "model-progress-label";
     if (active && p) {
@@ -769,7 +893,6 @@ function renderModels(items) {
     button.disabled = sessionBusy() || !!state.modelBusy;
     button.onclick = () => item.installed ? requestDeleteModel(item.model) : requestDownloadModel(item.model);
     actions.append(button);
-
     row.append(main, progressWrap, actions);
     list.append(row);
   });
@@ -833,12 +956,14 @@ function requestDeleteModel(model) {
 function bind() {
   all(".nav").forEach(button => button.onclick = () => switchView(button.dataset.view));
   all(".segment").forEach(button => button.onclick = () => {
-    state.source = button.dataset.source;
+    state.source = normalizeSource(button.dataset.source);
     sourceUI();
     refreshDevices();
   });
   $("notice-close").onclick = () => $("notice").hidden = true;
   $("live-device").onchange = updateLiveSummary;
+  $("live-stream").onchange = updateSelectedStreamMeta;
+  $("stream-refresh").onclick = refreshStreams;
   $("live-start").onclick = startLive;
   $("live-stop").onclick = () => call("stopLive");
   $("live-drain").onclick = () => call("stopListening");

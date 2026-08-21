@@ -170,17 +170,43 @@ def test_runtime_status_is_explicit_and_session_summaries_are_read_only() -> Non
     assert 'href="runtime.css"' in html
 
 
-def test_live_ui_uses_system_audio_not_browser_specific_source() -> None:
+def test_live_ui_uses_generic_system_application_and_microphone_sources() -> None:
     html = (WEB / "index.html").read_text(encoding="utf-8")
     script = (WEB / "app.js").read_text(encoding="utf-8")
     settings = (ROOT / "config" / "settings.py").read_text(encoding="utf-8")
     finder = (ROOT / "core" / "sink_finder.py").read_text(encoding="utf-8")
 
-    assert 'data-source="system"' in html
-    assert '<option value="system">Audio di sistema</option>' in html
+    for source in ("system", "application", "microphone"):
+        assert f'data-source="{source}"' in html
+        assert f'<option value="{source}">' in html
     assert 'data-source="firefox"' not in html
     assert '<option value="firefox">' not in html
     assert 'source: "system"' in script
-    assert 'source === "system" ? "is_monitor" : "is_mic"' in script
+    assert 'APPLICATION = "application"' in settings
     assert 'SYSTEM = "system"' in settings
     assert "find_system_monitor" in finder
+
+
+def test_application_stream_ui_uses_real_routing_backend() -> None:
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    script = (WEB / "app.js").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    controller = (ROOT / "core" / "app_controller.py").read_text(encoding="utf-8")
+    routing = (ROOT / "core" / "audio_routing.py").read_text(encoding="utf-8")
+    runtime_css = (WEB / "runtime.css").read_text(encoding="utf-8")
+
+    for element_id in ("live-stream", "live-stream-meta", "stream-refresh"):
+        assert f'id="{element_id}"' in html
+
+    assert "listPlaybackStreams" in bridge
+    assert "listPlaybackStreams" in script
+    assert "playback_stream_status_changed" in bridge
+    assert "playback_stream_status_changed" in controller
+    assert "playback_stream_status_changed" in script
+    assert "PulseAudioRouter" in controller
+    assert "module-null-sink" in routing
+    assert "move-sink-input" in routing
+    assert "cleanup_stale_routes" in routing
+    assert "ambiguous" in routing
+    assert "reconnected" in routing
+    assert "grid-template-columns: repeat(3" in runtime_css

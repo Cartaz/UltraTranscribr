@@ -14,6 +14,27 @@
   box-shadow: 0 0 0 1px var(--accent-border), 0 0 10px var(--accent-glow), 0 0 18px var(--accent-glow-soft);
 }
 
+.segmented {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.segmented .segment {
+  min-width: 0;
+}
+
+.source-field {
+  min-width: 0;
+}
+
+.picker select {
+  flex: 1;
+  min-width: 0;
+}
+
+#live-stream-meta {
+  min-height: 2.8em;
+}
+
 .metrics.session-summary {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   column-gap: 16px;
@@ -43,5 +64,9 @@
 @media (max-height: 860px) {
   .metrics.session-summary div {
     padding: 6px 2px;
+  }
+
+  #live-stream-meta {
+    min-height: 0;
   }
 }
