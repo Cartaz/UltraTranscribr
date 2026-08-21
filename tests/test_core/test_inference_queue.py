@@ -22,12 +22,16 @@ class _Response:
         return b'{"text":"ok"}'
 
 
-def test_queue_wait_measures_time_blocked_on_shared_inference_lock():
+def _running_backend() -> WhisperBackend:
     backend = WhisperBackend(Settings())
     process = MagicMock()
     process.poll.return_value = None
     backend._process = process
+    return backend
 
+
+def test_queue_wait_measures_time_blocked_on_shared_inference_lock():
+    backend = _running_backend()
     waits = []
     result = []
 
@@ -58,3 +62,45 @@ def test_queue_wait_measures_time_blocked_on_shared_inference_lock():
     assert result == ["ok"]
     assert len(waits) == 1
     assert waits[0] >= 20.0
+
+
+def test_backend_shutdown_releases_queued_request_without_deadlock():
+    backend = _running_backend()
+    first_inside_request = threading.Event()
+    release_first = threading.Event()
+    results: list[str] = []
+    errors: list[str] = []
+
+    def blocking_urlopen(*_args, **_kwargs):
+        first_inside_request.set()
+        assert release_first.wait(timeout=2.0)
+        return _Response()
+
+    def request(label: str) -> None:
+        try:
+            backend.transcribe_audio(b"wav")
+            results.append(label)
+        except RuntimeError as exc:
+            errors.append(f"{label}:{exc}")
+
+    with patch("core.whisper_backend.urllib.request.urlopen", side_effect=blocking_urlopen):
+        first = threading.Thread(target=request, args=("first",))
+        second = threading.Thread(target=request, args=("second",))
+        first.start()
+        assert first_inside_request.wait(timeout=1.0)
+        second.start()
+        time.sleep(0.03)
+
+        # Lifecycle shutdown does not wait for the inference scheduler lock.
+        # The queued request must observe the stopped backend when it reaches
+        # the lock rather than entering a second HTTP request.
+        backend.stop()
+        release_first.set()
+        first.join(timeout=2.0)
+        second.join(timeout=2.0)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert results == ["first"]
+    assert len(errors) == 1
+    assert errors[0].startswith("second:whisper-server non in esecuzione")
