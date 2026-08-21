@@ -108,23 +108,12 @@ def test_history_and_recovery_are_backed_by_python_persistence() -> None:
     controller = (ROOT / "core" / "app_controller.py").read_text(encoding="utf-8")
     transcriber = (ROOT / "core" / "transcriber.py").read_text(encoding="utf-8")
 
-    for element_id in (
-        "history-list",
-        "recovery-list",
-        "history-export",
-        "history-delete",
-        "s-retention",
-    ):
+    for element_id in ("history-list", "recovery-list", "history-export", "history-delete", "s-retention"):
         assert f'id="{element_id}"' in html
 
     for operation in (
-        "listHistory",
-        "getHistorySession",
-        "exportHistorySession",
-        "deleteHistorySession",
-        "listRecoveryAudio",
-        "startRecovery",
-        "deleteRecovery",
+        "listHistory", "getHistorySession", "exportHistorySession",
+        "deleteHistorySession", "listRecoveryAudio", "startRecovery", "deleteRecovery",
     ):
         assert operation in bridge
         assert operation in script
@@ -146,16 +135,10 @@ def test_model_manager_uses_real_backend_inventory_and_progress() -> None:
     assert 'id="model-list"' in html
     assert 'id="models-refresh"' in html
     assert 'href="models.css"' in html
-
     for operation in ("listModels", "downloadModel", "deleteModel"):
-        assert operation in bridge
-        assert operation in script
-
+        assert operation in bridge and operation in script
     for event in ("model_download_started", "model_download_progress", "model_status_changed"):
-        assert event in bridge
-        assert event in controller
-        assert event in script
-
+        assert event in bridge and event in controller and event in script
     assert "list_ui_models" in manager
     assert "download_model" in manager
     assert "delete_model" in manager
@@ -169,30 +152,35 @@ def test_runtime_status_is_explicit_and_session_summaries_are_read_only() -> Non
     runtime_css = (WEB / "runtime.css").read_text(encoding="utf-8")
 
     for element_id in (
-        "live-device-value",
-        "live-model-value",
-        "live-language-value",
-        "file-model-value",
-        "file-language-value",
-        "file-name-value",
+        "live-device-value", "live-model-value", "live-language-value",
+        "file-model-value", "file-language-value", "file-name-value",
     ):
         assert f'id="{element_id}"' in html
 
     for status in (
-        "preparing_vad",
-        "configuring_backend",
-        "downloading_model",
-        "loading_model",
-        "starting_backend",
-        "ready",
-        "standby",
-        "error",
+        "preparing_vad", "configuring_backend", "downloading_model",
+        "loading_model", "starting_backend", "ready", "standby", "error",
     ):
-        assert status in script
-        assert status in controller
+        assert status in script and status in controller
 
     assert "friendlyError" in script
-    assert "Firefox non è stato rilevato" in script
+    assert "Audio di sistema non rilevato" in script
     assert "whisper-server non si è avviato correttamente" in script
     assert "session-summary" in runtime_css
     assert 'href="runtime.css"' in html
+
+
+def test_live_ui_uses_system_audio_not_browser_specific_source() -> None:
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    script = (WEB / "app.js").read_text(encoding="utf-8")
+    settings = (ROOT / "config" / "settings.py").read_text(encoding="utf-8")
+    finder = (ROOT / "core" / "sink_finder.py").read_text(encoding="utf-8")
+
+    assert 'data-source="system"' in html
+    assert '<option value="system">Audio di sistema</option>' in html
+    assert 'data-source="firefox"' not in html
+    assert '<option value="firefox">' not in html
+    assert 'source: "system"' in script
+    assert 'source === "system" ? "is_monitor" : "is_mic"' in script
+    assert 'SYSTEM = "system"' in settings
+    assert "find_system_monitor" in finder
