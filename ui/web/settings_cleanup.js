@@ -2,7 +2,7 @@
 
 const phase6SettingSections = {
   recognition: ["model_size", "language", "audio_source", "vad_filter"],
-  history: ["history_retention_days"],
+  history: ["history_retention_days", "meeting_audio_retention_days"],
   tuning: ["beam_size", "vad_min_silence_ms", "buffer_warn_threshold"],
   audio: ["chunk_ms", "channels", "sink_name", "sink_search_keyword"],
   backend: ["server_port", "gpu_layers", "compute_type"],
@@ -137,6 +137,22 @@ bind = function() {
     const script = document.createElement("script");
     script.src = "power_user.js";
     script.dataset.ultraPower = "1";
+    document.head.append(script);
+  }
+})();
+
+(function loadPhase10Module() {
+  if (!document.querySelector('link[data-ultra-phase10="1"]')) {
+    const style = document.createElement("link");
+    style.rel = "stylesheet";
+    style.href = "phase10.css";
+    style.dataset.ultraPhase10 = "1";
+    document.head.append(style);
+  }
+  if (!document.querySelector('script[data-ultra-phase10="1"]')) {
+    const script = document.createElement("script");
+    script.src = "phase10.js";
+    script.dataset.ultraPhase10 = "1";
     document.head.append(script);
   }
 })();
