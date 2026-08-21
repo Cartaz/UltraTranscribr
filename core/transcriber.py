@@ -133,6 +133,7 @@ class TranscriberThread(threading.Thread):
             path = AppMeta.CACHE_DIR / f"recovery-live-{int(time.time())}.wav"
             path.write_bytes(self._numpy_to_wav(audio))
             logger.warning("Audio non trascritto salvato per recupero: %s", path)
+            EventBus().emit("recovery_audio_saved", str(path))
         except OSError:
             logger.exception("Impossibile salvare recovery audio")
 
