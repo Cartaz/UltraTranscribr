@@ -5,6 +5,7 @@ import json
 
 from PySide6.QtCore import QUrl, Slot
 
+from config.settings import AudioSource
 from core.session_recordings import delete_recording, recording_info
 from ui.multi_session_bridge import MultiSessionBackendBridge
 
@@ -19,6 +20,78 @@ class Phase10BackendBridge(MultiSessionBackendBridge):
             {"ok": False, "error": f"Termina la riunione prima di {action}"},
             ensure_ascii=False,
         )
+
+    def _start_scoped_live(
+        self,
+        audio_source: str,
+        selected_input: str,
+        language: str,
+        record_audio: bool,
+    ) -> None:
+        source = (
+            audio_source
+            if audio_source in AudioSource.choices()
+            else self._controller.settings.audio_source
+        )
+        selection = str(selected_input or "").strip()
+        lang = str(language or "").strip() or self._controller.settings.language
+        sink = None
+        stream_id = None
+        if source == AudioSource.APPLICATION.value:
+            if not selection:
+                self._emit_event(
+                    "live_session_start_error",
+                    "Seleziona uno stream applicazione prima di avviare la sessione",
+                )
+                return
+            try:
+                stream_id = int(selection)
+            except ValueError:
+                self._emit_event(
+                    "live_session_start_error",
+                    "Identificatore dello stream applicazione non valido",
+                )
+                return
+        else:
+            sink = selection or None
+
+        # The checkbox is a per-session decision. Persisted/global settings can
+        # never silently enable recording for a future Live session.
+        should_record = bool(record_audio and source == AudioSource.MICROPHONE.value)
+        session_settings = self._controller.settings.with_(
+            language=lang,
+            live_microphone_recording=should_record,
+        )
+
+        def operation() -> None:
+            if self._meeting.is_busy():
+                raise RuntimeError("Termina la riunione prima di avviare una sessione Live")
+            if self._controller._file_busy():
+                raise RuntimeError("Ferma la trascrizione File prima di avviare Live")
+            self._prepare_backend_for_selected_model()
+            self._controller.live_sessions.create_session(
+                settings=session_settings,
+                audio_source=source,
+                sink_name=sink,
+                language=lang,
+                stream_id=stream_id,
+            )
+
+        self._run_async("start-live-phase10", operation, "live_session_start_error")
+
+    @Slot(str, str, str)
+    def startLive(self, audio_source: str, selected_input: str, language: str) -> None:
+        self._start_scoped_live(audio_source, selected_input, language, False)
+
+    @Slot(str, str, str, bool)
+    def startLiveWithRecording(
+        self,
+        audio_source: str,
+        selected_input: str,
+        language: str,
+        record_audio: bool,
+    ) -> None:
+        self._start_scoped_live(audio_source, selected_input, language, record_audio)
 
     @Slot(str, str, str, bool, bool)
     def startFile(
