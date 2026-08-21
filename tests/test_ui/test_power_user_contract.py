@@ -23,6 +23,13 @@ def test_power_user_module_exposes_batch_search_and_exports() -> None:
         assert token in source
 
 
+def test_history_refresh_preserves_active_search_filter() -> None:
+    source = (ROOT / "ui" / "web" / "power_user.js").read_text(encoding="utf-8")
+    assert "powerLegacyRefreshHistoryList = refreshHistoryList" in source
+    assert 'const query = $("history-search")?.value?.trim() || ""' in source
+    assert "if (query) powerSearchHistory()" in source
+
+
 def test_desktop_shell_captures_local_file_drops() -> None:
     source = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
     assert "class DropAwareWebView" in source
@@ -31,9 +38,17 @@ def test_desktop_shell_captures_local_file_drops() -> None:
     assert "self._bridge.emitDroppedFiles" in source
 
 
+def test_desktop_shell_closes_power_user_coordinator_once_per_shutdown_path() -> None:
+    source = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
+    assert source.count("self._bridge.closePowerUser()") == 2
+    assert "self._bridge.cancelFileQueue()" in source
+    assert "self._bridge.stopFile()" not in source
+
+
 def test_bridge_exposes_power_user_operations() -> None:
     source = (ROOT / "ui" / "multi_session_bridge.py").read_text(encoding="utf-8")
     for method in (
+        "def closePowerUser",
         "def chooseAudioFiles",
         "def enqueueFileBatch",
         "def searchHistory",
