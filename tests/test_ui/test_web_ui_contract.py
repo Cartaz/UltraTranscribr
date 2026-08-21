@@ -16,6 +16,7 @@ def test_web_ui_files_and_native_stack_are_present() -> None:
         WEB / "styles.css",
         WEB / "history.css",
         WEB / "models.css",
+        WEB / "runtime.css",
         WEB / "app.js",
     ]
     for path in expected:
@@ -30,6 +31,7 @@ def test_dark_neumorphism_uses_exact_surface_and_accent_without_gradients() -> N
     css = (WEB / "styles.css").read_text(encoding="utf-8").lower()
     history_css = (WEB / "history.css").read_text(encoding="utf-8").lower()
     models_css = (WEB / "models.css").read_text(encoding="utf-8").lower()
+    runtime_css = (WEB / "runtime.css").read_text(encoding="utf-8").lower()
     assert "--surface: rgb(20, 20, 20)" in css
     assert "--accent: rgb(255, 102, 0)" in css
     assert "box-shadow" in css
@@ -37,6 +39,7 @@ def test_dark_neumorphism_uses_exact_surface_and_accent_without_gradients() -> N
     assert "gradient(" not in css
     assert "gradient(" not in history_css
     assert "gradient(" not in models_css
+    assert "gradient(" not in runtime_css
 
 
 def test_frontend_is_wired_to_real_backend_operations() -> None:
@@ -157,3 +160,39 @@ def test_model_manager_uses_real_backend_inventory_and_progress() -> None:
     assert "download_model" in manager
     assert "delete_model" in manager
     assert '"large-v3", "large-v3-turbo", "medium"' in manager
+
+
+def test_runtime_status_is_explicit_and_session_summaries_are_read_only() -> None:
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    script = (WEB / "app.js").read_text(encoding="utf-8")
+    controller = (ROOT / "core" / "app_controller.py").read_text(encoding="utf-8")
+    runtime_css = (WEB / "runtime.css").read_text(encoding="utf-8")
+
+    for element_id in (
+        "live-device-value",
+        "live-model-value",
+        "live-language-value",
+        "file-model-value",
+        "file-language-value",
+        "file-name-value",
+    ):
+        assert f'id="{element_id}"' in html
+
+    for status in (
+        "preparing_vad",
+        "configuring_backend",
+        "downloading_model",
+        "loading_model",
+        "starting_backend",
+        "ready",
+        "standby",
+        "error",
+    ):
+        assert status in script
+        assert status in controller
+
+    assert "friendlyError" in script
+    assert "Firefox non è stato rilevato" in script
+    assert "whisper-server non si è avviato correttamente" in script
+    assert "session-summary" in runtime_css
+    assert 'href="runtime.css"' in html
