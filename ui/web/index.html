@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="history.css">
   <link rel="stylesheet" href="models.css">
   <link rel="stylesheet" href="runtime.css">
+  <link rel="stylesheet" href="multi_live.css">
 </head>
 <body>
 <div class="shell">
@@ -155,7 +156,7 @@
           <section class="card"><div class="card-head"><div><p class="kicker">FINESTRA</p><h2>Dimensioni</h2></div></div><div class="fields two"><div><label for="s-width">Larghezza</label><input id="s-width" name="window_width" type="number" min="1200"></div><div><label for="s-height">Altezza</label><input id="s-height" name="window_height" type="number" min="800"></div></div><p class="help">Dimensione minima supportata: 1200 × 800.</p></section>
           <section class="card"><div class="card-head"><div><p class="kicker">CRONOLOGIA</p><h2>Conservazione</h2></div></div><div class="fields"><div><label for="s-retention">Conserva per giorni</label><input id="s-retention" name="history_retention_days" type="number" min="0" max="3650"></div></div><p class="help">Default 90 giorni. Imposta 0 per conservare le trascrizioni senza scadenza automatica.</p></section>
         </div>
-        <section class="card save-card"><div><p class="kicker">SALVATAGGIO</p><h2>Applica configurazione</h2><p class="help">I valori vengono validati dal modello Settings Python.</p></div><button id="settings-save" class="button selected" type="submit">Salva impostazioni</button></section>
+        <section class="card save-card"><div><p class="kicker">SALVATGIO</p><h2>Applica configurazione</h2><p class="help">I valori vengono validati dal modello Settings Python.</p></div><button id="settings-save" class="button selected" type="submit">Salva impostazioni</button></section>
       </form>
     </section>
 
@@ -169,5 +170,6 @@
 </div>
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 <script src="app.js"></script>
+<script src="multi_live.js"></script>
 </body>
 </html>
