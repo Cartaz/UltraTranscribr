@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import asdict
 
 from PySide6.QtCore import Slot
 
-from config.settings import AudioSource
+from config.settings import AudioSource, Settings
 from core.audio_source_health import evaluate_audio_source_health
 from core.sink_finder import debug_dump, find_source, list_available_devices
 from ui.bridge import BackendBridge
@@ -41,6 +42,11 @@ class MultiSessionBackendBridge(BackendBridge):
         runtime["liveDraining"] = self._controller.is_draining()
         runtime["bufferLevel"] = self._controller.buffer.buffer_level
         return json.dumps(payload, ensure_ascii=False, default=str)
+
+    @Slot(result=str)
+    def getSettingsDefaults(self) -> str:
+        """Return validated application defaults for section-scoped resets."""
+        return json.dumps(asdict(Settings()), ensure_ascii=False, default=str)
 
     @Slot(result=str)
     def listLiveSessions(self) -> str:
