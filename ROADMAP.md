@@ -46,11 +46,11 @@ Legend: `[ ]` planned · `[~]` in progress · `[x]` completed
 ## Phase 3 — Generalize audio capture beyond Firefox
 
 ### 3.1 System audio
-- [ ] Replace the Firefox-specific concept with a generic `system` playback source.
-- [ ] Detect the default output monitor reliably on PipeWire/PulseAudio.
-- [ ] Keep Microphone as a separate source.
-- [ ] Preserve an explicit device selector for advanced users.
-- [ ] Migrate existing `firefox` settings to `system` without losing configuration.
+- [x] Replace the Firefox-specific concept with a generic `system` playback source.
+- [x] Detect the default output monitor reliably on PipeWire/PulseAudio.
+- [x] Keep Microphone as a separate source.
+- [x] Preserve an explicit device selector for advanced users.
+- [x] Migrate existing `firefox` settings to `system` without losing configuration.
 
 ### 3.2 Per-application / per-stream capture
 - [ ] Enumerate active playback streams with application/process metadata.
