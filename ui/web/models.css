@@ -1,0 +1,88 @@
+.model-manager-card {
+  grid-column: 1 / -1;
+}
+
+.model-list {
+  display: grid;
+  gap: 10px;
+}
+
+.model-row {
+  display: grid;
+  grid-template-columns: minmax(160px, .9fr) minmax(260px, 1.5fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-inset-small);
+}
+
+.model-main,
+.model-progress-wrap {
+  min-width: 0;
+}
+
+.model-main strong,
+.model-main small {
+  display: block;
+}
+
+.model-main strong {
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.model-main small,
+.model-progress-label {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.model-status-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+
+.model-state {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.model-state.installed {
+  color: var(--accent);
+}
+
+.model-progress-wrap .progress {
+  margin-bottom: 5px;
+}
+
+.model-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.model-actions .button {
+  padding: 8px 11px;
+  white-space: nowrap;
+}
+
+.model-empty {
+  color: var(--text-muted);
+  padding: 12px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-inset-small);
+}
+
+@media (max-width: 900px) {
+  .model-row {
+    grid-template-columns: 1fr;
+  }
+  .model-actions {
+    justify-content: flex-start;
+  }
+}
