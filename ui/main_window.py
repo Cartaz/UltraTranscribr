@@ -10,7 +10,7 @@ from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QMainWindow
 
-from config.constants import AppMeta
+from config.constants import AppMeta, UIConstraints
 from core.app_controller import AppController
 from ui.bridge import BackendBridge, BridgeLogHandler
 
@@ -25,9 +25,15 @@ class MainWindow(QMainWindow):
         self._closing = False
 
         self.setWindowTitle(AppMeta.NAME)
-        self.setMinimumSize(420, 420)
+        self.setMinimumSize(
+            UIConstraints.MIN_WINDOW_WIDTH,
+            UIConstraints.MIN_WINDOW_HEIGHT,
+        )
         settings = controller.settings
-        self.resize(settings.window_width, settings.window_height)
+        self.resize(
+            max(UIConstraints.MIN_WINDOW_WIDTH, settings.window_width),
+            max(UIConstraints.MIN_WINDOW_HEIGHT, settings.window_height),
+        )
 
         self._bridge = BackendBridge(controller, self)
         self._bridge.windowResizeRequested.connect(self._resize_from_settings)
@@ -83,7 +89,10 @@ class MainWindow(QMainWindow):
         event.accept()
 
     def _resize_from_settings(self, width: int, height: int) -> None:
-        self.resize(max(420, width), max(420, height))
+        self.resize(
+            max(UIConstraints.MIN_WINDOW_WIDTH, width),
+            max(UIConstraints.MIN_WINDOW_HEIGHT, height),
+        )
 
     def _observe_backend_event(self, event: str, payload_json: str) -> None:
         if self._tray_icon is None:
