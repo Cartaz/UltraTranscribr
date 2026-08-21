@@ -74,6 +74,10 @@ class Settings:
 
     buffer_warn_threshold: int = ProcessDefaults.BUFFER_WARN_THRESHOLD
     history_retention_days: int = ProcessDefaults.HISTORY_RETENTION_DAYS
+    meeting_audio_retention_days: int = ProcessDefaults.MEETING_AUDIO_RETENTION_DAYS
+    # Live microphone recording is opt-in and OFF by default. Meeting sessions
+    # always record regardless of this preference.
+    live_microphone_recording: bool = False
     sink_name: Optional[str] = None
     sink_search_keyword: str = ProcessDefaults.SINK_SEARCH_KEYWORD
 
@@ -109,6 +113,8 @@ class Settings:
             errors.append("buffer_warn_threshold deve essere > 0")
         if not 0 <= self.history_retention_days <= 3650:
             errors.append("history_retention_days deve essere tra 0 e 3650")
+        if not 0 <= self.meeting_audio_retention_days <= 3650:
+            errors.append("meeting_audio_retention_days deve essere tra 0 e 3650")
         if not 1 <= self.server_port <= 65535:
             errors.append("server_port deve essere tra 1 e 65535")
         if self.window_width < UIConstraints.MIN_WINDOW_WIDTH:
