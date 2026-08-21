@@ -1,17 +1,9 @@
 # core/sink_finder.py
 """Discovery unificato dei dispositivi audio PipeWire / PulseAudio.
 
-Scopre sia i monitor source per Firefox sia i microfoni per la cattura
-audio. Le due strategie di ricerca sono mantenute separate e selezionate
-tramite il parametro audio_source.
-
-Functions:
-    find_source: Trova il dispositivo audio in base alla fonte.
-    find_firefox_sink: Trova il monitor source per Firefox.
-    find_microphone: Trova il dispositivo microfono.
-    list_available_devices: Elenca tutti i dispositivi di input.
-    list_all_monitor_sources: Elenca solo le sorgenti monitor.
-    debug_dump: Dump info debug dispositivi audio.
+La sorgente ``system`` cattura il monitor dell'uscita audio predefinita,
+indipendentemente dall'applicazione che sta riproducendo. Il microfono resta
+una sorgente separata e la UI puo sempre forzare manualmente un dispositivo.
 """
 
 from __future__ import annotations
@@ -23,11 +15,7 @@ from typing import Optional
 import sounddevice as sd
 
 from config.settings import AudioSource, Settings
-from core.sink_helpers import (
-    extract_sink_index,
-    get_sink_name,
-    hostapi_name,
-)
+from core.sink_helpers import hostapi_name
 
 logger = logging.getLogger(__name__)
 
@@ -36,65 +24,51 @@ def find_source(
     settings: Settings | None = None,
     audio_source: Optional[str] = None,
 ) -> Optional[str]:
-    """Trova il dispositivo audio in base alla fonte selezionata.
-
-    Args:
-        settings: Impostazioni dell'app (usa keyword per la ricerca).
-        audio_source: Sorgente audio ("firefox" o "microphone").
-
-    Returns:
-        Nome del dispositivo che sounddevice puo usare, o None.
-    """
+    """Trova il dispositivo audio per ``system`` o ``microphone``."""
     if settings is None:
         settings = Settings()
     source = audio_source or settings.audio_source
 
-    if source == AudioSource.FIREFOX.value:
-        return find_firefox_sink(settings)
-    return find_microphone(settings)
-
-
-def find_firefox_sink(settings: Settings | None = None) -> Optional[str]:
-    """Trova il monitor source per l'audio di Firefox.
-
-    Prova tutti i metodi in ordine di affidabilita.
-
-    Args:
-        settings: Impostazioni dell'app (usa keyword per la ricerca).
-
-    Returns:
-        Nome del dispositivo che sounddevice puo usare, o None.
-    """
-    if settings is None:
-        settings = Settings()
-    keyword = settings.sink_search_keyword
-
-    result = _find_monitor_via_sounddevice(keyword)
-    if result:
-        logger.info("Sink trovato via sounddevice: %s", result)
-        return result
-
-    result = _find_via_pactl(keyword)
-    if result:
-        logger.info("Sink trovato via pactl: %s", result)
-        return result
-
-    logger.warning("Impossibile trovare il sink di Firefox con nessun metodo")
+    if source == AudioSource.SYSTEM.value:
+        return find_system_monitor()
+    if source == AudioSource.MICROPHONE.value:
+        return find_microphone(settings)
+    logger.warning("Sorgente audio sconosciuta: %s", source)
     return None
 
 
-def find_microphone(settings: Settings | None = None) -> Optional[str]:
-    """Trova il dispositivo microfono per la cattura audio.
+def find_system_monitor() -> Optional[str]:
+    """Trova il monitor dell'uscita audio predefinita.
 
-    Args:
-        settings: Impostazioni dell'app (usa keyword per la ricerca).
-
-    Returns:
-        Nome del dispositivo che sounddevice puo usare, o None.
+    ``pactl`` e la fonte primaria perché espone direttamente il default sink
+    di PipeWire-Pulse/PulseAudio. ``sounddevice`` viene usato come fallback
+    quando pactl non è disponibile.
     """
+    result = _find_default_monitor_via_pactl()
+    if result:
+        logger.info("Monitor audio di sistema trovato via pactl: %s", result)
+        return result
+
+    result = _find_default_monitor_via_sounddevice()
+    if result:
+        logger.info("Monitor audio di sistema trovato via sounddevice: %s", result)
+        return result
+
+    logger.warning("Impossibile individuare il monitor dell'uscita predefinita")
+    return None
+
+
+def find_firefox_sink(settings: Settings | None = None) -> Optional[str]:
+    """Alias legacy: dalla v5.3 Firefox è sostituito dall'audio di sistema."""
+    del settings
+    return find_system_monitor()
+
+
+def find_microphone(settings: Settings | None = None) -> Optional[str]:
+    """Trova il microfono, preferendo un override keyword se configurato."""
     if settings is None:
         settings = Settings()
-    keyword = settings.sink_search_keyword
+    keyword = str(settings.sink_search_keyword or "").strip()
 
     result = _find_mic_via_sounddevice(keyword)
     if result:
@@ -106,14 +80,7 @@ def find_microphone(settings: Settings | None = None) -> Optional[str]:
 
 
 def list_available_devices() -> list[dict]:
-    """Elenca tutti i dispositivi di input audio disponibili.
-
-    Ogni dispositivo include flag is_monitor e is_mic per consentire
-    il filtraggio lato UI in base alla fonte selezionata.
-
-    Returns:
-        Lista di dict con 'name', 'description', 'id', 'is_monitor', 'is_mic'.
-    """
+    """Elenca tutti gli input, distinguendo monitor e microfoni."""
     devices = []
     try:
         device_list = sd.query_devices()
@@ -124,7 +91,7 @@ def list_available_devices() -> list[dict]:
     for i, dev in enumerate(device_list):
         if dev.get("max_input_channels", 0) <= 0:
             continue
-        name = dev.get("name", "")
+        name = str(dev.get("name", ""))
         hostapi = dev.get("hostapi", 0)
         is_monitor = ".monitor" in name or "monitor" in name.lower()
         devices.append({
@@ -142,154 +109,188 @@ def list_available_devices() -> list[dict]:
 
 
 def list_all_monitor_sources() -> list[dict]:
-    """Restituisce solo le sorgenti monitor (sink monitors).
-
-    Returns:
-        Lista di dict delle sole sorgenti monitor.
-    """
-    all_devs = list_available_devices()
-    return [d for d in all_devs if d["is_monitor"]]
+    """Restituisce soltanto le sorgenti monitor disponibili."""
+    return [d for d in list_available_devices() if d["is_monitor"]]
 
 
-def _find_monitor_via_sounddevice(keyword: str) -> Optional[str]:
-    """Cerca un monitor source tramite la lista dispositivi sounddevice.
-
-    Args:
-        keyword: Parola chiave da cercare nel nome del dispositivo.
-
-    Returns:
-        Nome del dispositivo trovato, o None.
-    """
-    try:
-        devices = sd.query_devices()
-    except Exception as exc:
-        logger.debug("Errore query sounddevice: %s", exc)
-        return None
-
-    for dev in devices:
-        if dev.get("max_input_channels", 0) <= 0:
-            continue
-        name = dev.get("name", "")
-        if keyword.lower() in name.lower():
-            return name
-
-    default_output = sd.default.device[1]
-    if (default_output is not None and default_output >= 0
-            and default_output < len(devices)):
-        default_name = devices[default_output].get("name", "")
-        monitor_name = default_name + ".monitor"
-        for dev in devices:
-            if dev.get("max_input_channels", 0) <= 0:
-                continue
-            if dev.get("name", "") == monitor_name:
-                return monitor_name
-
-    return None
-
-
-def _find_mic_via_sounddevice(keyword: str) -> Optional[str]:
-    """Cerca un dispositivo di input tramite la lista dispositivi sounddevice.
-
-    Args:
-        keyword: Parola chiave da cercare nel nome del dispositivo.
-
-    Returns:
-        Nome del dispositivo trovato, o None.
-    """
-    try:
-        devices = sd.query_devices()
-    except Exception as exc:
-        logger.debug("Errore query sounddevice: %s", exc)
-        return None
-
-    for dev in devices:
-        if dev.get("max_input_channels", 0) <= 0:
-            continue
-        name = dev.get("name", "")
-        if keyword.lower() in name.lower():
-            return name
-
-    default_input = sd.default.device[0]
-    if (default_input is not None and default_input >= 0
-            and default_input < len(devices)):
-        default_name = devices[default_input].get("name", "")
-        logger.info("Microfono keyword non trovato, uso input predefinito: %s",
-                     default_name)
-        return default_name
-
-    return None
-
-
-def _find_via_pactl(keyword: str) -> Optional[str]:
-    """Usa pactl per trovare il sink su cui Firefox riproduce.
-
-    Args:
-        keyword: Parola chiave per identificare Firefox.
-
-    Returns:
-        Nome del monitor source, o None.
-    """
+def _run_pactl(args: list[str]) -> Optional[str]:
     try:
         result = subprocess.run(
-            ["pactl", "list", "sink-inputs"],
-            capture_output=True, text=True, timeout=10,
+            ["pactl", *args],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
-        if result.returncode != 0:
-            return None
-        sink_inputs = result.stdout
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        logger.debug("pactl sink-inputs non disponibile: %s", exc)
+        logger.debug("pactl non disponibile (%s): %s", " ".join(args), exc)
         return None
-
-    firefox_sink_idx = extract_sink_index(sink_inputs, keyword)
-    if firefox_sink_idx is None:
+    if result.returncode != 0:
+        logger.debug(
+            "pactl %s fallito (%d): %s",
+            " ".join(args),
+            result.returncode,
+            result.stderr.strip(),
+        )
         return None
+    return result.stdout.strip()
 
-    sink_name = get_sink_name(firefox_sink_idx)
+
+def _default_sink_name_via_pactl() -> Optional[str]:
+    output = _run_pactl(["get-default-sink"])
+    if output:
+        first = output.splitlines()[0].strip()
+        if first:
+            return first
+
+    # Compatibilità con versioni di pactl che non espongono get-default-sink.
+    info = _run_pactl(["info"])
+    if info:
+        for line in info.splitlines():
+            key, sep, value = line.partition(":")
+            if sep and key.strip().casefold() == "default sink":
+                value = value.strip()
+                if value:
+                    return value
+    return None
+
+
+def _find_default_monitor_via_pactl() -> Optional[str]:
+    sink_name = _default_sink_name_via_pactl()
     if not sink_name:
         return None
+    monitor_name = f"{sink_name}.monitor"
 
-    monitor_name = sink_name + ".monitor"
-    try:
-        devices = sd.query_devices()
-        for dev in devices:
-            if dev.get("max_input_channels", 0) > 0 and dev.get("name", "") == monitor_name:
+    sources = _run_pactl(["list", "short", "sources"])
+    if sources:
+        for line in sources.splitlines():
+            fields = line.split()
+            if len(fields) >= 2 and fields[1] == monitor_name:
                 return monitor_name
-    except Exception as exc:
-        logger.debug("Errore verifica monitor in sounddevice: %s", exc)
+        logger.debug("Monitor %s non presente in pactl sources", monitor_name)
+        return None
 
+    # Se possiamo leggere il default sink ma non enumerare le sources,
+    # restituiamo comunque il nome Pulse standard: AudioCaptureThread lo usa
+    # via PULSE_SOURCE e potrà produrre un errore operativo se non esiste.
     return monitor_name
 
 
-def debug_dump() -> str:
-    """Dump di tutte le informazioni sui dispositivi audio per il debug.
+def _find_default_monitor_via_sounddevice() -> Optional[str]:
+    try:
+        devices = sd.query_devices()
+    except Exception as exc:
+        logger.debug("Errore query sounddevice: %s", exc)
+        return None
 
-    Returns:
-        Stringa formattata con tutte le informazioni audio.
-    """
+    monitors = [
+        str(dev.get("name", ""))
+        for dev in devices
+        if dev.get("max_input_channels", 0) > 0
+        and (".monitor" in str(dev.get("name", ""))
+             or "monitor" in str(dev.get("name", "")).lower())
+    ]
+    if not monitors:
+        return None
+
+    try:
+        default_output = sd.default.device[1]
+    except Exception:
+        default_output = None
+    if (
+        default_output is not None
+        and isinstance(default_output, int)
+        and 0 <= default_output < len(devices)
+    ):
+        default_name = str(devices[default_output].get("name", ""))
+        candidates = (
+            f"{default_name}.monitor",
+            default_name.removesuffix(".monitor") + ".monitor",
+        )
+        for candidate in candidates:
+            if candidate in monitors:
+                return candidate
+
+    # Con un solo monitor non esiste ambiguità anche senza pactl.
+    if len(monitors) == 1:
+        return monitors[0]
+    return None
+
+
+def _find_mic_via_sounddevice(keyword: str = "") -> Optional[str]:
+    try:
+        devices = sd.query_devices()
+    except Exception as exc:
+        logger.debug("Errore query sounddevice: %s", exc)
+        return None
+
+    if keyword:
+        for dev in devices:
+            if dev.get("max_input_channels", 0) <= 0:
+                continue
+            name = str(dev.get("name", ""))
+            is_monitor = ".monitor" in name or "monitor" in name.lower()
+            if not is_monitor and keyword.casefold() in name.casefold():
+                return name
+
+    try:
+        default_input = sd.default.device[0]
+    except Exception:
+        default_input = None
+    if (
+        default_input is not None
+        and isinstance(default_input, int)
+        and 0 <= default_input < len(devices)
+    ):
+        dev = devices[default_input]
+        if dev.get("max_input_channels", 0) > 0:
+            default_name = str(dev.get("name", ""))
+            if ".monitor" not in default_name and "monitor" not in default_name.lower():
+                logger.info("Uso input predefinito: %s", default_name)
+                return default_name
+
+    # Ultimo fallback: primo vero input non-monitor.
+    for dev in devices:
+        if dev.get("max_input_channels", 0) <= 0:
+            continue
+        name = str(dev.get("name", ""))
+        if ".monitor" not in name and "monitor" not in name.lower():
+            return name
+    return None
+
+
+def debug_dump() -> str:
+    """Dump delle informazioni audio utili al troubleshooting."""
     lines: list[str] = []
+    lines.append("=== default playback ===")
+    lines.append(f"  default sink: {_default_sink_name_via_pactl() or 'non disponibile'}")
+    lines.append(f"  system monitor: {find_system_monitor() or 'non disponibile'}")
+
+    lines.append("")
     lines.append("=== sounddevice devices (input only) ===")
     try:
         devices = sd.query_devices()
         for i, dev in enumerate(devices):
             if dev.get("max_input_channels", 0) > 0:
                 lines.append(f"  [{i}] {dev.get('name', '?')}")
-                lines.append(f"      channels={dev.get('max_input_channels')} "
-                             f"rate={dev.get('default_samplerate')}")
+                lines.append(
+                    f"      channels={dev.get('max_input_channels')} "
+                    f"rate={dev.get('default_samplerate')}"
+                )
     except Exception as exc:
         lines.append(f"  Errore: {exc}")
 
     lines.append("")
-    lines.append("=== pactl sources (monitors only) ===")
-    try:
-        result = subprocess.run(
-            ["pactl", "list", "sources", "short"],
-            capture_output=True, text=True, timeout=10,
-        )
-        for line in result.stdout.strip().splitlines():
-            if ".monitor" in line:
+    lines.append("=== pactl sources (monitors) ===")
+    sources = _run_pactl(["list", "short", "sources"])
+    if sources is None:
+        lines.append("  pactl non disponibile")
+    else:
+        found = False
+        for line in sources.splitlines():
+            if ".monitor" in line or "monitor" in line.lower():
                 lines.append(f"  {line}")
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        lines.append(f"  Errore: {exc}")
+                found = True
+        if not found:
+            lines.append("  nessun monitor")
 
     return "\n".join(lines)
