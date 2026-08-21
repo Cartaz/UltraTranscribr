@@ -179,7 +179,8 @@ class AppController:
 
     def start_file_transcription(self, file_path: str, language: Optional[str] = None,
                                  model_size: Optional[str] = None, song_mode: bool = False,
-                                 isolate_vocals_flag: bool = False) -> None:
+                                 isolate_vocals_flag: bool = False,
+                                 history_source: str = "file") -> None:
         self.stop_transcription()
         self.stop_file_transcription()
         generation = self._next_generation()
@@ -190,7 +191,7 @@ class AppController:
             "file",
             model=cfg.model_size,
             language=lang,
-            source="file",
+            source=history_source,
             source_path=str(file_path),
         )
         def start() -> None:
@@ -207,6 +208,19 @@ class AppController:
                 self._file_thread = worker
             worker.start()
         self._run_async(generation, start, "file_transcriber_error")
+
+    def start_recovery_transcription(self, recovery_path: str) -> None:
+        if self.is_running() or self.is_draining() or self.is_file_transcribing():
+            raise RuntimeError("Ferma la trascrizione attiva prima di recuperare l'audio")
+        path = self._history.resolve_recovery_audio(recovery_path)
+        self.start_file_transcription(
+            str(path),
+            language=self._settings.language,
+            model_size=self._settings.model_size,
+            song_mode=False,
+            isolate_vocals_flag=False,
+            history_source="recovery",
+        )
 
     def stop_file_transcription(self) -> None:
         self._next_generation()
@@ -230,15 +244,46 @@ class AppController:
         self._settings = self._settings.with_(**overrides)
         self._settings.save()
         self._bus.emit("config_changed", overrides)
+        if "history_retention_days" in overrides:
+            deleted = self.prune_history()
+            if deleted:
+                self._bus.emit("history_changed", None)
 
     def list_history(self, limit: int = 50) -> list[dict[str, Any]]:
+        self.prune_history()
         return self._history.list_recent(limit)
 
     def get_history_session(self, session_id: str) -> Optional[dict[str, Any]]:
         return self._history.get_session(session_id)
 
+    def export_history_session(self, session_id: str, target_path: str) -> str:
+        return str(self._history.export_text(session_id, target_path))
+
+    def delete_history_session(self, session_id: str) -> bool:
+        with self._lock:
+            if session_id in {self._live_history_id, self._file_history_id}:
+                raise RuntimeError("Non puoi eliminare una sessione ancora attiva")
+        deleted = self._history.delete_session(session_id)
+        if deleted:
+            self._bus.emit("history_changed", session_id)
+        return deleted
+
+    def prune_history(self) -> int:
+        deleted = self._history.prune_older_than(self._settings.history_retention_days)
+        if deleted:
+            logger.info("Retention cronologia: eliminate %d sessioni", deleted)
+        return deleted
+
     def list_recovery_audio(self) -> list[dict[str, Any]]:
         return self._history.list_recovery_audio()
+
+    def delete_recovery_audio(self, recovery_path: str) -> bool:
+        if self.is_file_transcribing():
+            raise RuntimeError("Ferma la trascrizione file prima di eliminare un recovery")
+        deleted = self._history.delete_recovery_audio(recovery_path)
+        if deleted:
+            self._bus.emit("history_changed", None)
+        return deleted
 
     def subscribe(self, event: str, handler: Callable) -> None:
         self._bus.subscribe(event, handler)
