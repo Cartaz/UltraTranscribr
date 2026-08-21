@@ -13,6 +13,10 @@ def _xdg_cache_home() -> Path:
     return Path(os.getenv("XDG_CACHE_HOME", Path.home() / ".cache"))
 
 
+def _xdg_data_home() -> Path:
+    return Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+
+
 class AppMeta:
     NAME = "UltraTranscribr"
     VERSION = "5.3.0"
@@ -22,7 +26,9 @@ class AppMeta:
     CONFIG_DIR = _xdg_config_home() / "ultratranscribr"
     SETTINGS_PATH = CONFIG_DIR / "settings.json"
     LOG_PATH = CONFIG_DIR / "ultratranscribr.log"
-    DESKTOP_DIR = Path.home() / ".local" / "share" / "applications"
+    DATA_DIR = _xdg_data_home() / "ultratranscribr"
+    TRANSCRIPTS_DIR = DATA_DIR / "transcripts"
+    DESKTOP_DIR = _xdg_data_home() / "applications"
     CACHE_DIR = _xdg_cache_home() / "ultratranscribr"
     MODELS_DIR = CACHE_DIR / "models" / "gguf"
 
