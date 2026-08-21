@@ -10,7 +10,10 @@
 <body>
 <div class="shell">
   <aside class="sidebar">
-    <header class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 12h2m2-5v10m3-13v16m3-12v8m3-6v4m3-2h1"/></svg></span><div><strong>UltraTranscribr</strong><small id="version">—</small></div></header>
+    <header class="brand">
+      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 12h2m2-5v10m3-13v16m3-12v8m3-6v4m3-2h1"/></svg></span>
+      <div><strong>UltraTranscribr</strong><small id="version">—</small></div>
+    </header>
     <nav aria-label="Sezioni">
       <button class="nav active" data-view="live" aria-current="page">Live</button>
       <button class="nav" data-view="file">File</button>
@@ -21,47 +24,79 @@
   </aside>
 
   <main>
-    <header class="topbar"><div><p class="eyebrow" id="eyebrow">TRASCRIZIONE LIVE</p><h1 id="title">Ascolto e trascrizione</h1><p id="subtitle">Cattura Firefox o microfono e trascrive in tempo reale.</p></div><span class="chip">SYCL</span></header>
-    <div id="notice" class="notice" role="status" aria-live="polite" hidden><span id="notice-text"></span><button type="button" id="notice-close" aria-label="Chiudi">×</button></div>
+    <header class="topbar"><p class="eyebrow" id="eyebrow">TRASCRIZIONE LIVE</p></header>
+
+    <div id="notice" class="notice" role="status" aria-live="polite" hidden>
+      <span id="notice-text"></span>
+      <button type="button" id="notice-close" aria-label="Chiudi">×</button>
+    </div>
 
     <section class="view active" data-panel="live">
-      <div class="grid two">
-        <section class="card">
-          <div class="card-head"><div><p class="kicker">INGRESSO</p><h2>Sorgente audio</h2></div><span class="state" id="live-label">Pronto</span></div>
-          <fieldset><legend>Sorgente</legend><div class="segmented"><button type="button" class="segment active" data-source="firefox" aria-pressed="true">Firefox</button><button type="button" class="segment" data-source="microphone" aria-pressed="false">Microfono</button></div></fieldset>
-          <label for="live-device">Dispositivo</label><select id="live-device"><option value="">Rilevamento automatico</option></select><p class="help">Lascia automatico per usare il rilevamento del backend.</p>
-          <div class="fields two"><div><label for="live-language">Lingua</label><input id="live-language" type="text" value="en" spellcheck="false"></div><div><label for="live-model">Modello</label><select id="live-model"></select></div></div>
-          <div class="actions"><button id="live-start" class="button selected" type="button">Avvia</button><button id="live-drain" class="button" type="button" disabled>Completa buffer</button><button id="live-stop" class="button" type="button" disabled>Ferma</button></div>
+      <div class="grid two session-grid">
+        <section class="card input-card">
+          <div class="card-head"><div><p class="kicker">INGRESSO</p><h2>Sorgente audio</h2></div></div>
+          <fieldset>
+            <legend>Sorgente</legend>
+            <div class="segmented">
+              <button type="button" class="segment active" data-source="firefox" aria-pressed="true">Firefox</button>
+              <button type="button" class="segment" data-source="microphone" aria-pressed="false">Microfono</button>
+            </div>
+          </fieldset>
+          <label for="live-device">Dispositivo</label>
+          <select id="live-device"><option value="">Rilevamento automatico</option></select>
+          <p class="help">Lascia automatico per usare il rilevamento del backend.</p>
+          <div class="actions">
+            <button id="live-start" class="button selected" type="button">Avvia</button>
+            <button id="live-drain" class="button" type="button" disabled>Completa buffer</button>
+            <button id="live-stop" class="button" type="button" disabled>Ferma</button>
+          </div>
         </section>
-        <section class="card">
-          <div class="card-head"><div><p class="kicker">SESSIONE</p><h2>Stato live</h2></div><span class="orb" id="live-orb"></span></div>
-          <dl class="metrics"><div><dt>Stato</dt><dd id="live-status">Idle</dd></div><div><dt>Sorgente</dt><dd id="live-source-value">Firefox</dd></div><div><dt>Modello</dt><dd id="live-model-value">—</dd></div></dl>
-          <label for="buffer-progress">Buffer</label><div class="progress" id="buffer-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="buffer-fill"></span></div><p class="help"><span id="buffer-value">0%</span> della soglia di avviso.</p>
+
+        <section class="card status-card">
+          <div class="card-head"><div><p class="kicker">SESSIONE</p><h2>Stato live</h2></div><span class="orb" id="live-orb" aria-hidden="true"></span></div>
+          <dl class="metrics">
+            <div><dt>Stato</dt><dd id="live-status">Idle</dd></div>
+            <div><dt>Sorgente</dt><dd id="live-source-value">Firefox</dd></div>
+            <div><dt>Modello</dt><dd id="live-model-value">—</dd></div>
+          </dl>
+          <label for="buffer-progress">Buffer</label>
+          <div class="progress" id="buffer-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="buffer-fill"></span></div>
+          <p class="help compact-help"><span id="buffer-value">0%</span> della soglia di avviso.</p>
         </section>
       </div>
-      <section class="card transcript-card"><div class="card-head"><div><p class="kicker">OUTPUT</p><h2>Trascrizione</h2></div><div class="toolbar"><button type="button" id="live-copy">Copia</button><button type="button" id="live-clear">Pulisci</button></div></div><div id="live-transcript" class="transcript" tabindex="0" aria-live="polite"><p class="placeholder">Il testo trascritto apparirà qui.</p></div></section>
+
+      <section class="card transcript-card">
+        <div class="card-head"><div><p class="kicker">OUTPUT</p><h2>Trascrizione</h2></div><div class="toolbar"><button type="button" id="live-copy">Copia</button><button type="button" id="live-clear">Pulisci</button></div></div>
+        <div id="live-transcript" class="transcript" tabindex="0" aria-live="polite"><p class="placeholder">Il testo trascritto apparirà qui.</p></div>
+      </section>
     </section>
 
     <section class="view" data-panel="file" hidden>
-      <div class="grid two">
-        <section class="card">
-          <div class="card-head"><div><p class="kicker">MEDIA</p><h2>Trascrivi un file</h2></div><span class="state" id="file-label">Pronto</span></div>
-          <label for="file-path">File audio o video</label><div class="picker"><input id="file-path" type="text" readonly placeholder="Nessun file selezionato"><button id="file-pick" type="button">Sfoglia</button></div>
-          <div class="fields two"><div><label for="file-language">Lingua</label><input id="file-language" type="text" value="en" spellcheck="false"></div><div><label for="file-model">Modello</label><select id="file-model"></select></div></div>
+      <div class="grid two session-grid file-session-grid">
+        <section class="card input-card">
+          <div class="card-head"><div><p class="kicker">MEDIA</p><h2>Trascrivi un file</h2></div></div>
+          <label for="file-path">File audio o video</label>
+          <div class="picker"><input id="file-path" type="text" readonly placeholder="Nessun file selezionato"><button id="file-pick" type="button">Sfoglia</button></div>
           <label class="toggle-row" for="song-mode"><span><strong>Modalità musica</strong><small>Preserva ripetizioni utili nei testi cantati.</small></span><input id="song-mode" type="checkbox"><i></i></label>
-          <label class="toggle-row" for="isolate-vocals"><span><strong>Isola voce</strong><small>Usa Demucs se installato; disponibile solo in modalità musica.</small></span><input id="isolate-vocals" type="checkbox" disabled><i></i></label>
+          <label class="toggle-row" for="isolate-vocals"><span><strong>Isola voce</strong><small>Usa Demucs se installato; solo in modalità musica.</small></span><input id="isolate-vocals" type="checkbox" disabled><i></i></label>
           <div class="actions"><button id="file-start" class="button selected" type="button">Trascrivi</button><button id="file-stop" class="button" type="button" disabled>Ferma</button></div>
         </section>
-        <section class="card">
-          <div class="card-head"><div><p class="kicker">AVANZAMENTO</p><h2>Elaborazione</h2></div><span class="orb" id="file-orb"></span></div>
+
+        <section class="card status-card">
+          <div class="card-head"><div><p class="kicker">AVANZAMENTO</p><h2>Elaborazione</h2></div><span class="orb" id="file-orb" aria-hidden="true"></span></div>
           <dl class="metrics"><div><dt>Stato</dt><dd id="file-status">Idle</dd></div><div><dt>Avanzamento</dt><dd id="file-progress-value">0%</dd></div></dl>
-          <div class="progress" id="file-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="file-fill"></span></div><p class="help">La barra usa esclusivamente il progresso reale emesso dal backend.</p>
+          <div class="progress" id="file-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="file-fill"></span></div>
+          <p class="help compact-help">Progresso reale emesso dal backend.</p>
         </section>
       </div>
-      <section class="card transcript-card"><div class="card-head"><div><p class="kicker">OUTPUT</p><h2>Trascrizione file</h2></div><div class="toolbar"><button type="button" id="file-copy">Copia</button><button type="button" id="file-clear">Pulisci</button></div></div><div id="file-transcript" class="transcript" tabindex="0" aria-live="polite"><p class="placeholder">Il testo trascritto apparirà qui.</p></div></section>
+
+      <section class="card transcript-card">
+        <div class="card-head"><div><p class="kicker">OUTPUT</p><h2>Trascrizione file</h2></div><div class="toolbar"><button type="button" id="file-copy">Copia</button><button type="button" id="file-clear">Pulisci</button></div></div>
+        <div id="file-transcript" class="transcript" tabindex="0" aria-live="polite"><p class="placeholder">Il testo trascritto apparirà qui.</p></div>
+      </section>
     </section>
 
-    <section class="view" data-panel="settings" hidden>
+    <section class="view scroll-view" data-panel="settings" hidden>
       <form id="settings-form">
         <div class="settings-grid">
           <section class="card"><div class="card-head"><div><p class="kicker">TRASCRIZIONE</p><h2>Riconoscimento</h2></div></div><div class="fields two">
@@ -76,7 +111,7 @@
       </form>
     </section>
 
-    <section class="view" data-panel="logs" hidden>
+    <section class="view scroll-view" data-panel="logs" hidden>
       <div class="logs-grid">
         <section class="card"><div class="card-head"><div><p class="kicker">RUNTIME</p><h2>Log applicazione</h2></div><div class="toolbar"><label class="check"><input id="log-auto" type="checkbox" checked> Auto-scroll</label><button id="log-refresh" type="button">Aggiorna</button><button id="log-copy" type="button">Copia</button></div></div><pre id="log-output" class="log" tabindex="0">In attesa del bridge Python…</pre></section>
         <section class="card"><div class="card-head"><div><p class="kicker">AUDIO</p><h2>Diagnostica dispositivi</h2></div><button id="diagnostics-run" class="button" type="button">Esegui</button></div><p class="help">Interroga gli strumenti già presenti nel backend per sounddevice e PulseAudio/PipeWire.</p><pre id="diagnostics-output" class="log compact" tabindex="0">Nessuna diagnostica eseguita.</pre></section>
