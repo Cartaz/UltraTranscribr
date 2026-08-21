@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
 
 from PySide6.QtCore import Slot
 
 from config.settings import AudioSource
+from core.audio_source_health import evaluate_audio_source_health
 from core.sink_finder import debug_dump, find_source, list_available_devices
 from ui.bridge import BackendBridge
 
@@ -60,7 +60,25 @@ class MultiSessionBackendBridge(BackendBridge):
         )
         selection = str(selected_input or "").strip()
         try:
-            status = self._probe_audio_source(source, selection)
+            devices = []
+            streams = []
+            automatic = None
+            if source == AudioSource.APPLICATION.value:
+                streams = self._controller.list_playback_streams()
+            else:
+                devices = list_available_devices()
+                if not selection:
+                    automatic = find_source(
+                        self._controller.settings,
+                        audio_source=source,
+                    )
+            status = evaluate_audio_source_health(
+                source=source,
+                selection=selection,
+                devices=devices,
+                streams=streams,
+                automatic_source=automatic,
+            )
         except Exception as exc:
             logger.warning("Probe sorgente audio fallito: %s", exc)
             status = {
@@ -70,98 +88,6 @@ class MultiSessionBackendBridge(BackendBridge):
                 "detail": str(exc),
             }
         return json.dumps(status, ensure_ascii=False, default=str)
-
-    def _probe_audio_source(self, source: str, selection: str) -> dict[str, Any]:
-        if source == AudioSource.APPLICATION.value:
-            streams = self._controller.list_playback_streams()
-            if selection:
-                try:
-                    stream_id = int(selection)
-                except ValueError:
-                    stream_id = -1
-                selected = next(
-                    (item for item in streams if int(item.get("id", -1)) == stream_id),
-                    None,
-                )
-                if selected is None:
-                    return {
-                        "source": source,
-                        "status": "disconnected",
-                        "label": "Stream disconnesso",
-                        "detail": "Lo stream selezionato non è più presente.",
-                        "streams": len(streams),
-                    }
-                playing = str(selected.get("state") or "").casefold() != "paused"
-                return {
-                    "source": source,
-                    "status": "playing" if playing else "available",
-                    "label": "In riproduzione" if playing else "Disponibile · in pausa",
-                    "detail": selected.get("display_name") or f"Stream #{stream_id}",
-                    "stream": selected,
-                    "streams": len(streams),
-                }
-            if streams:
-                return {
-                    "source": source,
-                    "status": "available",
-                    "label": f"Disponibili {len(streams)} stream",
-                    "detail": "Seleziona lo stream da isolare.",
-                    "streams": len(streams),
-                }
-            return {
-                "source": source,
-                "status": "disconnected",
-                "label": "Nessuno stream",
-                "detail": "Avvia la riproduzione in un'applicazione e aggiorna l'elenco.",
-                "streams": 0,
-            }
-
-        devices = list_available_devices()
-        key = "is_monitor" if source == AudioSource.SYSTEM.value else "is_mic"
-        candidates = [item for item in devices if bool(item.get(key))]
-        if selection:
-            selected = next(
-                (item for item in candidates if str(item.get("name") or "") == selection),
-                None,
-            )
-            if selected is None:
-                return {
-                    "source": source,
-                    "status": "disconnected",
-                    "label": "Dispositivo non disponibile",
-                    "detail": selection,
-                    "devices": len(candidates),
-                }
-            return {
-                "source": source,
-                "status": "available",
-                "label": "Disponibile",
-                "detail": str(selected.get("name") or selection),
-                "device": selected,
-                "devices": len(candidates),
-            }
-
-        automatic = find_source(self._controller.settings, audio_source=source)
-        if automatic:
-            return {
-                "source": source,
-                "status": "available",
-                "label": "Disponibile · automatico",
-                "detail": automatic,
-                "devices": len(candidates),
-            }
-        label = (
-            "Audio di sistema non disponibile"
-            if source == AudioSource.SYSTEM.value
-            else "Microfono non disponibile"
-        )
-        return {
-            "source": source,
-            "status": "disconnected",
-            "label": label,
-            "detail": "Nessun ingresso compatibile rilevato.",
-            "devices": len(candidates),
-        }
 
     @Slot(str, str, str)
     def startLive(
@@ -255,6 +181,7 @@ class MultiSessionBackendBridge(BackendBridge):
     @Slot()
     def runAudioDiagnostics(self) -> None:
         """Include devices, streams and active per-session routing in one report."""
+
         def operation() -> None:
             report = debug_dump()
             report += "\n\n=== playback streams ==="
