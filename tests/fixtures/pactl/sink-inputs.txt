@@ -1,0 +1,32 @@
+Sink Input #101
+	Driver: PipeWire
+	Owner Module: n/a
+	Client: 89
+	Sink: 42
+	Sample Specification: float32le 2ch 48000Hz
+	Channel Map: front-left,front-right
+	Format: pcm, format.sample_format = "float32le"  format.rate = "48000"  format.channels = "2"
+	Corked: no
+	Mute: no
+	Volume: front-left: 65536 / 100% / 0.00 dB
+	Properties:
+		application.name = "Firefox"
+		media.name = "Video \"Demo\""
+		application.process.id = "4242"
+		application.process.binary = "firefox"
+		node.name = "Firefox"
+
+Sink Input #205
+	Driver: PipeWire
+	Owner Module: n/a
+	Client: 91
+	Sink: 77
+	Sample Specification: float32le 2ch 48000Hz
+	Corked: yes
+	Mute: no
+	Properties:
+		application.name = "VLC media player"
+		media.name = "Musica"
+		application.process.id = "not-a-number"
+		application.process.binary = "vlc"
+		node.name = "VLC"

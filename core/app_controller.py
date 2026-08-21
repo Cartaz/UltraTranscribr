@@ -168,9 +168,14 @@ class AppController:
         self.ensure_backend_started(vad=settings.vad_filter, settings=settings)
 
     def stop_backend(self) -> None:
-        with self._lock:
-            self._backend.stop()
-            self._backend_started = False
+        # Startup and shutdown share the same lifecycle lock. This prevents a
+        # stop from racing a half-started whisper-server and also guarantees
+        # that shutdown wins once an in-flight startup leaves the critical
+        # section.
+        with self._backend_init_lock:
+            with self._lock:
+                self._backend.stop()
+                self._backend_started = False
         self._bus.emit("backend_status_changed", "standby")
 
     def _run_async(
@@ -318,6 +323,11 @@ class AppController:
         )
 
         def start() -> None:
+            # Stop/Start and shutdown invalidate older generations. Check before
+            # doing expensive model/backend work so a stale queued startup can
+            # never resurrect whisper-server after the user has stopped it.
+            if not self._is_current(generation):
+                return
             self.ensure_backend_started(
                 vad=False if song_mode else cfg.vad_filter,
                 settings=cfg,

@@ -96,13 +96,13 @@ The first multi-session architecture keeps one shared whisper-server while captu
 
 ## Phase 7 — Test hardening
 
-- [ ] Dedicated `TranscriberThread` retry/drain/recovery tests.
-- [ ] Dedicated `FileTranscriberThread` conversion/cancel/retry tests.
-- [ ] `WhisperBackend` endpoint fallback, timeout and process lifecycle tests.
-- [ ] Sink/stream discovery parser tests using captured pactl/PipeWire fixtures.
-- [ ] WebChannel bridge integration tests.
-- [ ] Race tests for rapid Start/Stop/Start and app shutdown.
-- [ ] Multi-session tests before enabling concurrent sessions by default.
+- [x] Dedicated `TranscriberThread` retry/drain/recovery tests.
+- [x] Dedicated `FileTranscriberThread` conversion/cancel/retry tests.
+- [x] `WhisperBackend` endpoint fallback, timeout and process lifecycle tests.
+- [x] Sink/stream discovery parser tests using captured pactl/PipeWire fixtures.
+- [x] WebChannel bridge integration tests.
+- [x] Race tests for rapid Start/Stop/Start and app shutdown.
+- [x] Multi-session tests before enabling concurrent sessions by default.
 
 ## Phase 8 — Installer, logs and documentation
 

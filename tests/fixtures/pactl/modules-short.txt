@@ -1,0 +1,3 @@
+7	module-always-sink	
+88	module-null-sink	sink_name=ultratranscribr_capture_1234_deadbeef sink_properties=device.description=UltraTranscribr_Isolated
+89	module-null-sink	sink_name=other_application_sink
