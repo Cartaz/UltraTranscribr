@@ -18,36 +18,41 @@ def controller(tmp_path: Path) -> AppController:
          patch("core.app_controller.WhisperModelManager"), \
          patch("core.app_controller.WhisperBackend"):
         instance = AppController(settings=Settings(history_retention_days=0))
-    instance._history = TranscriptHistoryStore(tmp_path / "history")
+    history = TranscriptHistoryStore(tmp_path / "history")
+    instance._history = history
+    # Live history is owned directly by LiveSessionManager in Phase 4.
+    instance._live_sessions._history = history
     return instance
 
 
 def test_live_autosave_lifecycle(controller: AppController) -> None:
-    with patch.object(controller, "_run_async") as run_async:
-        controller.start_transcription(
+    # Creating a Live session persists the history record synchronously; worker
+    # startup is patched because this test targets persistence, not PortAudio.
+    with patch.object(controller._live_sessions, "_start_session"):
+        snapshot = controller.start_live_session(
             sink_name="speaker.monitor",
-            audio_source="firefox",
+            audio_source="system",
             language="it",
         )
-    run_async.assert_called_once()
 
     records = controller.list_history(10)
     assert len(records) == 1
-    session_id = records[0]["id"]
+    session_id = snapshot["id"]
+    assert records[0]["id"] == session_id
     assert records[0]["status"] == "starting"
 
-    bus = EventBus()
-    bus.emit("process_started", {"sink": "speaker.monitor", "source": "firefox"})
-    bus.emit("transcriber_new_text", "prima parte")
-    bus.emit("transcriber_new_text", "seconda parte")
-    bus.emit("transcriber_drained", None)
+    runtime = controller._live_sessions._sessions[session_id]
+    controller._live_sessions._set_status(runtime, "running")
+    controller._live_sessions._worker_event(runtime, "transcriber_new_text", "prima parte")
+    controller._live_sessions._worker_event(runtime, "transcriber_new_text", "seconda parte")
+    controller._live_sessions._worker_event(runtime, "transcriber_drained", None)
 
     session = controller.get_history_session(session_id)
     assert session is not None
     assert session["status"] == "completed"
     assert session["ended_at"] is not None
     assert session["text"] == "prima parte seconda parte"
-    assert session["source"] == "firefox"
+    assert session["source"] == "system"
     assert session["source_path"] == "speaker.monitor"
 
 
@@ -80,16 +85,15 @@ def test_file_autosave_lifecycle(controller: AppController) -> None:
 
 
 def test_active_history_record_cannot_be_deleted(controller: AppController) -> None:
-    with patch.object(controller, "_run_async"):
-        controller.start_transcription(
+    with patch.object(controller._live_sessions, "_start_session"):
+        snapshot = controller.start_live_session(
             sink_name="speaker.monitor",
-            audio_source="firefox",
+            audio_source="system",
             language="it",
         )
-    session_id = controller.list_history(10)[0]["id"]
 
     with pytest.raises(RuntimeError):
-        controller.delete_history_session(session_id)
+        controller.delete_history_session(snapshot["id"])
 
 
 def test_recovery_uses_file_pipeline_with_recovery_metadata(
