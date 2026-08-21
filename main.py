@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from PySide6.QtGui import QIcon
@@ -27,8 +28,12 @@ from ui.main_window import MainWindow
 from ui.tray_icon import TrayIcon
 
 
+LOG_MAX_BYTES = 5 * 1024 * 1024
+LOG_BACKUP_COUNT = 4
+
+
 def setup_logging() -> None:
-    """Configura il logging dell'applicazione nella directory XDG."""
+    """Configura console e file log XDG con rotazione limitata."""
     AppMeta.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
     logging.basicConfig(
@@ -37,7 +42,12 @@ def setup_logging() -> None:
         datefmt="%H:%M:%S",
         handlers=[
             logging.StreamHandler(sys.stdout),
-            logging.FileHandler(AppMeta.LOG_PATH, encoding="utf-8"),
+            RotatingFileHandler(
+                AppMeta.LOG_PATH,
+                maxBytes=LOG_MAX_BYTES,
+                backupCount=LOG_BACKUP_COUNT,
+                encoding="utf-8",
+            ),
         ],
     )
 
