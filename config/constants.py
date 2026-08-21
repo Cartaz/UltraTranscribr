@@ -19,7 +19,7 @@ def _xdg_data_home() -> Path:
 
 class AppMeta:
     NAME = "UltraTranscribr"
-    VERSION = "5.3.0"
+    VERSION = "5.4.0"
     ID = "com.ultratranscribr.app"
     DESCRIPTION = "Trascrizione audio accelerata GPU Intel Arc (SYCL)"
     LICENSE = "MIT"
@@ -28,9 +28,11 @@ class AppMeta:
     LOG_PATH = CONFIG_DIR / "ultratranscribr.log"
     DATA_DIR = _xdg_data_home() / "ultratranscribr"
     TRANSCRIPTS_DIR = DATA_DIR / "transcripts"
+    RECORDINGS_DIR = DATA_DIR / "recordings"
     DESKTOP_DIR = _xdg_data_home() / "applications"
     CACHE_DIR = _xdg_cache_home() / "ultratranscribr"
     MODELS_DIR = CACHE_DIR / "models" / "gguf"
+    DIARIZATION_MODELS_DIR = CACHE_DIR / "models" / "diarization"
 
 
 class ProcessDefaults:
@@ -48,6 +50,7 @@ class ProcessDefaults:
     VAD_MIN_SILENCE_MS = 500
     BUFFER_WARN_THRESHOLD = 20
     HISTORY_RETENTION_DAYS = 90
+    MEETING_AUDIO_RETENTION_DAYS = 30
     # Mantiene in RAM ~6 minuti con chunk da 3 s; oltre questa soglia
     # BufferManager fa spill su un file temporaneo preservando l'ordine.
     BUFFER_MAX_MEMORY_CHUNKS = 120
