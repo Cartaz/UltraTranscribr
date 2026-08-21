@@ -124,3 +124,19 @@ bind = function() {
     button.onclick = () => resetSettingsSection(button.dataset.resetSection);
   });
 };
+
+(function loadPowerUserModule() {
+  if (!document.querySelector('link[data-ultra-power="1"]')) {
+    const style = document.createElement("link");
+    style.rel = "stylesheet";
+    style.href = "power_user.css";
+    style.dataset.ultraPower = "1";
+    document.head.append(style);
+  }
+  if (!document.querySelector('script[data-ultra-power="1"]')) {
+    const script = document.createElement("script");
+    script.src = "power_user.js";
+    script.dataset.ultraPower = "1";
+    document.head.append(script);
+  }
+})();
