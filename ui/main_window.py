@@ -12,7 +12,8 @@ from PySide6.QtWidgets import QApplication, QMainWindow
 
 from config.constants import AppMeta, UIConstraints
 from core.app_controller import AppController
-from ui.bridge import BackendBridge, BridgeLogHandler
+from ui.bridge import BridgeLogHandler
+from ui.multi_session_bridge import MultiSessionBackendBridge
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ class MainWindow(QMainWindow):
             max(UIConstraints.MIN_WINDOW_HEIGHT, settings.window_height),
         )
 
-        self._bridge = BackendBridge(controller, self)
+        self._bridge = MultiSessionBackendBridge(controller, self)
         self._bridge.windowResizeRequested.connect(self._resize_from_settings)
         self._bridge.eventReceived.connect(self._observe_backend_event)
 
@@ -55,16 +56,18 @@ class MainWindow(QMainWindow):
 
     def set_tray_icon(self, tray_icon) -> None:
         self._tray_icon = tray_icon
-        self._tray_icon.set_running(
-            self._controller.is_running() or self._controller.is_draining()
-        )
+        self._tray_icon.set_running(self._controller.active_live_count() > 0)
 
     def on_start(self) -> None:
         settings = self._controller.settings
-        self._bridge.startLive(settings.audio_source, settings.sink_name or "", settings.language)
+        self._bridge.startLive(
+            settings.audio_source,
+            settings.sink_name or "",
+            settings.language,
+        )
 
     def on_stop(self) -> None:
-        self._bridge.stopLive()
+        self._bridge.stopAllLive()
         self._bridge.stopFile()
 
     def force_quit(self) -> None:
@@ -95,9 +98,8 @@ class MainWindow(QMainWindow):
         )
 
     def _observe_backend_event(self, event: str, payload_json: str) -> None:
+        del payload_json
         if self._tray_icon is None:
             return
-        if event == "process_started":
-            self._tray_icon.set_running(True)
-        elif event in ("process_stopped", "transcriber_drained"):
-            self._tray_icon.set_running(False)
+        if event.startswith("live_session_"):
+            self._tray_icon.set_running(self._controller.active_live_count() > 0)
