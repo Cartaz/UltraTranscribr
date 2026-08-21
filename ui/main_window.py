@@ -118,7 +118,6 @@ class MainWindow(QMainWindow):
     def on_stop(self) -> None:
         self._bridge.stopAllLive()
         self._bridge.cancelFileQueue()
-        self._bridge.stopFile()
 
     def force_quit(self) -> None:
         if self._closing:
@@ -127,6 +126,7 @@ class MainWindow(QMainWindow):
         self._geometry_save_timer.stop()
         self._persist_window_geometry()
         try:
+            self._bridge.closePowerUser()
             self._controller.shutdown()
         finally:
             logging.getLogger().removeHandler(self._log_handler)
@@ -140,6 +140,7 @@ class MainWindow(QMainWindow):
             self._geometry_save_timer.stop()
             self._persist_window_geometry()
             try:
+                self._bridge.closePowerUser()
                 self._controller.shutdown()
             finally:
                 logging.getLogger().removeHandler(self._log_handler)
