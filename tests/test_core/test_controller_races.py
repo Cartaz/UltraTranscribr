@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -80,7 +81,7 @@ def test_rapid_file_start_stop_start_only_launches_latest_generation(monkeypatch
     second_worker.start.assert_not_called()
 
 
-def test_stop_backend_waits_for_inflight_backend_start(monkeypatch) -> None:
+def test_stop_backend_waits_for_inflight_backend_start() -> None:
     controller = _controller(Settings(vad_filter=False))
     controller._model_manager.get_model_info.return_value = {"installed": True}
     controller._model_manager.get_model_path.return_value = Path("/tmp/model.bin")
@@ -108,7 +109,8 @@ def test_stop_backend_waits_for_inflight_backend_start(monkeypatch) -> None:
 
     # stop_backend must share the initialization lock, so it cannot stop a
     # process that is only half-started.
-    assert not controller._backend.stop.wait_until_called(timeout=0.05) if hasattr(controller._backend.stop, "wait_until_called") else controller._backend.stop.call_count == 0
+    time.sleep(0.05)
+    assert controller._backend.stop.call_count == 0
 
     release_start.set()
     starter.join(timeout=2.0)
