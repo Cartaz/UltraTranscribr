@@ -46,6 +46,9 @@ class BackendBridge(QObject):
         "history_changed",
         "history_error",
         "recovery_audio_saved",
+        "model_download_started",
+        "model_download_progress",
+        "model_status_changed",
     )
 
     def __init__(self, controller: AppController, parent: QObject | None = None) -> None:
@@ -103,6 +106,7 @@ class BackendBridge(QObject):
             },
             "settings": settings,
             "modelChoices": ModelSize.choices(),
+            "models": self._controller.list_models(),
             "audioSources": AudioSource.choices(),
             "devices": devices,
             "runtime": {
@@ -206,6 +210,46 @@ class BackendBridge(QObject):
     @Slot()
     def stopFile(self) -> None:
         self._run_async("stop-file", self._controller.stop_file_transcription, "file_transcriber_error")
+
+    @Slot(result=str)
+    def listModels(self) -> str:
+        return json.dumps(self._controller.list_models(), ensure_ascii=False, default=str)
+
+    @Slot(str, result=str)
+    def downloadModel(self, model_size: str) -> str:
+        if (
+            self._controller.is_running()
+            or self._controller.is_draining()
+            or self._controller.is_file_transcribing()
+        ):
+            return json.dumps(
+                {"ok": False, "error": "Ferma la trascrizione attiva prima di scaricare un modello"},
+                ensure_ascii=False,
+            )
+        self._run_async(
+            f"download-model-{model_size}",
+            lambda: self._controller.download_model(model_size),
+            "model_download_error",
+        )
+        return json.dumps({"ok": True}, ensure_ascii=False)
+
+    @Slot(str, result=str)
+    def deleteModel(self, model_size: str) -> str:
+        if (
+            self._controller.is_running()
+            or self._controller.is_draining()
+            or self._controller.is_file_transcribing()
+        ):
+            return json.dumps(
+                {"ok": False, "error": "Ferma la trascrizione attiva prima di eliminare un modello"},
+                ensure_ascii=False,
+            )
+        self._run_async(
+            f"delete-model-{model_size}",
+            lambda: self._controller.delete_model(model_size),
+            "model_delete_error",
+        )
+        return json.dumps({"ok": True}, ensure_ascii=False)
 
     @Slot(int, result=str)
     def listHistory(self, limit: int = 50) -> str:

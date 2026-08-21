@@ -39,6 +39,7 @@ class AppController:
         self._backend_started = False
         self._lock = threading.RLock()
         self._backend_init_lock = threading.Lock()
+        self._model_operation_lock = threading.Lock()
         self._generation = 0
         self._live_history_id: Optional[str] = None
         self._file_history_id: Optional[str] = None
@@ -248,6 +249,63 @@ class AppController:
             deleted = self.prune_history()
             if deleted:
                 self._bus.emit("history_changed", None)
+
+    def list_models(self) -> list[dict[str, object]]:
+        return self._model_manager.list_ui_models()
+
+    def download_model(self, model_size: str) -> str:
+        self._require_idle_for_model_operation()
+        if model_size not in self._model_manager.ui_model_choices():
+            raise ValueError(f"modello UI non valido: {model_size}")
+        if not self._model_operation_lock.acquire(blocking=False):
+            raise RuntimeError("Un'altra operazione sui modelli è già in corso")
+        try:
+            self._bus.emit("model_download_started", {"model": model_size})
+
+            def progress(downloaded: int, total: Optional[int]) -> None:
+                percent = None
+                if total and total > 0:
+                    percent = min(100, int(downloaded * 100 / total))
+                self._bus.emit(
+                    "model_download_progress",
+                    {
+                        "model": model_size,
+                        "downloaded": downloaded,
+                        "total": total,
+                        "percent": percent,
+                    },
+                )
+
+            path = self._model_manager.download_model(model_size, progress)
+            self._bus.emit(
+                "model_status_changed",
+                {"model": model_size, "action": "downloaded"},
+            )
+            return str(path)
+        finally:
+            self._model_operation_lock.release()
+
+    def delete_model(self, model_size: str) -> bool:
+        self._require_idle_for_model_operation()
+        if model_size not in self._model_manager.ui_model_choices():
+            raise ValueError(f"modello UI non valido: {model_size}")
+        if not self._model_operation_lock.acquire(blocking=False):
+            raise RuntimeError("Un'altra operazione sui modelli è già in corso")
+        try:
+            if self._backend.is_running:
+                self.stop_backend()
+            deleted = self._model_manager.delete_model(model_size)
+            self._bus.emit(
+                "model_status_changed",
+                {"model": model_size, "action": "deleted", "deleted": deleted},
+            )
+            return deleted
+        finally:
+            self._model_operation_lock.release()
+
+    def _require_idle_for_model_operation(self) -> None:
+        if self.is_running() or self.is_draining() or self.is_file_transcribing():
+            raise RuntimeError("Ferma la trascrizione attiva prima di gestire i modelli")
 
     def list_history(self, limit: int = 50) -> list[dict[str, Any]]:
         self.prune_history()
