@@ -40,6 +40,10 @@ class MultiSessionBackendBridge(BackendBridge):
         super().__init__(controller, parent)
         self._file_batch = FileBatchCoordinator(controller)
 
+    def closePowerUser(self) -> None:
+        """Release non-Qt subscriptions owned by the power-user coordinator."""
+        self._file_batch.close()
+
     @Slot(result=str)
     def getBootstrap(self) -> str:
         payload = json.loads(super().getBootstrap())
