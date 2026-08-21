@@ -99,6 +99,45 @@ def test_cancel_marks_active_and_pending_jobs(tmp_path: Path, monkeypatch) -> No
     batch.close()
 
 
+def test_stop_cancels_only_current_job_and_keeps_pending(tmp_path: Path, monkeypatch) -> None:
+    first = tmp_path / "a.wav"
+    second = tmp_path / "b.wav"
+    first.write_bytes(b"a")
+    second.write_bytes(b"b")
+    controller = FakeController()
+    batch = FileBatchCoordinator(controller)
+    monkeypatch.setattr(batch, "_maybe_start_next_async", lambda: None)
+    advance = MagicMock()
+    monkeypatch.setattr(batch, "_advance_after_worker", advance)
+    batch.enqueue([str(first), str(second)], language="it", model_size="medium")
+    batch._maybe_start_next()
+
+    batch._on_status("stopped")
+
+    assert [job["status"] for job in batch.list_jobs()] == ["cancelled", "queued"]
+    advance.assert_called_once_with()
+    batch.close()
+
+
+def test_pending_batch_advances_after_external_file_completion(tmp_path: Path, monkeypatch) -> None:
+    queued = tmp_path / "queued.wav"
+    queued.write_bytes(b"q")
+    controller = FakeController()
+    batch = FileBatchCoordinator(controller)
+    monkeypatch.setattr(batch, "_maybe_start_next_async", lambda: None)
+    advance = MagicMock()
+    monkeypatch.setattr(batch, "_advance_after_worker", advance)
+    batch.enqueue([str(queued)], language="it", model_size="medium")
+
+    # No active batch id: this terminal event belongs to a File/recovery job
+    # that was already running when the batch was enqueued.
+    batch._on_completed(None)
+
+    assert batch.list_jobs()[0]["status"] == "queued"
+    advance.assert_called_once_with()
+    batch.close()
+
+
 def test_clear_finished_preserves_pending_jobs(tmp_path: Path, monkeypatch) -> None:
     first = tmp_path / "a.wav"
     second = tmp_path / "b.wav"
