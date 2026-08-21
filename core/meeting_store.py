@@ -131,12 +131,8 @@ class MeetingStore:
             raw = str(recording.get("path") or "")
             deleted = False
             if raw:
-                path = Path(raw).expanduser()
                 try:
-                    resolved = path.resolve(strict=True)
-                    root = AppMeta.RECORDINGS_DIR.expanduser().resolve()
-                    if resolved.parent != root:
-                        raise ValueError("percorso registrazione non valido")
+                    resolved = self._resolve_recording_path(raw, require_exists=True)
                     resolved.unlink()
                     deleted = True
                 except FileNotFoundError:
@@ -144,6 +140,15 @@ class MeetingStore:
             data["recording"] = {}
             self._write(session_id, data)
             return deleted
+
+    def delete_sidecar(self, session_id: str) -> bool:
+        with self._lock:
+            path = self._path(session_id)
+            try:
+                path.unlink()
+                return True
+            except FileNotFoundError:
+                return False
 
     def rendered_text(self, session_id: str) -> str:
         meeting = self.get(session_id)
@@ -216,9 +221,10 @@ class MeetingStore:
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 recording = dict(data.get("recording") or {})
-                audio_path = Path(str(recording.get("path") or ""))
-                if not audio_path.is_file():
+                raw = str(recording.get("path") or "")
+                if not raw:
                     continue
+                audio_path = self._resolve_recording_path(raw, require_exists=True)
                 modified = datetime.fromtimestamp(audio_path.stat().st_mtime, tz=timezone.utc)
                 if modified >= cutoff:
                     continue
@@ -229,6 +235,15 @@ class MeetingStore:
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 continue
         return deleted
+
+    @staticmethod
+    def _resolve_recording_path(raw: str, *, require_exists: bool) -> Path:
+        candidate = Path(raw).expanduser()
+        root = AppMeta.RECORDINGS_DIR.expanduser().resolve()
+        resolved = candidate.resolve(strict=require_exists)
+        if resolved.parent != root:
+            raise ValueError("percorso registrazione non valido")
+        return resolved
 
     def _path(self, session_id: str) -> Path:
         safe = str(session_id)
