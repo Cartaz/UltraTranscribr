@@ -104,8 +104,14 @@ class Settings:
             errors.append("buffer_warn_threshold deve essere > 0")
         if not 1 <= self.server_port <= 65535:
             errors.append("server_port deve essere tra 1 e 65535")
-        if self.window_width < 320 or self.window_height < 320:
-            errors.append("dimensioni finestra troppo piccole")
+        if self.window_width < UIConstraints.MIN_WINDOW_WIDTH:
+            errors.append(
+                f"window_width deve essere >= {UIConstraints.MIN_WINDOW_WIDTH}"
+            )
+        if self.window_height < UIConstraints.MIN_WINDOW_HEIGHT:
+            errors.append(
+                f"window_height deve essere >= {UIConstraints.MIN_WINDOW_HEIGHT}"
+            )
         if errors:
             raise ValueError("; ".join(errors))
 
@@ -157,6 +163,25 @@ class Settings:
             valid_keys = set(cls.__dataclass_fields__)
             filtered = {k: v for k, v in data.items() if k in valid_keys}
             filtered["device"] = ComputeDevice.SYCL.value
+
+            old_width = filtered.get("window_width", UIConstraints.WINDOW_WIDTH)
+            old_height = filtered.get("window_height", UIConstraints.WINDOW_HEIGHT)
+            filtered["window_width"] = max(
+                int(old_width), UIConstraints.MIN_WINDOW_WIDTH
+            )
+            filtered["window_height"] = max(
+                int(old_height), UIConstraints.MIN_WINDOW_HEIGHT
+            )
+            if (
+                filtered["window_width"] != old_width
+                or filtered["window_height"] != old_height
+            ):
+                logger.info(
+                    "Dimensioni finestra migrate al minimo supportato: %dx%d",
+                    filtered["window_width"],
+                    filtered["window_height"],
+                )
+
             return cls(**filtered)
         except (OSError, json.JSONDecodeError, TypeError, KeyError, ValueError) as exc:
             logger.warning("Impostazioni non valide (%s), uso i default", exc)
