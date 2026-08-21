@@ -7,7 +7,7 @@ import os
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from config.constants import AppMeta, WhisperServerDefaults
 
@@ -38,6 +38,8 @@ _MIN_MODEL_BYTES = {
     "medium": 900_000_000, "medium.en": 900_000_000,
     "large-v3": 1_000_000_000, "large-v3-turbo": 500_000_000,
 }
+_UI_MODEL_CHOICES = ("large-v3", "large-v3-turbo", "medium")
+ProgressCallback = Callable[[int, Optional[int]], None]
 
 
 class WhisperModelManager:
@@ -47,6 +49,10 @@ class WhisperModelManager:
     @property
     def models_dir(self) -> Path:
         return self._models_dir
+
+    @staticmethod
+    def ui_model_choices() -> tuple[str, ...]:
+        return _UI_MODEL_CHOICES
 
     def get_model_path(self, model_size: str) -> Path:
         filename = self._resolve_filename(model_size)
@@ -67,8 +73,96 @@ class WhisperModelManager:
         target = self._models_dir / self._resolve_filename(model_size)
         return self._is_valid_cached(target, _MIN_MODEL_BYTES.get(model_size, 1_000_000))
 
+    def get_model_info(self, model_size: str) -> dict[str, object]:
+        """Return cheap inventory information without hashing multi-GB files."""
+        self._require_known_model(model_size)
+        target = self._models_dir / self._resolve_filename(model_size)
+        part = target.with_name(target.name + ".part")
+        min_bytes = _MIN_MODEL_BYTES[model_size]
+        try:
+            size_bytes = target.stat().st_size if target.is_file() else 0
+        except OSError:
+            size_bytes = 0
+        try:
+            partial_bytes = part.stat().st_size if part.is_file() else 0
+        except OSError:
+            partial_bytes = 0
+        sha_path = self._sha_path(target)
+        installed = size_bytes >= min_bytes
+        return {
+            "model": model_size,
+            "filename": target.name,
+            "path": str(target),
+            "installed": installed,
+            "size_bytes": size_bytes,
+            "partial_bytes": partial_bytes,
+            "min_bytes": min_bytes,
+            "verified": bool(installed and sha_path.is_file()),
+        }
+
+    def list_ui_models(self) -> list[dict[str, object]]:
+        return [self.get_model_info(model) for model in _UI_MODEL_CHOICES]
+
+    def download_model(
+        self,
+        model_size: str,
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> Path:
+        """Download a known ASR model, preferring resumable HTTP for UI progress."""
+        self._require_known_model(model_size)
+        filename = self._resolve_filename(model_size)
+        target = self._models_dir / filename
+        min_bytes = _MIN_MODEL_BYTES[model_size]
+        if self._is_valid_cached(target, min_bytes):
+            size = target.stat().st_size
+            self._notify_progress(progress_callback, size, size)
+            return target
+        if progress_callback is None:
+            return self._download_asset(_ASR_REPOS, filename, target, min_bytes)
+
+        self._models_dir.mkdir(parents=True, exist_ok=True)
+        errors: list[str] = []
+        for repo in _ASR_REPOS:
+            url = f"https://huggingface.co/{repo}/resolve/main/{filename}"
+            try:
+                result = self._download_with_progress(
+                    url, target, min_bytes, progress_callback=progress_callback
+                )
+                if result is not None:
+                    return result
+            except Exception as exc:
+                errors.append(f"HTTP {url}: {exc}")
+        details = "\n".join(f"  - {e}" for e in errors[-8:])
+        raise RuntimeError(
+            f"Download modello fallito ({filename}).\n{details}\n"
+            f"Scaricalo manualmente in {target}"
+        )
+
+    def delete_model(self, model_size: str) -> bool:
+        """Delete only files belonging to a known model inside models_dir."""
+        self._require_known_model(model_size)
+        target = self._models_dir / self._resolve_filename(model_size)
+        removed = False
+        for path in (
+            target,
+            self._sha_path(target),
+            target.with_name(target.name + ".part"),
+        ):
+            try:
+                if path.is_file():
+                    path.unlink()
+                    removed = True
+            except OSError as exc:
+                raise RuntimeError(f"Impossibile eliminare {path}: {exc}") from exc
+        return removed
+
     def _resolve_filename(self, model_size: str) -> str:
         return _MODEL_FILES.get(model_size, WhisperServerDefaults.MODEL_FILENAME)
+
+    @staticmethod
+    def _require_known_model(model_size: str) -> None:
+        if model_size not in _MODEL_FILES:
+            raise ValueError(f"modello non valido: {model_size}")
 
     @staticmethod
     def _sha_path(target: Path) -> Path:
@@ -145,8 +239,13 @@ class WhisperModelManager:
             f"Scaricalo manualmente in {target}"
         )
 
-    def _download_with_progress(self, url: str, target: Path,
-                                min_bytes: int) -> Optional[Path]:
+    def _download_with_progress(
+        self,
+        url: str,
+        target: Path,
+        min_bytes: int,
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> Optional[Path]:
         part = target.with_name(target.name + ".part")
         existing = part.stat().st_size if part.exists() else 0
         req = urllib.request.Request(url)
@@ -169,6 +268,7 @@ class WhisperModelManager:
                     expected_total = existing + int(content_length)
 
             downloaded = existing
+            self._notify_progress(progress_callback, downloaded, expected_total)
             with part.open(mode) as f:
                 while True:
                     block = resp.read(1024 * 1024)
@@ -176,6 +276,7 @@ class WhisperModelManager:
                         break
                     f.write(block)
                     downloaded += len(block)
+                    self._notify_progress(progress_callback, downloaded, expected_total)
 
         actual = part.stat().st_size if part.exists() else 0
         if expected_total is not None and actual != expected_total:
@@ -184,5 +285,19 @@ class WhisperModelManager:
             raise RuntimeError(f"file troppo piccolo: {actual} byte")
         os.replace(part, target)
         self._write_hash(target)
+        self._notify_progress(progress_callback, actual, actual)
         logger.info("Download completato: %s (%.1f MiB)", target, actual / 1048576)
         return target
+
+    @staticmethod
+    def _notify_progress(
+        callback: Optional[ProgressCallback],
+        downloaded: int,
+        total: Optional[int],
+    ) -> None:
+        if callback is None:
+            return
+        try:
+            callback(int(downloaded), int(total) if total is not None else None)
+        except Exception:
+            logger.debug("Callback progresso modello fallita", exc_info=True)
