@@ -15,6 +15,7 @@ def test_web_ui_files_and_native_stack_are_present() -> None:
         WEB / "index.html",
         WEB / "styles.css",
         WEB / "history.css",
+        WEB / "models.css",
         WEB / "app.js",
     ]
     for path in expected:
@@ -28,12 +29,14 @@ def test_web_ui_files_and_native_stack_are_present() -> None:
 def test_dark_neumorphism_uses_exact_surface_and_accent_without_gradients() -> None:
     css = (WEB / "styles.css").read_text(encoding="utf-8").lower()
     history_css = (WEB / "history.css").read_text(encoding="utf-8").lower()
+    models_css = (WEB / "models.css").read_text(encoding="utf-8").lower()
     assert "--surface: rgb(20, 20, 20)" in css
     assert "--accent: rgb(255, 102, 0)" in css
     assert "box-shadow" in css
     assert "inset" in css
     assert "gradient(" not in css
     assert "gradient(" not in history_css
+    assert "gradient(" not in models_css
 
 
 def test_frontend_is_wired_to_real_backend_operations() -> None:
@@ -128,3 +131,29 @@ def test_history_and_recovery_are_backed_by_python_persistence() -> None:
     assert "history_retention_days" in controller
     assert 'EventBus().emit("recovery_audio_saved"' in transcriber
     assert "refreshHistory" in script
+
+
+def test_model_manager_uses_real_backend_inventory_and_progress() -> None:
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    script = (WEB / "app.js").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    controller = (ROOT / "core" / "app_controller.py").read_text(encoding="utf-8")
+    manager = (ROOT / "core" / "whisper_models.py").read_text(encoding="utf-8")
+
+    assert 'id="model-list"' in html
+    assert 'id="models-refresh"' in html
+    assert 'href="models.css"' in html
+
+    for operation in ("listModels", "downloadModel", "deleteModel"):
+        assert operation in bridge
+        assert operation in script
+
+    for event in ("model_download_started", "model_download_progress", "model_status_changed"):
+        assert event in bridge
+        assert event in controller
+        assert event in script
+
+    assert "list_ui_models" in manager
+    assert "download_model" in manager
+    assert "delete_model" in manager
+    assert '"large-v3", "large-v3-turbo", "medium"' in manager
