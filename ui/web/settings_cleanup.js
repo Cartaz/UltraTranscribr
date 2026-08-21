@@ -125,34 +125,30 @@ bind = function() {
   });
 };
 
-(function loadPowerUserModule() {
-  if (!document.querySelector('link[data-ultra-power="1"]')) {
-    const style = document.createElement("link");
-    style.rel = "stylesheet";
-    style.href = "power_user.css";
-    style.dataset.ultraPower = "1";
-    document.head.append(style);
-  }
-  if (!document.querySelector('script[data-ultra-power="1"]')) {
-    const script = document.createElement("script");
-    script.src = "power_user.js";
-    script.dataset.ultraPower = "1";
-    document.head.append(script);
-  }
-})();
+function phase6InjectStyle(href, marker) {
+  if (document.querySelector(`link[data-ultra-module="${marker}"]`)) return;
+  const style = document.createElement("link");
+  style.rel = "stylesheet";
+  style.href = href;
+  style.dataset.ultraModule = marker;
+  document.head.append(style);
+}
 
-(function loadPhase10Module() {
-  if (!document.querySelector('link[data-ultra-phase10="1"]')) {
-    const style = document.createElement("link");
-    style.rel = "stylesheet";
-    style.href = "phase10.css";
-    style.dataset.ultraPhase10 = "1";
-    document.head.append(style);
-  }
-  if (!document.querySelector('script[data-ultra-phase10="1"]')) {
-    const script = document.createElement("script");
-    script.src = "phase10.js";
-    script.dataset.ultraPhase10 = "1";
-    document.head.append(script);
-  }
+function phase6InjectScript(src, marker) {
+  if (document.querySelector(`script[data-ultra-module="${marker}"]`)) return;
+  const script = document.createElement("script");
+  script.src = src;
+  // Dynamically inserted scripts are async by default. Disable async so the
+  // wrapper chain is deterministic: power_user -> phase10 -> hardening.
+  script.async = false;
+  script.dataset.ultraModule = marker;
+  document.head.append(script);
+}
+
+(function loadExtensionModules() {
+  phase6InjectStyle("power_user.css", "power");
+  phase6InjectScript("power_user.js", "power");
+  phase6InjectStyle("phase10.css", "phase10");
+  phase6InjectScript("phase10.js", "phase10");
+  phase6InjectScript("phase10_hardening.js", "phase10-hardening");
 })();
