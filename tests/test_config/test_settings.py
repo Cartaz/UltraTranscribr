@@ -25,6 +25,9 @@ class TestAudioSource:
     def test_has_system_audio(self) -> None:
         assert AudioSource.SYSTEM.value == "system"
 
+    def test_has_application_stream(self) -> None:
+        assert AudioSource.APPLICATION.value == "application"
+
     def test_legacy_firefox_symbol_is_system_alias(self) -> None:
         assert AudioSource.FIREFOX is AudioSource.SYSTEM
 
@@ -32,7 +35,7 @@ class TestAudioSource:
         assert AudioSource.MICROPHONE.value == "microphone"
 
     def test_choices_exposes_only_current_sources(self) -> None:
-        assert AudioSource.choices() == ["system", "microphone"]
+        assert AudioSource.choices() == ["system", "application", "microphone"]
         assert "firefox" not in AudioSource.choices()
 
 
@@ -76,6 +79,8 @@ class TestSettings:
 
     def test_audio_source_override(self) -> None:
         s = Settings()
+        s_app = s.with_(audio_source=AudioSource.APPLICATION.value)
         s_mic = s.with_(audio_source=AudioSource.MICROPHONE.value)
+        assert s_app.audio_source == "application"
         assert s_mic.audio_source == "microphone"
         assert s.audio_source == "system"
