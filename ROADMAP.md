@@ -12,20 +12,20 @@ Legend: `[ ]` planned · `[~]` in progress · `[x]` completed
 - [x] Autosave text incrementally as backend events arrive.
 - [x] Record metadata: kind, start/update/end time, status, source/file, model and language.
 - [x] Add a History view to browse recent sessions and reopen their text.
-- [ ] Export a saved session to `.txt`.
-- [ ] Add delete/retention controls for saved sessions.
+- [x] Export a saved session to `.txt`.
+- [x] Add delete/retention controls for saved sessions.
 - [ ] Add optional session naming.
 
 ### 1.2 Recovery audio made visible
 - [x] Emit an explicit event whenever untranscribed live audio is saved.
 - [x] List recovery WAV files in the History view.
-- [ ] One-click retranscription of a recovery WAV.
-- [ ] Delete individual recovery files from the UI.
+- [x] One-click retranscription of a recovery WAV.
+- [x] Delete individual recovery files from the UI.
 - [x] Clearly distinguish recoverable audio from normal transcript history.
 
 ### 1.3 Regression coverage
 - [x] Unit-test session persistence, atomic writes and recovery discovery.
-- [ ] Add full lifecycle tests for Live autosave and File autosave.
+- [x] Add full lifecycle tests for Live autosave and File autosave.
 - [x] Add UI contract tests for History/recovery actions.
 
 ## Phase 2 — Model management and clearer runtime state
