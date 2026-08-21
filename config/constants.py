@@ -42,7 +42,7 @@ class ProcessDefaults:
     DEVICE = "sycl"
     COMPUTE_TYPE = "f16"
     LANGUAGE = "en"
-    AUDIO_SOURCE = "firefox"
+    AUDIO_SOURCE = "system"
     BEAM_SIZE = 5
     VAD_FILTER = True
     VAD_MIN_SILENCE_MS = 500
@@ -51,7 +51,10 @@ class ProcessDefaults:
     # Mantiene in RAM ~6 minuti con chunk da 3 s; oltre questa soglia
     # BufferManager fa spill su un file temporaneo preservando l'ordine.
     BUFFER_MAX_MEMORY_CHUNKS = 120
-    SINK_SEARCH_KEYWORD_FIREFOX = "Firefox"
+    # La sorgente di sistema usa il monitor dell'output predefinito e quindi
+    # non richiede una keyword. Il campo resta disponibile per override manuali.
+    SINK_SEARCH_KEYWORD = ""
+    LEGACY_FIREFOX_KEYWORD = "Firefox"
     SINK_SEARCH_KEYWORD_MIC = "HDA Intel PCH"
     RECONNECT_DELAY = 2.0
     MAX_RECONNECT_ATTEMPTS = 5
