@@ -5,7 +5,6 @@ import threading
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from config.settings import Settings
 from core.file_segment_journal import FileSegmentJournal
 from core.file_transcriber import FileTranscriberThread
 from core.transcript_export import render_srt, render_vtt
@@ -106,13 +105,14 @@ def test_search_matches_raw_text_and_metadata_with_and_semantics(tmp_path: Path)
 
 def test_postprocess_output_is_saved_without_overwriting_raw(tmp_path: Path) -> None:
     store = TranscriptHistoryStore(tmp_path)
-    session_id = _session(store, "Uno.   Due? Tre! Quattro.")
-    derived = process_text("Uno.   Due? Tre! Quattro.", "paragraphs")
+    raw = "Uno.   Due? Tre! Quattro."
+    session_id = _session(store, raw)
+    derived = process_text(raw, "paragraphs")
     store.save_derived_output(session_id, "paragraphs", derived)
 
     loaded = store.get_session(session_id)
     assert loaded is not None
-    assert loaded["text"] == "Uno. Due? Tre! Quattro."
+    assert loaded["text"] == raw
     assert loaded["derived_outputs"]["paragraphs"] == "Uno. Due? Tre!\n\nQuattro."
 
     exported = store.export_session(
