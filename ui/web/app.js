@@ -71,6 +71,7 @@ function fileUI(status) {
 }
 
 function lockSettings() { $("settings-save").disabled = state.live || state.draining || state.file; }
+function sessionBusy() { return state.live || state.draining || state.file; }
 function options(select, values, current) { select.innerHTML = ""; values.forEach(value => { const option = document.createElement("option"); option.value = value; option.textContent = modelLabels[value] || value; option.selected = value === current; select.append(option); }); }
 
 function devices(source, list) {
@@ -95,7 +96,7 @@ function hydrate(bootstrap) {
   sourceUI();
   devices(state.source, bootstrap.devices);
   $("live-model-value").textContent = modelLabels[bootstrap.settings.model_size] || bootstrap.settings.model_size;
-  const map = {"s-language": "language", "s-source": "audio_source", "s-beam": "beam_size", "s-vad-silence": "vad_min_silence_ms", "s-buffer": "buffer_warn_threshold", "s-chunk": "chunk_ms", "s-channels": "channels", "s-sink": "sink_name", "s-keyword": "sink_search_keyword", "s-port": "server_port", "s-gpu": "gpu_layers", "s-compute": "compute_type", "s-width": "window_width", "s-height": "window_height"};
+  const map = {"s-language": "language", "s-source": "audio_source", "s-beam": "beam_size", "s-vad-silence": "vad_min_silence_ms", "s-buffer": "buffer_warn_threshold", "s-chunk": "chunk_ms", "s-channels": "channels", "s-sink": "sink_name", "s-keyword": "sink_search_keyword", "s-port": "server_port", "s-gpu": "gpu_layers", "s-compute": "compute_type", "s-width": "window_width", "s-height": "window_height", "s-retention": "history_retention_days"};
   for (const [id, key] of Object.entries(map)) $(id).value = bootstrap.settings[key] ?? "";
   $("s-vad").checked = !!bootstrap.settings.vad_filter;
   state.live = !!bootstrap.runtime.liveRunning;
@@ -195,7 +196,10 @@ function fileName(path) {
 }
 
 function historyTitle(session) {
-  if (session.kind === "file") return fileName(session.source_path) || "Trascrizione file";
+  if (session.kind === "file") {
+    const name = fileName(session.source_path) || "Trascrizione file";
+    return session.source === "recovery" ? `Recovery · ${name}` : name;
+  }
   return session.source === "microphone" ? "Trascrizione microfono" : "Trascrizione live";
 }
 
@@ -226,12 +230,26 @@ function renderHistory(items) {
   });
 }
 
+function clearHistorySelection() {
+  state.historySelected = null;
+  state.historyText = "";
+  $("history-title").textContent = "Seleziona una trascrizione";
+  $("history-meta").hidden = true;
+  $("history-copy").disabled = true;
+  $("history-export").disabled = true;
+  $("history-delete").disabled = true;
+  const transcript = $("history-transcript");
+  transcript.textContent = "Il contenuto della sessione selezionata apparirà qui.";
+  transcript.classList.add("placeholder");
+  all(".history-item").forEach(item => item.classList.remove("active"));
+}
+
 function showHistorySession(session) {
   if (!session) return;
   state.historySelected = session.id;
   state.historyText = String(session.text || "");
   $("history-title").textContent = historyTitle(session);
-  $("history-kind").textContent = session.kind === "file" ? "File" : "Live";
+  $("history-kind").textContent = session.source === "recovery" ? "Recovery" : session.kind === "file" ? "File" : "Live";
   $("history-status").textContent = label(session.status);
   $("history-model").textContent = modelLabels[session.model] || session.model || "—";
   $("history-language").textContent = session.language || "—";
@@ -239,6 +257,8 @@ function showHistorySession(session) {
   $("history-source").textContent = session.kind === "file" ? (session.source_path || "—") : (session.source_path || session.source || "—");
   $("history-meta").hidden = false;
   $("history-copy").disabled = !state.historyText;
+  $("history-export").disabled = false;
+  $("history-delete").disabled = false;
   const transcript = $("history-transcript");
   transcript.textContent = state.historyText || "Nessun testo salvato per questa sessione.";
   transcript.classList.toggle("placeholder", !state.historyText);
@@ -248,8 +268,36 @@ function showHistorySession(session) {
 function loadHistorySession(sessionId) {
   call("getHistorySession", [sessionId], result => {
     const session = json(result);
-    if (!session) { notice("Sessione non più disponibile", true); refreshHistory(); return; }
+    if (!session) {
+      notice("Sessione non più disponibile", true);
+      clearHistorySelection();
+      refreshHistoryList();
+      return;
+    }
     showHistorySession(session);
+  });
+}
+
+function exportSelectedHistory() {
+  if (!state.historySelected) return;
+  call("exportHistorySession", [state.historySelected], result => {
+    const response = json(result);
+    if (response?.cancelled) return;
+    if (!response?.ok) { notice(response?.error || "Export non riuscito", true); return; }
+    notice("Trascrizione esportata: " + response.path);
+  });
+}
+
+function deleteSelectedHistory() {
+  if (!state.historySelected) return;
+  if (!window.confirm("Eliminare definitivamente questa trascrizione dalla cronologia?")) return;
+  const sessionId = state.historySelected;
+  call("deleteHistorySession", [sessionId], result => {
+    const response = json(result);
+    if (!response?.ok) { notice(response?.error || "Eliminazione non riuscita", true); return; }
+    clearHistorySelection();
+    refreshHistoryList();
+    notice(response.deleted ? "Trascrizione eliminata" : "Trascrizione già assente");
   });
 }
 
@@ -262,6 +310,36 @@ function formatBytes(value) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KiB`;
   return `${(bytes / 1048576).toFixed(1)} MiB`;
+}
+
+function startRecovery(item) {
+  if (sessionBusy()) { notice("Ferma la trascrizione attiva prima di recuperare l'audio", true); return; }
+  call("startRecovery", [item.path], result => {
+    const response = json(result);
+    if (!response?.ok) { notice(response?.error || "Recovery non avviato", true); return; }
+    state.file = true;
+    state.fileText = "";
+    text("file", "", true);
+    progress("file", 0);
+    $("file-path").value = item.path || "";
+    $("song-mode").checked = false;
+    $("isolate-vocals").checked = false;
+    $("isolate-vocals").disabled = true;
+    fileUI("Avvio");
+    switchView("file");
+    notice("Ritrascrizione recovery avviata");
+  });
+}
+
+function deleteRecovery(item) {
+  if (sessionBusy()) { notice("Ferma la trascrizione attiva prima di eliminare un recovery", true); return; }
+  if (!window.confirm(`Eliminare definitivamente ${item.name || "questo recovery WAV"}?`)) return;
+  call("deleteRecovery", [item.path], result => {
+    const response = json(result);
+    if (!response?.ok) { notice(response?.error || "Eliminazione recovery non riuscita", true); return; }
+    refreshRecovery();
+    notice(response.deleted ? "Recovery eliminato" : "Recovery già assente");
+  });
 }
 
 function renderRecovery(items) {
@@ -283,10 +361,23 @@ function renderRecovery(items) {
     const detail = document.createElement("small");
     detail.textContent = `${formatDate(item.modified_at)} · ${formatBytes(item.size_bytes)} · ${item.path || ""}`;
     info.append(title, detail);
-    const badge = document.createElement("span");
-    badge.className = "state";
-    badge.textContent = "WAV";
-    row.append(info, badge);
+
+    const actions = document.createElement("div");
+    actions.className = "recovery-actions";
+    const transcribe = document.createElement("button");
+    transcribe.type = "button";
+    transcribe.className = "button selected compact-button";
+    transcribe.textContent = "Trascrivi";
+    transcribe.disabled = sessionBusy();
+    transcribe.onclick = () => startRecovery(item);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "button compact-button";
+    remove.textContent = "Elimina";
+    remove.disabled = sessionBusy();
+    remove.onclick = () => deleteRecovery(item);
+    actions.append(transcribe, remove);
+    row.append(info, actions);
     list.append(row);
   });
 }
@@ -318,6 +409,8 @@ function bind() {
   $("file-clear").onclick = () => { state.fileText = ""; text("file", "", true); };
   $("history-refresh").onclick = refreshHistory;
   $("history-copy").onclick = () => copyValue(state.historyText);
+  $("history-export").onclick = exportSelectedHistory;
+  $("history-delete").onclick = deleteSelectedHistory;
   $("settings-form").onsubmit = saveSettings;
   $("log-refresh").onclick = () => call("readLogTail", [300], result => $("log-output").textContent = result || "Nessun log persistente disponibile.");
   $("log-copy").onclick = () => copyValue($("log-output").textContent);
