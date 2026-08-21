@@ -53,13 +53,13 @@ Legend: `[ ]` planned · `[~]` in progress · `[x]` completed
 - [x] Migrate existing `firefox` settings to `system` without losing configuration.
 
 ### 3.2 Per-application / per-stream capture
-- [ ] Enumerate active playback streams with application/process metadata.
-- [ ] Present application name, media title when available, PID/binary and current sink.
-- [ ] Build a PipeWire/PulseAudio routing abstraction rather than hard-code browser names.
-- [ ] Prototype isolated capture by routing a selected playback stream through a dedicated virtual/null sink and recording its monitor.
-- [ ] Restore the original stream route when capture stops or the app exits.
-- [ ] Handle streams that disappear/reappear and applications with multiple simultaneous streams.
-- [ ] Add cleanup/recovery for virtual sinks left behind after a crash.
+- [x] Enumerate active playback streams with application/process metadata.
+- [x] Present application name, media title when available, PID/binary and current sink.
+- [x] Build a PipeWire/PulseAudio routing abstraction rather than hard-code browser names.
+- [x] Prototype isolated capture by routing a selected playback stream through a dedicated virtual/null sink and recording its monitor.
+- [x] Restore the original stream route when capture stops or the app exits.
+- [x] Handle streams that disappear/reappear and applications with multiple simultaneous streams.
+- [x] Add cleanup/recovery for virtual sinks left behind after a crash.
 
 Technical note: PipeWire exposes playback streams as nodes and its PulseAudio compatibility layer supports built-in virtual/null sinks. This makes isolated per-stream capture feasible, but it requires controlled routing and cleanup rather than merely reading the default output monitor.
 
