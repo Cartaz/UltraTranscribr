@@ -1,10 +1,10 @@
-"""Thread producer unificato per Firefox/PipeWire e microfono."""
+"""Thread producer unificato per monitor PipeWire/PulseAudio e microfono."""
 from __future__ import annotations
 
 import logging
 import threading
 import time
-from typing import Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 import sounddevice as sd
@@ -23,6 +23,7 @@ from core.pulse_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+EventSink = Callable[[str, Any], None]
 
 
 class AudioCaptureThread(threading.Thread):
@@ -32,12 +33,18 @@ class AudioCaptureThread(threading.Thread):
         settings: Settings,
         device_name: Optional[str] = None,
         audio_source: Optional[str] = None,
+        *,
+        session_id: Optional[str] = None,
+        event_sink: Optional[EventSink] = None,
     ) -> None:
-        super().__init__(daemon=True, name="AudioCaptureThread")
+        name = f"AudioCaptureThread-{session_id}" if session_id else "AudioCaptureThread"
+        super().__init__(daemon=True, name=name)
         self._buffer = buffer
         self._settings = settings
         self._device_name = device_name
         self._audio_source = audio_source or settings.audio_source
+        self._session_id = session_id
+        self._event_sink = event_sink
         self._stop_event = threading.Event()
         self._stream: Optional[sd.InputStream] = None
         self._lock = threading.Lock()
@@ -49,6 +56,12 @@ class AudioCaptureThread(threading.Thread):
         self._cb_accumulator = [np.array([], dtype=np.float32)]
         self._cb_lock = threading.Lock()
         self._pulse_source_set = False
+
+    def _emit(self, event: str, payload: Any = None) -> None:
+        if self._event_sink is not None:
+            self._event_sink(event, payload)
+        else:
+            EventBus().emit(event, payload)
 
     @property
     def device_name(self) -> Optional[str]:
@@ -65,7 +78,8 @@ class AudioCaptureThread(threading.Thread):
 
     def run(self) -> None:
         logger.info(
-            "AudioCaptureThread avviato — device=%s source=%s",
+            "AudioCaptureThread avviato — session=%s device=%s source=%s",
+            self._session_id or "legacy",
             self.device_name,
             self._audio_source,
         )
@@ -86,16 +100,9 @@ class AudioCaptureThread(threading.Thread):
                     self._close_stream()
                     with self._lock:
                         self._error = str(exc)
-
-                    # Un errore dopo una sessione stabile non appartiene alla
-                    # precedente raffica di reconnect; riparte da tentativo 1.
-                    if (
-                        opened_at is not None
-                        and time.monotonic() - opened_at >= 10.0
-                    ):
+                    if opened_at is not None and time.monotonic() - opened_at >= 10.0:
                         attempt = 0
                     attempt += 1
-
                     logger.error(
                         "Errore stream audio (%d/%d): %s",
                         attempt,
@@ -113,28 +120,23 @@ class AudioCaptureThread(threading.Thread):
                 self._pulse_source_set = False
             if fatal_error and not self._stop_event.is_set():
                 self._buffer.close_input()
-                EventBus().emit(
+                self._emit(
                     "transcriber_error",
                     "Cattura audio terminata dopo "
                     f"{self._max_reconnect_attempts} tentativi: {fatal_error}",
                 )
-            logger.info("AudioCaptureThread fermato")
+            logger.info("AudioCaptureThread fermato — session=%s", self._session_id or "legacy")
 
     def stop(self) -> None:
-        """Richiede l'arresto senza chiamare PortAudio dal thread chiamante.
-
-        ``stream.read()``/callback e ``stop()/close()`` concorrenti possono
-        produrre errori ALSA/PortAudio. Il worker osserva l'evento e chiude lo
-        stream nel proprio ``finally``.
-        """
+        """Richiede l'arresto senza chiamare PortAudio dal thread chiamante."""
         self._stop_event.set()
 
     def _determine_is_monitor(self) -> bool:
         name = self.device_name or ""
-        return (
-            self._audio_source == AudioSource.FIREFOX.value
-            or ".monitor" in name
-        )
+        return self._audio_source in {
+            AudioSource.SYSTEM.value,
+            AudioSource.APPLICATION.value,
+        } or ".monitor" in name
 
     def _open_stream(self) -> None:
         self._is_monitor = self._determine_is_monitor()
