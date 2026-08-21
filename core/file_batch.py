@@ -43,6 +43,7 @@ class FileBatchCoordinator:
             ("file_transcriber_progress", self._on_progress),
             ("file_transcriber_completed", self._on_completed),
             ("file_transcriber_error", self._on_error),
+            ("file_transcriber_status_changed", self._on_status),
         )
         for event, handler in self._subscriptions:
             self._controller.subscribe(event, handler)
@@ -184,6 +185,15 @@ class FileBatchCoordinator:
 
     def _on_error(self, payload: Any) -> None:
         if self._finish_active("error", str(payload or "")) or self._has_pending():
+            self._advance_after_worker()
+
+    def _on_status(self, payload: Any) -> None:
+        if str(payload) != "stopped":
+            return
+        # "Ferma" cancella solo il job corrente; i pending restano in FIFO.
+        # If the stopped File work was external (e.g. Recovery), any pending
+        # batch begins after that worker has actually exited.
+        if self._finish_active("cancelled") or self._has_pending():
             self._advance_after_worker()
 
     def _finish_active(self, status: str, error: str = "") -> bool:
