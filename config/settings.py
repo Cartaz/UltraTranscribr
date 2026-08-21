@@ -41,7 +41,10 @@ class ComputeDevice(str, Enum):
 
 
 class AudioSource(str, Enum):
-    FIREFOX = "firefox"
+    SYSTEM = "system"
+    # Alias interno temporaneo: consente ai componenti non ancora rinominati
+    # di interpretare il vecchio simbolo come la nuova sorgente di sistema.
+    FIREFOX = "system"
     MICROPHONE = "microphone"
 
     @classmethod
@@ -63,7 +66,7 @@ class Settings:
     device: str = ComputeDevice.SYCL.value
     compute_type: str = ProcessDefaults.COMPUTE_TYPE
     language: str = ProcessDefaults.LANGUAGE
-    audio_source: str = AudioSource.FIREFOX.value
+    audio_source: str = AudioSource.SYSTEM.value
     beam_size: int = ProcessDefaults.BEAM_SIZE
     vad_filter: bool = ProcessDefaults.VAD_FILTER
     vad_min_silence_ms: int = ProcessDefaults.VAD_MIN_SILENCE_MS
@@ -71,7 +74,7 @@ class Settings:
     buffer_warn_threshold: int = ProcessDefaults.BUFFER_WARN_THRESHOLD
     history_retention_days: int = ProcessDefaults.HISTORY_RETENTION_DAYS
     sink_name: Optional[str] = None
-    sink_search_keyword: str = ProcessDefaults.SINK_SEARCH_KEYWORD_FIREFOX
+    sink_search_keyword: str = ProcessDefaults.SINK_SEARCH_KEYWORD
 
     gpu_layers: int = SYCLDefaults.GPU_LAYERS
     server_port: int = SYCLDefaults.PORT
@@ -166,6 +169,16 @@ class Settings:
             valid_keys = set(cls.__dataclass_fields__)
             filtered = {k: v for k, v in data.items() if k in valid_keys}
             filtered["device"] = ComputeDevice.SYCL.value
+
+            # Migrazione non distruttiva dalla vecchia sorgente browser-specifica.
+            # Il valore verrà scritto come "system" al successivo salvataggio.
+            if filtered.get("audio_source") == "firefox":
+                filtered["audio_source"] = AudioSource.SYSTEM.value
+                logger.info("Sorgente audio migrata: firefox -> system")
+            keyword = str(filtered.get("sink_search_keyword", "") or "")
+            if keyword.casefold() == ProcessDefaults.LEGACY_FIREFOX_KEYWORD.casefold():
+                filtered["sink_search_keyword"] = ProcessDefaults.SINK_SEARCH_KEYWORD
+                logger.info("Keyword Firefox legacy rimossa dalla configurazione audio")
 
             old_width = filtered.get("window_width", UIConstraints.WINDOW_WIDTH)
             old_height = filtered.get("window_height", UIConstraints.WINDOW_HEIGHT)
