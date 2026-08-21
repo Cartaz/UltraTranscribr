@@ -7,35 +7,35 @@ Legend: `[ ]` planned · `[~]` in progress · `[x]` completed
 ## Phase 1 — Never lose a transcription
 
 ### 1.1 Persistent transcription history
-- [~] Add an XDG-compliant user data directory for saved transcription sessions.
-- [~] Persist Live and File sessions independently from the web UI state.
-- [~] Autosave text incrementally as backend events arrive.
-- [~] Record metadata: kind, start/update/end time, status, source/file, model and language.
-- [~] Add a History view to browse recent sessions and reopen their text.
+- [x] Add an XDG-compliant user data directory for saved transcription sessions.
+- [x] Persist Live and File sessions independently from the web UI state.
+- [x] Autosave text incrementally as backend events arrive.
+- [x] Record metadata: kind, start/update/end time, status, source/file, model and language.
+- [x] Add a History view to browse recent sessions and reopen their text.
 - [ ] Export a saved session to `.txt`.
 - [ ] Add delete/retention controls for saved sessions.
 - [ ] Add optional session naming.
 
 ### 1.2 Recovery audio made visible
-- [~] Emit an explicit event whenever untranscribed live audio is saved.
-- [~] List recovery WAV files in the History view.
+- [x] Emit an explicit event whenever untranscribed live audio is saved.
+- [x] List recovery WAV files in the History view.
 - [ ] One-click retranscription of a recovery WAV.
 - [ ] Delete individual recovery files from the UI.
-- [ ] Clearly distinguish recoverable audio from normal transcript history.
+- [x] Clearly distinguish recoverable audio from normal transcript history.
 
 ### 1.3 Regression coverage
-- [~] Unit-test session persistence, atomic writes and recovery discovery.
+- [x] Unit-test session persistence, atomic writes and recovery discovery.
 - [ ] Add full lifecycle tests for Live autosave and File autosave.
-- [ ] Add UI contract tests for History/recovery actions.
+- [x] Add UI contract tests for History/recovery actions.
 
 ## Phase 2 — Model management and clearer runtime state
 
 ### 2.1 Model manager UI
-- [ ] Show only supported UI models: Large v3, Large v3 Turbo, Medium.
+- [x] Show only supported UI models: Large v3, Large v3 Turbo, Medium.
 - [ ] Show Installed / Not installed and size on disk.
 - [ ] Add Download and Delete actions.
 - [ ] Surface real download progress and download errors.
-- [ ] Keep resumable `.part` downloads and hash validation.
+- [x] Keep resumable `.part` downloads and hash validation.
 - [ ] Optional preload-on-start setting.
 
 ### 2.2 Runtime status
@@ -67,7 +67,7 @@ Technical note: PipeWire exposes playback streams as nodes and its PulseAudio co
 
 This phase intentionally comes after per-stream capture because the current controller owns one Live worker, one shared Whisper backend and one File worker.
 
-- [ ] Introduce a `TranscriptionSession` model with unique session IDs.
+- [ ] Introduce a runtime `TranscriptionSession` model with unique session IDs.
 - [ ] Replace singleton Live state in `AppController` with a session manager.
 - [ ] Give each live session its own audio capture, buffer, transcript journal and status.
 - [ ] Define backend scheduling policy for multiple sessions.
