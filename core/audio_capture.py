@@ -16,6 +16,7 @@ from core.audio_capture_monitor import monitor_callback, monitor_capture_loop
 from core.audio_resampler import WHISPER_SAMPLE_RATE, query_device_sample_rate
 from core.buffer_manager import BufferManager
 from core.event_bus import EventBus
+from core.microphone_recording import MicrophoneRecorder
 from core.pulse_helpers import resolve_monitor_device, temporary_pulse_source
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,6 @@ class AudioCaptureThread(threading.Thread):
         self._audio_source = audio_source or settings.audio_source
         self._session_id = session_id
         self._event_sink = event_sink
-        self._sample_sink = sample_sink
         self._stop_event = threading.Event()
         self._stream: Optional[sd.InputStream] = None
         self._lock = threading.Lock()
@@ -54,6 +54,16 @@ class AudioCaptureThread(threading.Thread):
         self._is_monitor = False
         self._cb_accumulator = [np.array([], dtype=np.float32)]
         self._cb_lock = threading.Lock()
+        self._recording: Optional[MicrophoneRecorder] = None
+        self._sample_sink = sample_sink
+        if (
+            sample_sink is None
+            and self._audio_source == AudioSource.MICROPHONE.value
+            and bool(settings.live_microphone_recording)
+            and session_id
+        ):
+            self._recording = MicrophoneRecorder(session_id)
+            self._sample_sink = self._recording.write
 
     def _emit(self, event: str, payload: Any = None) -> None:
         if self._event_sink is not None:
@@ -83,6 +93,8 @@ class AudioCaptureThread(threading.Thread):
         )
         attempt = 0
         fatal_error: Optional[str] = None
+        if self._recording is not None:
+            self._recording.start()
         try:
             while not self._stop_event.is_set():
                 opened_at: Optional[float] = None
@@ -113,6 +125,17 @@ class AudioCaptureThread(threading.Thread):
                     self._stop_event.wait(self._reconnect_delay)
         finally:
             self._close_stream()
+            if self._recording is not None:
+                try:
+                    info = self._recording.finalize()
+                    if info is not None:
+                        EventBus().emit(
+                            "microphone_recording_saved",
+                            {"session_id": self._session_id, **info.to_dict()},
+                        )
+                except Exception:
+                    logger.exception("Finalizzazione registrazione Live fallita")
+                    self._recording.abandon()
             if fatal_error and not self._stop_event.is_set():
                 self._buffer.close_input()
                 self._emit(
