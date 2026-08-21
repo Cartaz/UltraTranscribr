@@ -11,7 +11,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from config.constants import SYCLDefaults
 from config.settings import Settings
@@ -36,6 +36,9 @@ class WhisperBackend:
         self._log_file_handle: Optional[Any] = None
         self._api_endpoint = _ENDPOINTS[0]
         self._server_vad_enabled = False
+        # One whisper-server serves every live/file request. The IO lock is the
+        # scheduling policy: capture can happen concurrently, inference is FIFO
+        # at the lock boundary and never overlaps on the shared server.
         self._io_lock = threading.RLock()
         self._lifecycle_lock = threading.RLock()
 
@@ -90,14 +93,28 @@ class WhisperBackend:
         with self._lifecycle_lock:
             self._cleanup_process()
 
-    def transcribe_audio(self, audio_data: bytes, language: Optional[str] = None,
-                         prompt: Optional[str] = None, verbose: bool = False,
-                         *, timeout: Optional[float] = None,
-                         vad: Optional[bool] = None) -> str | dict:
+    def transcribe_audio(
+        self,
+        audio_data: bytes,
+        language: Optional[str] = None,
+        prompt: Optional[str] = None,
+        verbose: bool = False,
+        *,
+        timeout: Optional[float] = None,
+        vad: Optional[bool] = None,
+        on_queue_wait: Optional[Callable[[float], None]] = None,
+    ) -> str | dict:
         if not self.is_running:
             raise RuntimeError("whisper-server non in esecuzione")
         timeout_s = float(timeout or SYCLDefaults.LIVE_REQUEST_TIMEOUT_S)
+        queued_at = time.monotonic()
         with self._io_lock:
+            wait_ms = max(0.0, (time.monotonic() - queued_at) * 1000.0)
+            if on_queue_wait is not None:
+                try:
+                    on_queue_wait(wait_ms)
+                except Exception:
+                    logger.exception("Callback metrica coda inferenza fallita")
             if not self.is_running:
                 raise RuntimeError("whisper-server non in esecuzione")
             last_error: Exception | None = None
@@ -105,12 +122,16 @@ class WhisperBackend:
                 endpoint = self._api_endpoint
                 boundary = "----UltraTranscribrBoundary"
                 body = self._build_multipart(
-                    audio_data, language, boundary,
+                    audio_data,
+                    language,
+                    boundary,
                     openai_compat=endpoint != "/inference",
-                    prompt=prompt, verbose=verbose,
+                    prompt=prompt,
+                    verbose=verbose,
                 )
                 req = urllib.request.Request(
-                    f"{self.server_url}{endpoint}", data=body,
+                    f"{self.server_url}{endpoint}",
+                    data=body,
                     headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
                     method="POST",
                 )
@@ -142,7 +163,9 @@ class WhisperBackend:
         cmd = self._build_cmd(self._model_path, use_vad)
         logger.info("Avvio whisper-server: %s", " ".join(cmd))
         self._process = subprocess.Popen(
-            cmd, env=self._build_env(), stdout=self._log_file_handle,
+            cmd,
+            env=self._build_env(),
+            stdout=self._log_file_handle,
             stderr=subprocess.STDOUT,
         )
         try:
@@ -178,19 +201,29 @@ class WhisperBackend:
     def _build_cmd(self, model_path: Path, vad: bool) -> list[str]:
         assert self._server_binary
         cmd = [
-            self._server_binary, "-m", str(model_path),
-            "--port", str(self._settings.server_port),
-            "--host", SYCLDefaults.HOST,
-            "--split-on-word", "--no-fallback",
-            "--beam-size", str(self._settings.beam_size),
+            self._server_binary,
+            "-m",
+            str(model_path),
+            "--port",
+            str(self._settings.server_port),
+            "--host",
+            SYCLDefaults.HOST,
+            "--split-on-word",
+            "--no-fallback",
+            "--beam-size",
+            str(self._settings.beam_size),
         ]
         if vad:
             if not self._vad_model_path:
                 raise RuntimeError("VAD richiesto ma modello VAD non disponibile")
             cmd += [
-                "--vad", "--vad-model", str(self._vad_model_path),
-                "--vad-threshold", str(SYCLDefaults.VAD_THRESHOLD),
-                "--vad-min-silence-duration-ms", str(self._settings.vad_min_silence_ms),
+                "--vad",
+                "--vad-model",
+                str(self._vad_model_path),
+                "--vad-threshold",
+                str(SYCLDefaults.VAD_THRESHOLD),
+                "--vad-min-silence-duration-ms",
+                str(self._settings.vad_min_silence_ms),
             ]
         return cmd
 
@@ -200,7 +233,10 @@ class WhisperBackend:
         env["ONEAPI_DEVICE_SELECTOR"] = SYCLDefaults.ONEAPI_DEVICE_SELECTOR
         env["ZES_ENABLE_SYSMAN"] = "1"
         ld_paths = []
-        for candidate in (self._project_root / ".venv" / "lib", self._project_root / "lib"):
+        for candidate in (
+            self._project_root / ".venv" / "lib",
+            self._project_root / "lib",
+        ):
             if candidate.is_dir():
                 ld_paths.append(str(candidate))
         oneapi = Path("/opt/intel/oneapi")
@@ -237,15 +273,22 @@ class WhisperBackend:
         for endpoint in _ENDPOINTS:
             boundary = "----UltraTranscribrProbe"
             body = self._build_multipart(
-                silent, None, boundary, openai_compat=endpoint != "/inference"
+                silent,
+                None,
+                boundary,
+                openai_compat=endpoint != "/inference",
             )
             req = urllib.request.Request(
-                f"{self.server_url}{endpoint}", data=body,
+                f"{self.server_url}{endpoint}",
+                data=body,
                 headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
                 method="POST",
             )
             try:
-                with urllib.request.urlopen(req, timeout=SYCLDefaults.ENDPOINT_PROBE_TIMEOUT_S) as resp:
+                with urllib.request.urlopen(
+                    req,
+                    timeout=SYCLDefaults.ENDPOINT_PROBE_TIMEOUT_S,
+                ) as resp:
                     if 200 <= resp.status < 300:
                         self._api_endpoint = endpoint
                         return
@@ -278,13 +321,31 @@ class WhisperBackend:
     @staticmethod
     def _make_silent_wav() -> bytes:
         return struct.pack(
-            "<4sI4s4sIHHIIHH4sI", b"RIFF", 36, b"WAVE", b"fmt ", 16,
-            1, 1, 16000, 32000, 2, 16, b"data", 0,
+            "<4sI4s4sIHHIIHH4sI",
+            b"RIFF",
+            36,
+            b"WAVE",
+            b"fmt ",
+            16,
+            1,
+            1,
+            16000,
+            32000,
+            2,
+            16,
+            b"data",
+            0,
         )
 
-    def _build_multipart(self, audio_data: bytes, language: Optional[str], boundary: str,
-                         openai_compat: bool = True, prompt: Optional[str] = None,
-                         verbose: bool = False) -> bytes:
+    def _build_multipart(
+        self,
+        audio_data: bytes,
+        language: Optional[str],
+        boundary: str,
+        openai_compat: bool = True,
+        prompt: Optional[str] = None,
+        verbose: bool = False,
+    ) -> bytes:
         fields: list[tuple[str, str]] = []
         if language:
             fields.append(("language", language))
@@ -301,7 +362,9 @@ class WhisperBackend:
         parts: list[bytes] = [
             f"--{boundary}\r\n".encode(),
             b'Content-Disposition: form-data; name="file"; filename="audio.wav"\r\n',
-            b"Content-Type: audio/wav\r\n\r\n", audio_data, b"\r\n",
+            b"Content-Type: audio/wav\r\n\r\n",
+            audio_data,
+            b"\r\n",
         ]
         for name, value in fields:
             parts += [
