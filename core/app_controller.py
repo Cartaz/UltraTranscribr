@@ -71,21 +71,58 @@ class AppController:
         with self._backend_init_lock:
             with self._lock:
                 already = self._backend_started and self._backend.is_running
-            vad_path = self._model_manager.get_vad_model_path() if wanted else None
+
+            vad_path = None
+            if wanted:
+                self._bus.emit("backend_status_changed", "preparing_vad")
+                vad_path = self._model_manager.get_vad_model_path()
+
             if already:
+                self._bus.emit("backend_status_changed", "configuring_backend")
                 self._backend.ensure_vad_mode(wanted, vad_path)
+                self._bus.emit("backend_status_changed", "ready")
                 return
-            self._bus.emit("backend_status_changed", StatusEnum.LOADING_MODEL.value)
-            model = self._model_manager.get_model_path(cfg.model_size)
+
+            info = self._model_manager.get_model_info(cfg.model_size)
+            if not bool(info.get("installed")):
+                self._bus.emit("backend_status_changed", "downloading_model")
+                self._bus.emit("model_download_started", {"model": cfg.model_size})
+
+                def progress(downloaded: int, total: Optional[int]) -> None:
+                    percent = None
+                    if total and total > 0:
+                        percent = min(100, int(downloaded * 100 / total))
+                    self._bus.emit(
+                        "model_download_progress",
+                        {
+                            "model": cfg.model_size,
+                            "downloaded": downloaded,
+                            "total": total,
+                            "percent": percent,
+                        },
+                    )
+
+                model = self._model_manager.download_model(cfg.model_size, progress)
+                self._bus.emit(
+                    "model_status_changed",
+                    {"model": cfg.model_size, "action": "downloaded"},
+                )
+            else:
+                self._bus.emit("backend_status_changed", StatusEnum.LOADING_MODEL.value)
+                model = self._model_manager.get_model_path(cfg.model_size)
+
+            self._bus.emit("backend_status_changed", "starting_backend")
             self._backend.start(model, vad_path)
             self._backend.ensure_vad_mode(wanted, vad_path)
             with self._lock:
                 self._backend_started = True
+            self._bus.emit("backend_status_changed", "ready")
 
     def stop_backend(self) -> None:
         with self._lock:
             self._backend.stop()
             self._backend_started = False
+        self._bus.emit("backend_status_changed", "standby")
 
     def _run_async(self, generation: int, target: Callable[[], None], error_event: str) -> None:
         def wrapped() -> None:
@@ -94,6 +131,7 @@ class AppController:
             except Exception as exc:
                 logger.exception("Avvio asincrono fallito")
                 if self._is_current(generation):
+                    self._bus.emit("backend_status_changed", StatusEnum.ERROR.value)
                     self._bus.emit(error_event, str(exc))
                     if error_event == "transcriber_error":
                         self._bus.emit("process_stopped", None)

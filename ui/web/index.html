@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="history.css">
   <link rel="stylesheet" href="models.css">
+  <link rel="stylesheet" href="runtime.css">
 </head>
 <body>
 <div class="shell">
@@ -57,10 +58,12 @@
 
         <section class="card status-card">
           <div class="card-head"><div><p class="kicker">SESSIONE</p><h2>Stato live</h2></div><span class="orb" id="live-orb" aria-hidden="true"></span></div>
-          <dl class="metrics">
+          <dl class="metrics session-summary">
             <div><dt>Stato</dt><dd id="live-status">Idle</dd></div>
             <div><dt>Sorgente</dt><dd id="live-source-value">Firefox</dd></div>
+            <div><dt>Dispositivo</dt><dd id="live-device-value">Automatico</dd></div>
             <div><dt>Modello</dt><dd id="live-model-value">—</dd></div>
+            <div><dt>Lingua</dt><dd id="live-language-value">—</dd></div>
           </dl>
           <label for="buffer-progress">Buffer</label>
           <div class="progress" id="buffer-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="buffer-fill"></span></div>
@@ -86,10 +89,15 @@
         </section>
 
         <section class="card status-card">
-          <div class="card-head"><div><p class="kicker">AVANZAMENTO</p><h2>Elaborazione</h2></div><span class="orb" id="file-orb" aria-hidden="true"></span></div>
-          <dl class="metrics"><div><dt>Stato</dt><dd id="file-status">Idle</dd></div><div><dt>Avanzamento</dt><dd id="file-progress-value">0%</dd></div></dl>
+          <div class="card-head"><div><p class="kicker">SESSIONE</p><h2>Elaborazione file</h2></div><span class="orb" id="file-orb" aria-hidden="true"></span></div>
+          <dl class="metrics session-summary">
+            <div><dt>Stato</dt><dd id="file-status">Idle</dd></div>
+            <div><dt>Modello</dt><dd id="file-model-value">—</dd></div>
+            <div><dt>Lingua</dt><dd id="file-language-value">—</dd></div>
+            <div><dt>File</dt><dd id="file-name-value">—</dd></div>
+          </dl>
           <div class="progress" id="file-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="file-fill"></span></div>
-          <p class="help compact-help">Progresso reale emesso dal backend.</p>
+          <p class="help compact-help">Avanzamento: <span id="file-progress-value">0%</span>.</p>
         </section>
       </div>
 
@@ -102,38 +110,22 @@
     <section class="view scroll-view" data-panel="history" hidden>
       <div class="history-grid">
         <section class="card">
-          <div class="card-head">
-            <div><p class="kicker">AUTOSAVE</p><h2>Trascrizioni recenti</h2></div>
-            <div class="toolbar"><button type="button" id="history-refresh">Aggiorna</button></div>
-          </div>
+          <div class="card-head"><div><p class="kicker">AUTOSAVE</p><h2>Trascrizioni recenti</h2></div><div class="toolbar"><button type="button" id="history-refresh">Aggiorna</button></div></div>
           <div id="history-list" class="history-list" aria-live="polite"><p class="empty-state">Nessuna trascrizione salvata.</p></div>
         </section>
-
         <section class="card">
           <div class="card-head">
             <div><p class="kicker">SESSIONE</p><h2 id="history-title">Seleziona una trascrizione</h2></div>
-            <div class="toolbar">
-              <button type="button" id="history-copy" disabled>Copia</button>
-              <button type="button" id="history-export" disabled>Esporta .txt</button>
-              <button type="button" id="history-delete" disabled>Elimina</button>
-            </div>
+            <div class="toolbar"><button type="button" id="history-copy" disabled>Copia</button><button type="button" id="history-export" disabled>Esporta .txt</button><button type="button" id="history-delete" disabled>Elimina</button></div>
           </div>
           <dl class="history-meta" id="history-meta" hidden>
-            <div><dt>Tipo</dt><dd id="history-kind">—</dd></div>
-            <div><dt>Stato</dt><dd id="history-status">—</dd></div>
-            <div><dt>Modello</dt><dd id="history-model">—</dd></div>
-            <div><dt>Lingua</dt><dd id="history-language">—</dd></div>
-            <div><dt>Avvio</dt><dd id="history-started">—</dd></div>
-            <div><dt>Sorgente</dt><dd id="history-source">—</dd></div>
+            <div><dt>Tipo</dt><dd id="history-kind">—</dd></div><div><dt>Stato</dt><dd id="history-status">—</dd></div><div><dt>Modello</dt><dd id="history-model">—</dd></div><div><dt>Lingua</dt><dd id="history-language">—</dd></div><div><dt>Avvio</dt><dd id="history-started">—</dd></div><div><dt>Sorgente</dt><dd id="history-source">—</dd></div>
           </dl>
           <div id="history-transcript" class="transcript history-transcript" tabindex="0"><p class="placeholder">Il contenuto della sessione selezionata apparirà qui.</p></div>
         </section>
       </div>
-
       <section class="card recovery-card">
-        <div class="card-head">
-          <div><p class="kicker">RECOVERY</p><h2>Audio non trascritto</h2></div>
-        </div>
+        <div class="card-head"><div><p class="kicker">RECOVERY</p><h2>Audio non trascritto</h2></div></div>
         <p class="help">I recovery WAV possono essere ritrascritti con il modello e la lingua correnti. Il file originale resta disponibile finché non lo elimini esplicitamente.</p>
         <div id="recovery-list" class="recovery-list"><p class="empty-state">Nessun audio da recuperare.</p></div>
       </section>

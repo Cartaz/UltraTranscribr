@@ -1,0 +1,47 @@
+#notice-text {
+  white-space: pre-line;
+  line-height: 1.45;
+}
+
+#global-orb.working {
+  background: var(--accent);
+  opacity: .72;
+  box-shadow: 0 0 0 1px var(--accent-border), 0 0 7px var(--accent-glow-soft);
+}
+
+#global-orb.error {
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-border), 0 0 10px var(--accent-glow), 0 0 18px var(--accent-glow-soft);
+}
+
+.metrics.session-summary {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 16px;
+  margin-bottom: 13px;
+}
+
+.metrics.session-summary div {
+  min-width: 0;
+  padding: 8px 2px;
+}
+
+.metrics.session-summary div:nth-child(-n + 2) {
+  border-top: 0;
+}
+
+.metrics.session-summary dt,
+.metrics.session-summary dd {
+  min-width: 0;
+}
+
+.metrics.session-summary dd {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-height: 860px) {
+  .metrics.session-summary div {
+    padding: 6px 2px;
+  }
+}

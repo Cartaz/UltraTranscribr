@@ -39,9 +39,9 @@ Legend: `[ ]` planned · `[~]` in progress · `[x]` completed
 - [ ] Optional preload-on-start setting.
 
 ### 2.2 Runtime status
-- [ ] Make backend/model loading states explicit without modal dialogs.
-- [ ] Show current model, language and active input in one compact session summary.
-- [ ] Improve actionable errors for missing audio source, backend startup and model downloads.
+- [x] Make backend/model loading states explicit without modal dialogs.
+- [x] Show current model, language and active input in one compact session summary.
+- [x] Improve actionable errors for missing audio source, backend startup and model downloads.
 
 ## Phase 3 — Generalize audio capture beyond Firefox
 
