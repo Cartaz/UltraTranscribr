@@ -80,11 +80,11 @@ The first multi-session architecture keeps one shared whisper-server while captu
 
 ## Phase 5 — Audio source UX and diagnostics
 
-- [ ] Refresh device/stream lists automatically when opening the Live view.
-- [ ] Add a manual Refresh button.
-- [ ] Show `available`, `playing`, `disconnected` state for selected sources.
-- [ ] Replace generic sink errors with actionable guidance.
-- [ ] Extend diagnostics with active playback streams, sinks, monitor sources and routing state.
+- [x] Refresh device/stream lists automatically when opening the Live view.
+- [x] Add a manual Refresh button.
+- [x] Show `available`, `playing`, `disconnected` state for selected sources.
+- [x] Replace generic sink errors with actionable guidance.
+- [x] Extend diagnostics with active playback streams, sinks, monitor sources and routing state.
 
 ## Phase 6 — Settings cleanup
 
