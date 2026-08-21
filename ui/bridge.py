@@ -49,6 +49,7 @@ class BackendBridge(QObject):
         "model_download_started",
         "model_download_progress",
         "model_status_changed",
+        "playback_stream_status_changed",
     )
 
     def __init__(self, controller: AppController, parent: QObject | None = None) -> None:
@@ -76,7 +77,12 @@ class BackendBridge(QObject):
             encoded = json.dumps(str(payload), ensure_ascii=False)
         self.eventReceived.emit(event, encoded)
 
-    def _run_async(self, name: str, operation: Callable[[], None], error_event: str) -> None:
+    def _run_async(
+        self,
+        name: str,
+        operation: Callable[[], None],
+        error_event: str,
+    ) -> None:
         def worker() -> None:
             try:
                 operation()
@@ -98,6 +104,11 @@ class BackendBridge(QObject):
         except Exception as exc:
             logger.warning("Enumerazione dispositivi fallita: %s", exc)
             devices = []
+        try:
+            playback_streams = self._controller.list_playback_streams()
+        except Exception as exc:
+            logger.warning("Enumerazione stream playback fallita: %s", exc)
+            playback_streams = []
         payload = {
             "app": {
                 "name": AppMeta.NAME,
@@ -109,6 +120,7 @@ class BackendBridge(QObject):
             "models": self._controller.list_models(),
             "audioSources": AudioSource.choices(),
             "devices": devices,
+            "playbackStreams": playback_streams,
             "runtime": {
                 "liveRunning": self._controller.is_running(),
                 "liveDraining": self._controller.is_draining(),
@@ -122,15 +134,33 @@ class BackendBridge(QObject):
 
     @Slot(str, result=str)
     def refreshDevices(self, audio_source: str) -> str:
-        source = audio_source if audio_source in AudioSource.choices() else self._controller.settings.audio_source
+        source = (
+            audio_source
+            if audio_source in AudioSource.choices()
+            else self._controller.settings.audio_source
+        )
+        if source == AudioSource.APPLICATION.value:
+            return "[]"
         try:
             devices = list_available_devices()
         except Exception as exc:
             logger.warning("Enumerazione dispositivi fallita: %s", exc)
             devices = []
-        key = "is_monitor" if source == AudioSource.FIREFOX.value else "is_mic"
+        key = "is_monitor" if source == AudioSource.SYSTEM.value else "is_mic"
         filtered = [device for device in devices if bool(device.get(key))]
         return json.dumps(filtered, ensure_ascii=False, default=str)
+
+    @Slot(result=str)
+    def listPlaybackStreams(self) -> str:
+        try:
+            streams = self._controller.list_playback_streams()
+            return json.dumps(streams, ensure_ascii=False, default=str)
+        except Exception as exc:
+            logger.warning("Enumerazione stream playback fallita: %s", exc)
+            return json.dumps(
+                {"ok": False, "error": str(exc), "streams": []},
+                ensure_ascii=False,
+            )
 
     def _prepare_backend_for_selected_model(self) -> None:
         with self._backend_reload_lock:
@@ -140,31 +170,65 @@ class BackendBridge(QObject):
             self._controller.stop_backend()
 
     @Slot(str, str, str)
-    def startLive(self, audio_source: str, sink_name: str, language: str) -> None:
-        source = audio_source if audio_source in AudioSource.choices() else self._controller.settings.audio_source
-        sink = sink_name.strip() or None
+    def startLive(
+        self,
+        audio_source: str,
+        selected_input: str,
+        language: str,
+    ) -> None:
+        source = (
+            audio_source
+            if audio_source in AudioSource.choices()
+            else self._controller.settings.audio_source
+        )
+        selection = selected_input.strip()
         lang = language.strip() or self._controller.settings.language
+        sink = None
+        stream_id = None
+        if source == AudioSource.APPLICATION.value:
+            if not selection:
+                self._emit_event(
+                    "transcriber_error",
+                    "Seleziona uno stream applicazione prima di avviare la trascrizione",
+                )
+                return
+            try:
+                stream_id = int(selection)
+            except ValueError:
+                self._emit_event(
+                    "transcriber_error",
+                    "Identificatore dello stream applicazione non valido",
+                )
+                return
+        else:
+            sink = selection or None
+
         def operation() -> None:
             self._prepare_backend_for_selected_model()
             self._controller.start_transcription(
                 sink_name=sink,
                 audio_source=source,
                 language=lang,
+                stream_id=stream_id,
             )
 
+        self._run_async("start-live", operation, "transcriber_error")
+
+    @Slot()
+    def stopLive(self) -> None:
         self._run_async(
-            "start-live",
-            operation,
+            "stop-live",
+            self._controller.stop_transcription,
             "transcriber_error",
         )
 
     @Slot()
-    def stopLive(self) -> None:
-        self._run_async("stop-live", self._controller.stop_transcription, "transcriber_error")
-
-    @Slot()
     def stopListening(self) -> None:
-        self._run_async("stop-listening", self._controller.stop_listening, "transcriber_error")
+        self._run_async(
+            "stop-listening",
+            self._controller.stop_listening,
+            "transcriber_error",
+        )
 
     @Slot(result=str)
     def chooseAudioFile(self) -> str:
@@ -187,10 +251,18 @@ class BackendBridge(QObject):
     ) -> None:
         path = Path(file_path).expanduser()
         if not path.is_file():
-            self._emit_event("file_transcriber_error", "Seleziona un file esistente")
+            self._emit_event(
+                "file_transcriber_error",
+                "Seleziona un file esistente",
+            )
             return
         lang = language.strip() or self._controller.settings.language
-        model = model_size if model_size in ModelSize.choices() else self._controller.settings.model_size
+        model = (
+            model_size
+            if model_size in ModelSize.choices()
+            else self._controller.settings.model_size
+        )
+
         def operation() -> None:
             self._prepare_backend_for_selected_model()
             self._controller.start_file_transcription(
@@ -201,19 +273,23 @@ class BackendBridge(QObject):
                 isolate_vocals_flag=bool(isolate_vocals and song_mode),
             )
 
-        self._run_async(
-            "start-file",
-            operation,
-            "file_transcriber_error",
-        )
+        self._run_async("start-file", operation, "file_transcriber_error")
 
     @Slot()
     def stopFile(self) -> None:
-        self._run_async("stop-file", self._controller.stop_file_transcription, "file_transcriber_error")
+        self._run_async(
+            "stop-file",
+            self._controller.stop_file_transcription,
+            "file_transcriber_error",
+        )
 
     @Slot(result=str)
     def listModels(self) -> str:
-        return json.dumps(self._controller.list_models(), ensure_ascii=False, default=str)
+        return json.dumps(
+            self._controller.list_models(),
+            ensure_ascii=False,
+            default=str,
+        )
 
     @Slot(str, result=str)
     def downloadModel(self, model_size: str) -> str:
@@ -223,7 +299,10 @@ class BackendBridge(QObject):
             or self._controller.is_file_transcribing()
         ):
             return json.dumps(
-                {"ok": False, "error": "Ferma la trascrizione attiva prima di scaricare un modello"},
+                {
+                    "ok": False,
+                    "error": "Ferma la trascrizione attiva prima di scaricare un modello",
+                },
                 ensure_ascii=False,
             )
         self._run_async(
@@ -241,7 +320,10 @@ class BackendBridge(QObject):
             or self._controller.is_file_transcribing()
         ):
             return json.dumps(
-                {"ok": False, "error": "Ferma la trascrizione attiva prima di eliminare un modello"},
+                {
+                    "ok": False,
+                    "error": "Ferma la trascrizione attiva prima di eliminare un modello",
+                },
                 ensure_ascii=False,
             )
         self._run_async(
@@ -280,20 +362,38 @@ class BackendBridge(QObject):
                 "Testo (*.txt)",
             )
             if not target:
-                return json.dumps({"ok": False, "cancelled": True}, ensure_ascii=False)
-            exported = self._controller.export_history_session(session_id, target)
-            return json.dumps({"ok": True, "path": exported}, ensure_ascii=False)
+                return json.dumps(
+                    {"ok": False, "cancelled": True},
+                    ensure_ascii=False,
+                )
+            exported = self._controller.export_history_session(
+                session_id,
+                target,
+            )
+            return json.dumps(
+                {"ok": True, "path": exported},
+                ensure_ascii=False,
+            )
         except Exception as exc:
             logger.warning("Export cronologia fallito: %s", exc)
-            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+            return json.dumps(
+                {"ok": False, "error": str(exc)},
+                ensure_ascii=False,
+            )
 
     @Slot(str, result=str)
     def deleteHistorySession(self, session_id: str) -> str:
         try:
             deleted = self._controller.delete_history_session(session_id)
-            return json.dumps({"ok": True, "deleted": deleted}, ensure_ascii=False)
+            return json.dumps(
+                {"ok": True, "deleted": deleted},
+                ensure_ascii=False,
+            )
         except Exception as exc:
-            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+            return json.dumps(
+                {"ok": False, "error": str(exc)},
+                ensure_ascii=False,
+            )
 
     @Slot(result=str)
     def listRecoveryAudio(self) -> str:
@@ -310,15 +410,24 @@ class BackendBridge(QObject):
             self._controller.start_recovery_transcription(recovery_path)
             return json.dumps({"ok": True}, ensure_ascii=False)
         except Exception as exc:
-            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+            return json.dumps(
+                {"ok": False, "error": str(exc)},
+                ensure_ascii=False,
+            )
 
     @Slot(str, result=str)
     def deleteRecovery(self, recovery_path: str) -> str:
         try:
             deleted = self._controller.delete_recovery_audio(recovery_path)
-            return json.dumps({"ok": True, "deleted": deleted}, ensure_ascii=False)
+            return json.dumps(
+                {"ok": True, "deleted": deleted},
+                ensure_ascii=False,
+            )
         except Exception as exc:
-            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+            return json.dumps(
+                {"ok": False, "error": str(exc)},
+                ensure_ascii=False,
+            )
 
     @Slot(str, result=str)
     def applySettings(self, payload_json: str) -> str:
@@ -327,7 +436,11 @@ class BackendBridge(QObject):
             if not isinstance(payload, dict):
                 raise ValueError("payload impostazioni non valido")
             allowed = set(self._controller.settings.__dataclass_fields__)
-            overrides = {key: value for key, value in payload.items() if key in allowed}
+            overrides = {
+                key: value
+                for key, value in payload.items()
+                if key in allowed
+            }
             current_before = self._controller.settings
             old_width = current_before.window_width
             old_height = current_before.window_height
@@ -350,12 +463,24 @@ class BackendBridge(QObject):
 
             self._controller.update_settings(**overrides)
             current = self._controller.settings
-            if current.window_width != old_width or current.window_height != old_height:
-                self.windowResizeRequested.emit(current.window_width, current.window_height)
-            return json.dumps({"ok": True, "settings": asdict(current)}, ensure_ascii=False)
+            if (
+                current.window_width != old_width
+                or current.window_height != old_height
+            ):
+                self.windowResizeRequested.emit(
+                    current.window_width,
+                    current.window_height,
+                )
+            return json.dumps(
+                {"ok": True, "settings": asdict(current)},
+                ensure_ascii=False,
+            )
         except Exception as exc:
             logger.warning("Impostazioni rifiutate: %s", exc)
-            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+            return json.dumps(
+                {"ok": False, "error": str(exc)},
+                ensure_ascii=False,
+            )
 
     @Slot(int, result=str)
     def readLogTail(self, line_count: int = 200) -> str:
@@ -364,9 +489,32 @@ class BackendBridge(QObject):
     @Slot()
     def runAudioDiagnostics(self) -> None:
         def operation() -> None:
-            self._emit_event("audio_diagnostics", debug_dump())
+            report = debug_dump()
+            try:
+                streams = self._controller.list_playback_streams()
+            except Exception as exc:
+                streams = []
+                report += f"\n\n=== playback streams ===\n  Errore: {exc}"
+            else:
+                report += "\n\n=== playback streams ==="
+                if not streams:
+                    report += "\n  nessuno stream attivo"
+                for stream in streams:
+                    report += (
+                        f"\n  [#{stream.get('id')}] "
+                        f"{stream.get('display_name') or 'stream'}"
+                        f"\n      pid={stream.get('process_id') or '-'} "
+                        f"binary={stream.get('process_binary') or '-'} "
+                        f"sink={stream.get('sink_name') or '-'} "
+                        f"state={stream.get('state') or '-'}"
+                    )
+            self._emit_event("audio_diagnostics", report)
 
-        self._run_async("audio-diagnostics", operation, "audio_diagnostics_error")
+        self._run_async(
+            "audio-diagnostics",
+            operation,
+            "audio_diagnostics_error",
+        )
 
     def push_log_record(self, record: logging.LogRecord) -> None:
         try:
@@ -378,7 +526,11 @@ class BackendBridge(QObject):
     @staticmethod
     def _read_log_tail(line_count: int) -> str:
         try:
-            with AppMeta.LOG_PATH.open("r", encoding="utf-8", errors="replace") as handle:
+            with AppMeta.LOG_PATH.open(
+                "r",
+                encoding="utf-8",
+                errors="replace",
+            ) as handle:
                 lines = handle.readlines()
             return "".join(lines[-line_count:])
         except OSError:
