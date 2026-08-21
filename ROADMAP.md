@@ -88,11 +88,11 @@ The first multi-session architecture keeps one shared whisper-server while captu
 
 ## Phase 6 — Settings cleanup
 
-- [ ] Split normal settings from Advanced settings.
-- [ ] Keep model, language, source and VAD in the normal section.
-- [ ] Move beam size, chunk size, forced sink, server port, GPU layers and compute type to Advanced.
-- [ ] Consider removing manual window width/height fields and persist the last window geometry automatically, always respecting the 1200×800 minimum.
-- [ ] Add reset-to-defaults per section rather than one global destructive reset.
+- [x] Split normal settings from Advanced settings.
+- [x] Keep model, language, source and VAD in the normal section.
+- [x] Move beam size, chunk size, forced sink, server port, GPU layers and compute type to Advanced.
+- [x] Remove manual window width/height fields and persist the last window geometry automatically, always respecting the 1200×800 minimum.
+- [x] Add reset-to-defaults per section rather than one global destructive reset.
 
 ## Phase 7 — Test hardening
 
