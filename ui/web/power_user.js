@@ -310,6 +310,13 @@ clearHistorySelection = function() {
   if ($("history-export-vtt")) $("history-export-vtt").disabled = true;
 };
 
+const powerLegacyRefreshHistoryList = refreshHistoryList;
+refreshHistoryList = function() {
+  const query = $("history-search")?.value?.trim() || "";
+  if (query) powerSearchHistory();
+  else powerLegacyRefreshHistoryList();
+};
+
 const powerLegacyHydrate = hydrate;
 hydrate = function(bootstrap) {
   powerLegacyHydrate(bootstrap);
