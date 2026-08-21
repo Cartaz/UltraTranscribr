@@ -65,18 +65,18 @@ Technical note: PipeWire exposes playback streams as nodes and its PulseAudio co
 
 ## Phase 4 — Multiple simultaneous transcription sessions
 
-This phase intentionally comes after per-stream capture because the current controller owns one Live worker, one shared Whisper backend and one File worker.
+The first multi-session architecture keeps one shared whisper-server while capture, buffering, routing, persistence and UI state are isolated per Live session.
 
-- [ ] Introduce a runtime `TranscriptionSession` model with unique session IDs.
-- [ ] Replace singleton Live state in `AppController` with a session manager.
-- [ ] Give each live session its own audio capture, buffer, transcript journal and status.
-- [ ] Define backend scheduling policy for multiple sessions.
-- [ ] First implementation: serialize inference requests through one whisper-server while capturing all streams concurrently.
-- [ ] Measure queue latency and expose it in the UI.
+- [x] Introduce a runtime `TranscriptionSession` model with unique session IDs.
+- [x] Replace singleton Live state in `AppController` with a session manager.
+- [x] Give each live session its own audio capture, buffer, transcript journal and status.
+- [x] Define backend scheduling policy for multiple sessions.
+- [x] First implementation: serialize inference requests through one whisper-server while capturing all streams concurrently.
+- [x] Measure queue latency and expose it in the UI.
 - [ ] Optional later experiment: multiple whisper-server instances only where hardware/RAM permits.
-- [ ] UI for two or more independent live transcript cards.
-- [ ] Stop/drain/recover each session independently.
-- [ ] Stress tests for two simultaneous audio sources and shutdown during queued inference.
+- [x] UI for two or more independent live transcript cards.
+- [x] Stop/drain/recover each session independently.
+- [x] Stress tests for two simultaneous audio sources and shutdown during queued inference.
 
 ## Phase 5 — Audio source UX and diagnostics
 
