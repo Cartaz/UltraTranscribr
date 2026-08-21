@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
@@ -47,7 +47,7 @@ class MeetingRuntime:
     diarization_progress: int = 0
     transcriber: Optional[FileTranscriberThread] = None
     processing_thread: Optional[threading.Thread] = None
-    stop_event: threading.Event = threading.Event()
+    stop_event: threading.Event = field(default_factory=threading.Event)
     error: str = ""
 
 
@@ -121,7 +121,6 @@ class MeetingManager:
             num_speakers=max(0, int(num_speakers)),
             recorder=recorder,
             capture=capture,
-            stop_event=threading.Event(),
         )
         with self._lock:
             self._runtime = runtime
