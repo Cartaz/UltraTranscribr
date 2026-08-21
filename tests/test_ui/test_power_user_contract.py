@@ -38,9 +38,11 @@ def test_desktop_shell_captures_local_file_drops() -> None:
     assert "self._bridge.emitDroppedFiles" in source
 
 
-def test_desktop_shell_closes_power_user_coordinator_once_per_shutdown_path() -> None:
+def test_desktop_shell_closes_power_user_coordinator_before_controller_shutdown() -> None:
     source = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
-    assert source.count("self._bridge.closePowerUser()") == 2
+    assert "def _shutdown_runtime" in source
+    assert source.count("self._bridge.closePowerUser()") == 1
+    assert "finally:\n            self._controller.shutdown()" in source
     assert "self._bridge.cancelFileQueue()" in source
     assert "self._bridge.stopFile()" not in source
 
