@@ -21,6 +21,12 @@ class Phase10BackendBridge(MultiSessionBackendBridge):
             ensure_ascii=False,
         )
 
+    def _batch_busy(self) -> bool:
+        return any(
+            str(job.get("status")) in {"queued", "starting", "running"}
+            for job in self._file_batch.list_jobs()
+        )
+
     def _start_scoped_live(
         self,
         audio_source: str,
@@ -55,8 +61,6 @@ class Phase10BackendBridge(MultiSessionBackendBridge):
         else:
             sink = selection or None
 
-        # The checkbox is a per-session decision. Persisted/global settings can
-        # never silently enable recording for a future Live session.
         should_record = bool(record_audio and source == AudioSource.MICROPHONE.value)
         session_settings = self._controller.settings.with_(
             language=lang,
@@ -92,6 +96,15 @@ class Phase10BackendBridge(MultiSessionBackendBridge):
         record_audio: bool,
     ) -> None:
         self._start_scoped_live(audio_source, selected_input, language, record_audio)
+
+    @Slot(str, str, int, result=str)
+    def startMeeting(self, microphone: str, language: str, num_speakers: int) -> str:
+        if self._batch_busy():
+            return json.dumps(
+                {"ok": False, "error": "Annulla o completa la coda File prima di avviare una riunione"},
+                ensure_ascii=False,
+            )
+        return super().startMeeting(microphone, language, num_speakers)
 
     @Slot(str, str, str, bool, bool)
     def startFile(
