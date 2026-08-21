@@ -12,12 +12,13 @@ import os
 import tempfile
 import threading
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from config.constants import AppMeta
+from core.transcript_export import normalize_segments, render_export
 
 logger = logging.getLogger(__name__)
 
@@ -51,13 +52,19 @@ class TranscriptSession:
     source_path: str = ""
     ended_at: Optional[str] = None
     text: str = ""
+    segments: list[dict[str, Any]] = field(default_factory=list)
+    derived_outputs: dict[str, str] = field(default_factory=dict)
 
     def summary(self) -> dict[str, Any]:
         data = asdict(self)
         text = data.pop("text", "")
+        segments = data.pop("segments", [])
+        derived = data.pop("derived_outputs", {})
         compact = " ".join(text.split())
         data["text_preview"] = compact[:220]
         data["text_length"] = len(text)
+        data["segment_count"] = len(segments)
+        data["derived_profiles"] = sorted(derived)
         return data
 
 
@@ -119,6 +126,26 @@ class TranscriptHistoryStore:
             session.updated_at = _utc_now()
             self._write_session(session)
 
+    def append_segments(self, session_id: str, segments: list[dict[str, Any]]) -> None:
+        additions = normalize_segments(segments)
+        if not additions:
+            return
+        with self._lock:
+            session = self._read_session_required(session_id)
+            session.segments = normalize_segments([*session.segments, *additions])
+            session.updated_at = _utc_now()
+            self._write_session(session)
+
+    def save_derived_output(self, session_id: str, profile: str, text: str) -> None:
+        key = str(profile or "").strip().lower()
+        if not key:
+            raise ValueError("profilo post-processing non valido")
+        with self._lock:
+            session = self._read_session_required(session_id)
+            session.derived_outputs[key] = str(text or "")
+            session.updated_at = _utc_now()
+            self._write_session(session)
+
     def set_status(self, session_id: str, status: str, *, terminal: bool = False) -> None:
         with self._lock:
             session = self._read_session_required(session_id)
@@ -135,7 +162,15 @@ class TranscriptHistoryStore:
             return asdict(session) if session is not None else None
 
     def list_recent(self, limit: int = 50) -> list[dict[str, Any]]:
+        return self._list_matching("", limit)
+
+    def search(self, query: str, limit: int = 50) -> list[dict[str, Any]]:
+        """Case-insensitive AND search over raw transcript and metadata."""
+        return self._list_matching(str(query or ""), limit)
+
+    def _list_matching(self, query: str, limit: int) -> list[dict[str, Any]]:
         wanted = max(1, min(int(limit), 500))
+        terms = [term.casefold() for term in str(query or "").split() if term.strip()]
         with self._lock:
             try:
                 paths = sorted(
@@ -152,6 +187,20 @@ class TranscriptHistoryStore:
                 except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
                     logger.warning("Cronologia illeggibile ignorata (%s): %s", path, exc)
                     continue
+                if terms:
+                    haystack = "\n".join(
+                        (
+                            session.text,
+                            session.source_path,
+                            session.source,
+                            session.model,
+                            session.language,
+                            session.kind,
+                            session.status,
+                        )
+                    ).casefold()
+                    if not all(term in haystack for term in terms):
+                        continue
                 sessions.append(session.summary())
                 if len(sessions) >= wanted:
                     break
@@ -166,12 +215,37 @@ class TranscriptHistoryStore:
             return True
 
     def export_text(self, session_id: str, target_path: Path | str) -> Path:
-        """Export only the transcript text, never rewriting the history record."""
+        """Backward-compatible raw text export."""
+        return self.export_session(session_id, target_path, format_name="txt")
+
+    def export_session(
+        self,
+        session_id: str,
+        target_path: Path | str,
+        *,
+        format_name: str = "txt",
+        profile: str = "raw",
+    ) -> Path:
+        """Export raw/derived text or persisted timestamp segments atomically."""
+        fmt = str(format_name or "txt").strip().lower().lstrip(".")
+        if fmt not in {"txt", "srt", "vtt"}:
+            raise ValueError(f"formato export non supportato: {format_name}")
         with self._lock:
             session = self._read_session_required(session_id)
+            selected_text = session.text
+            profile_key = str(profile or "raw").strip().lower()
+            if profile_key != "raw":
+                if profile_key not in session.derived_outputs:
+                    raise KeyError(f"profilo non generato: {profile_key}")
+                selected_text = session.derived_outputs[profile_key]
+            content = render_export(
+                text=selected_text,
+                segments=session.segments,
+                format_name=fmt,
+            )
             target = Path(target_path).expanduser()
-            if target.suffix.lower() != ".txt":
-                target = target.with_suffix(".txt")
+            if target.suffix.lower() != f".{fmt}":
+                target = target.with_suffix(f".{fmt}")
             if not target.parent.is_dir():
                 raise FileNotFoundError(f"directory di destinazione non trovata: {target.parent}")
             fd, tmp_name = tempfile.mkstemp(
@@ -179,9 +253,7 @@ class TranscriptHistoryStore:
             )
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    handle.write(session.text)
-                    if session.text and not session.text.endswith("\n"):
-                        handle.write("\n")
+                    handle.write(content)
                     handle.flush()
                     os.fsync(handle.fileno())
                 os.replace(tmp_name, target)
@@ -312,6 +384,8 @@ class TranscriptHistoryStore:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             raise ValueError("record cronologia non valido")
+        # Older records predate timestamp/derived-output fields; dataclass
+        # defaults keep them readable without migrations.
         return TranscriptSession(**data)
 
     def _write_session(self, session: TranscriptSession) -> None:
