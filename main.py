@@ -24,6 +24,7 @@ from config.constants import AppMeta
 from config.settings import Settings
 from core.app_controller import AppController
 from core.exceptions import GPUNotAvailableError
+from core.file_segment_journal import FileSegmentJournal
 from ui.main_window import MainWindow
 from ui.tray_icon import TrayIcon
 
@@ -59,9 +60,13 @@ def main() -> None:
     logger.info("Avvio UltraTranscribr (SYCL)...")
 
     settings = Settings.load()
-    logger.info("Impostazioni caricate — model=%s, device=%s, source=%s, lang=%s",
-                settings.model_size, settings.device,
-                settings.audio_source, settings.language)
+    logger.info(
+        "Impostazioni caricate — model=%s, device=%s, source=%s, lang=%s",
+        settings.model_size,
+        settings.device,
+        settings.audio_source,
+        settings.language,
+    )
 
     app = QApplication(sys.argv)
     app.setApplicationName(AppMeta.NAME)
@@ -82,6 +87,9 @@ def main() -> None:
         )
         sys.exit(1)
 
+    # FileTranscriber emette segmenti temporizzati separatamente dal testo.
+    # Il journal li lega alla sessione File già posseduta dal controller.
+    segment_journal = FileSegmentJournal(controller)
     window = MainWindow(controller=controller)
 
     # Icona della finestra e del tray
@@ -113,7 +121,7 @@ def main() -> None:
     logger.info("UltraTranscribr pronto (SYCL GPU)")
     exit_code = app.exec()
 
-    # Arresto pulito del backend alla chiusura
+    segment_journal.close()
     controller.stop_backend()
     sys.exit(exit_code)
 

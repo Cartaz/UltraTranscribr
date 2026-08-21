@@ -20,4 +20,5 @@ jobs:
       - run: node --check ui/web/app.js
       - run: node --check ui/web/multi_live.js
       - run: node --check ui/web/settings_cleanup.js
+      - run: node --check ui/web/power_user.js
       - run: pytest -q

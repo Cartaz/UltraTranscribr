@@ -8,10 +8,14 @@ Il progetto è pensato principalmente per **CachyOS / Arch Linux** con GPU Intel
 
 - Trascrizione Live da audio di sistema, microfono o singolo stream/applicazione.
 - Più sessioni Live indipendenti con inferenza serializzata su un singolo `whisper-server`.
-- Trascrizione di file audio/video con avanzamento reale e cancellazione.
+- Trascrizione batch di più file audio/video con coda FIFO, avanzamento reale e cancellazione.
+- Selezione multipla e drag-and-drop di file locali.
 - Modalità Musica opzionale con Demucs per isolamento vocale.
 - Modelli UI supportati: `large-v3`, `large-v3-turbo`, `medium`.
 - Cronologia persistente delle trascrizioni e recovery audio per segmenti Live non trascritti.
+- Timestamp persistenti per le trascrizioni File ed export `.txt`, `.srt` e `.vtt` quando disponibili.
+- Ricerca full-text nella cronologia.
+- Profili di post-processing opzionali salvati separatamente dal transcript originale.
 - Routing PipeWire/PulseAudio reversibile per la cattura per-applicazione.
 - UI Dark Neumorphism con backend Python locale via QWebChannel.
 
@@ -150,13 +154,44 @@ La sezione Live permette di creare sessioni indipendenti scegliendo una sorgente
 
 Per ogni sessione sono disponibili Stop e Drain. Drain interrompe la cattura ma lascia terminare la trascrizione dell'audio già presente nel buffer.
 
-### File
+### File e batch
 
-La sezione File accetta un file locale, lo normalizza in PCM16 mono 16 kHz e lo trascrive progressivamente in segmenti. La cancellazione interrompe anche una conversione `ffmpeg` eventualmente ancora in corso.
+La sezione File può accettare uno o più file locali. Ogni elemento viene normalizzato in PCM16 mono 16 kHz e trascritto progressivamente.
 
-### Cronologia e recovery
+Con più file:
 
-Le trascrizioni vengono persistite progressivamente. Se un segmento Live non può essere trascritto dopo i retry previsti, l'audio viene conservato come WAV di recovery e può essere ritrascritto dalla UI.
+- i file vengono inseriti in una coda FIFO;
+- viene eseguito un solo worker File alla volta;
+- ogni file mantiene una propria sessione nella cronologia;
+- **Ferma** interrompe il file corrente e lascia proseguire la coda con il successivo;
+- **Annulla coda** interrompe il corrente e marca come annullati anche i file ancora pendenti;
+- i job completati possono essere rimossi dalla visualizzazione senza cancellare la relativa cronologia.
+
+È possibile aggiungere file con **Sfoglia multipli** oppure trascinando file locali nella finestra di UltraTranscribr.
+
+### Timestamp ed export
+
+Per le nuove trascrizioni File, UltraTranscribr conserva i segmenti temporizzati restituiti da whisper.cpp insieme al transcript raw.
+
+Dalla Cronologia sono disponibili:
+
+- `.txt` per il testo;
+- `.srt` quando esistono segmenti temporizzati;
+- `.vtt` quando esistono segmenti temporizzati.
+
+Le vecchie sessioni salvate prima dell'introduzione dei timestamp restano leggibili; semplicemente non espongono gli export sottotitoli se non possiedono segmenti temporizzati.
+
+### Cronologia, ricerca e recovery
+
+Le trascrizioni vengono persistite progressivamente. La Cronologia supporta ricerca case-insensitive con semantica AND su transcript e metadati utili, inclusa la sorgente/file.
+
+Se un segmento Live non può essere trascritto dopo i retry previsti, l'audio viene conservato come WAV di recovery e può essere ritrascritto dalla UI.
+
+### Post-processing
+
+La Cronologia può generare viste derivate del transcript, ad esempio una normalizzazione leggera o una suddivisione in paragrafi.
+
+Il transcript raw rimane sempre la fonte di verità: i risultati del post-processing vengono salvati separatamente in `derived_outputs` e non sovrascrivono mai il testo originale.
 
 ## Impostazioni
 
@@ -261,6 +296,7 @@ bash -n install.sh
 node --check ui/web/app.js
 node --check ui/web/multi_live.js
 node --check ui/web/settings_cleanup.js
+node --check ui/web/power_user.js
 ```
 
 La CI GitHub esegue questi controlli ad ogni pull request.
