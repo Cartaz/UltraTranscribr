@@ -58,7 +58,7 @@ class TestAppController:
                 controller._resolve_sink(None, "microphone")
 
     def test_application_source_requires_selected_stream(self, controller: AppController) -> None:
-        with pytest.raises(SinkNotFoundError, match="selezionare uno stream"):
+        with pytest.raises(SinkNotFoundError, match="Seleziona uno stream"):
             controller.start_transcription(audio_source="application")
 
     def test_list_playback_streams_delegates_to_router(self, controller: AppController) -> None:
