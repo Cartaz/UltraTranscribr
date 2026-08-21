@@ -375,5 +375,128 @@ bind = function() {
   if ($("live-drain-all")) $("live-drain-all").onclick = () => call("drainAllLive");
 };
 
+// ---------------------------------------------------------------------------
+// Phase 5 — source availability UX and deterministic refresh on Live entry.
+// ---------------------------------------------------------------------------
+const sourceUxStyle = document.createElement("style");
+sourceUxStyle.textContent = `
+  .source-health{display:flex;align-items:center;gap:9px;margin:10px 0 0;padding:9px 11px;border-radius:var(--radius-md);background:var(--surface);box-shadow:var(--shadow-inset-small);color:var(--text-secondary);font-size:12px}
+  .source-health strong{color:var(--text-primary);font-size:12px}.source-health small{display:block;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:460px}
+  .source-health.disconnected .orb{background:var(--text-muted);box-shadow:var(--shadow-inset-small)}
+  .source-health.available .orb{background:var(--accent);opacity:.7;box-shadow:0 0 0 1px var(--accent-border),0 0 7px var(--accent-glow-soft)}
+  .source-health.playing .orb{background:var(--accent);box-shadow:0 0 0 1px var(--accent-border),0 0 9px var(--accent-glow)}
+  #source-refresh-all{padding:8px 10px;white-space:nowrap}
+`;
+document.head.append(sourceUxStyle);
+
+const sourceUxInputCard = multiLivePanel?.querySelector(".input-card");
+const sourceUxHead = sourceUxInputCard?.querySelector(".card-head");
+if (sourceUxHead && !$("source-refresh-all")) {
+  const refreshButton = document.createElement("button");
+  refreshButton.id = "source-refresh-all";
+  refreshButton.type = "button";
+  refreshButton.className = "button";
+  refreshButton.textContent = "Aggiorna sorgenti";
+  sourceUxHead.append(refreshButton);
+}
+if (sourceUxInputCard && !$("source-health")) {
+  const health = document.createElement("div");
+  health.id = "source-health";
+  health.className = "source-health disconnected";
+  health.setAttribute("role", "status");
+  health.setAttribute("aria-live", "polite");
+  health.innerHTML = '<span class="orb" aria-hidden="true"></span><div><strong id="source-health-label">Verifica sorgente</strong><small id="source-health-detail">Aggiorna per controllare la disponibilità.</small></div>';
+  const actions = sourceUxInputCard.querySelector(".actions");
+  sourceUxInputCard.insertBefore(health, actions || null);
+}
+
+function renderSourceHealth(payload) {
+  const health = $("source-health");
+  if (!health) return;
+  const value = payload && typeof payload === "object" ? payload : {};
+  const status = ["available", "playing", "disconnected"].includes(value.status)
+    ? value.status : "disconnected";
+  health.classList.remove("available", "playing", "disconnected");
+  health.classList.add(status);
+  $("source-health-label").textContent = value.label || (status === "disconnected" ? "Non disponibile" : "Disponibile");
+  $("source-health-detail").textContent = value.detail || sourceLabel(state.source);
+}
+
+function probeSelectedAudioSource() {
+  if (!backend) return;
+  call("probeAudioSource", [state.source, selectedInputValue()], result => renderSourceHealth(json(result)));
+}
+
+refreshStreams = function() {
+  call("listPlaybackStreams", [], result => {
+    const response = json(result);
+    if (Array.isArray(response)) renderPlaybackStreams(response);
+    else {
+      renderPlaybackStreams(response?.streams || []);
+      if (response && response.ok === false) showError(response.error, "stream");
+    }
+    probeSelectedAudioSource();
+  });
+};
+
+refreshDevices = function() {
+  if (state.source === "application") {
+    refreshStreams();
+    return;
+  }
+  call("refreshDevices", [state.source], result => {
+    devices(state.source, json(result));
+    probeSelectedAudioSource();
+  });
+};
+
+function refreshAllAudioSources() {
+  refreshDevices();
+}
+
+const sourceUxLegacySwitchView = switchView;
+switchView = function(name) {
+  sourceUxLegacySwitchView(name);
+  if (name === "live") refreshAllAudioSources();
+};
+
+const sourceUxLegacySourceUI = sourceUI;
+sourceUI = function() {
+  sourceUxLegacySourceUI();
+  if (backend) probeSelectedAudioSource();
+};
+
+const sourceUxLegacyStreamMeta = updateSelectedStreamMeta;
+updateSelectedStreamMeta = function() {
+  sourceUxLegacyStreamMeta();
+  probeSelectedAudioSource();
+};
+
+const sourceUxLegacyHydrate = hydrate;
+hydrate = function(bootstrap) {
+  sourceUxLegacyHydrate(bootstrap);
+  refreshAllAudioSources();
+};
+
+const sourceUxLegacyEvent = event;
+event = function(name, payload) {
+  sourceUxLegacyEvent(name, payload);
+  if (name === "live_session_route_status" || name === "live_session_updated" || name === "live_session_removed") {
+    probeSelectedAudioSource();
+  }
+};
+
+const sourceUxLegacyBind = bind;
+bind = function() {
+  sourceUxLegacyBind();
+  if ($("source-refresh-all")) $("source-refresh-all").onclick = refreshAllAudioSources;
+  if ($("live-device")) $("live-device").onchange = () => {
+    updateLiveSummary();
+    probeSelectedAudioSource();
+  };
+  if ($("live-stream")) $("live-stream").onchange = updateSelectedStreamMeta;
+  if ($("stream-refresh")) $("stream-refresh").onclick = refreshStreams;
+};
+
 multiLiveRender();
 multiLiveSyncAggregate();

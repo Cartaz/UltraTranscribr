@@ -7,6 +7,8 @@ import logging
 from PySide6.QtCore import Slot
 
 from config.settings import AudioSource
+from core.audio_source_health import evaluate_audio_source_health
+from core.sink_finder import debug_dump, find_source, list_available_devices
 from ui.bridge import BackendBridge
 
 logger = logging.getLogger(__name__)
@@ -47,6 +49,45 @@ class MultiSessionBackendBridge(BackendBridge):
             ensure_ascii=False,
             default=str,
         )
+
+    @Slot(str, str, result=str)
+    def probeAudioSource(self, audio_source: str, selected_input: str) -> str:
+        """Return actionable availability for the currently selected Live source."""
+        source = (
+            audio_source
+            if audio_source in AudioSource.choices()
+            else self._controller.settings.audio_source
+        )
+        selection = str(selected_input or "").strip()
+        try:
+            devices = []
+            streams = []
+            automatic = None
+            if source == AudioSource.APPLICATION.value:
+                streams = self._controller.list_playback_streams()
+            else:
+                devices = list_available_devices()
+                if not selection:
+                    automatic = find_source(
+                        self._controller.settings,
+                        audio_source=source,
+                    )
+            status = evaluate_audio_source_health(
+                source=source,
+                selection=selection,
+                devices=devices,
+                streams=streams,
+                automatic_source=automatic,
+            )
+        except Exception as exc:
+            logger.warning("Probe sorgente audio fallito: %s", exc)
+            status = {
+                "source": source,
+                "status": "disconnected",
+                "label": "Non disponibile",
+                "detail": str(exc),
+            }
+        return json.dumps(status, ensure_ascii=False, default=str)
 
     @Slot(str, str, str)
     def startLive(
@@ -135,6 +176,55 @@ class MultiSessionBackendBridge(BackendBridge):
             "drain-all-live",
             lambda: self._controller.stop_all_live_sessions(drain=True),
             "live_session_action_error",
+        )
+
+    @Slot()
+    def runAudioDiagnostics(self) -> None:
+        """Include devices, streams and active per-session routing in one report."""
+
+        def operation() -> None:
+            report = debug_dump()
+            report += "\n\n=== playback streams ==="
+            try:
+                streams = self._controller.list_playback_streams()
+            except Exception as exc:
+                report += f"\n  Errore: {exc}"
+            else:
+                if not streams:
+                    report += "\n  nessuno stream attivo"
+                for stream in streams:
+                    report += (
+                        f"\n  [#{stream.get('id')}] "
+                        f"{stream.get('display_name') or 'stream'}"
+                        f"\n      pid={stream.get('process_id') or '-'} "
+                        f"binary={stream.get('process_binary') or '-'} "
+                        f"sink={stream.get('sink_name') or '-'} "
+                        f"state={stream.get('state') or '-'}"
+                    )
+
+            report += "\n\n=== UltraTranscribr live routing ==="
+            sessions = self._controller.list_live_sessions(include_text=False)
+            if not sessions:
+                report += "\n  nessuna sessione Live"
+            for session in sessions:
+                if session.get("source") == AudioSource.APPLICATION.value:
+                    routing = "restored" if session.get("terminal") else "isolated"
+                else:
+                    routing = "direct"
+                report += (
+                    f"\n  [{session.get('id')}] source={session.get('source')} "
+                    f"status={session.get('status')} routing={routing}"
+                    f"\n      input={session.get('source_path') or '-'} "
+                    f"capture={session.get('sink') or '-'} "
+                    f"buffer={session.get('buffer_level', 0)}% "
+                    f"queue_wait={session.get('queue_wait_ms', 0)}ms"
+                )
+            self._emit_event("audio_diagnostics", report)
+
+        self._run_async(
+            "audio-diagnostics",
+            operation,
+            "audio_diagnostics_error",
         )
 
     # Legacy shell/tray operations now act on all Live sessions.
