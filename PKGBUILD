@@ -6,7 +6,8 @@ pkgdesc="Trascrizione audio con whisper.cpp SYCL su GPU Intel"
 arch=('x86_64')
 url="https://github.com/Cartaz/UltraTranscribr"
 license=('MIT')
-depends=('python' 'python-pyside6' 'python-numpy' 'python-sounddevice' 'python-soundfile'
+depends=('python' 'python-pyside6' 'qt6-webengine' 'qt6-webchannel'
+         'python-numpy' 'python-sounddevice' 'python-soundfile'
          'python-pulsectl' 'python-huggingface-hub' 'ffmpeg' 'intel-oneapi-basekit'
          'intel-compute-runtime' 'level-zero')
 makedepends=('cmake' 'git')
