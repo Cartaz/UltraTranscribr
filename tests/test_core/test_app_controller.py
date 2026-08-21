@@ -25,11 +25,14 @@ class TestAppController:
         assert controller.settings is not None
         assert isinstance(controller.settings, Settings)
 
-    def test_buffer_property(self, controller: AppController) -> None:
+    def test_buffer_property_is_aggregate_live_view(self, controller: AppController) -> None:
         assert controller.buffer is not None
+        assert controller.buffer.buffer_level == 0
 
     def test_is_running_initially_false(self, controller: AppController) -> None:
         assert controller.is_running() is False
+        assert controller.is_draining() is False
+        assert controller.active_live_count() == 0
 
     def test_is_file_transcribing_initially_false(self, controller: AppController) -> None:
         assert controller.is_file_transcribing() is False
@@ -58,13 +61,41 @@ class TestAppController:
                 controller._resolve_sink(None, "microphone")
 
     def test_application_source_requires_selected_stream(self, controller: AppController) -> None:
-        with pytest.raises(SinkNotFoundError, match="Seleziona uno stream"):
-            controller.start_transcription(audio_source="application")
+        with pytest.raises(RuntimeError, match="Seleziona uno stream"):
+            controller.start_live_session(audio_source="application")
+
+    def test_start_live_session_delegates_without_stopping_existing_sessions(
+        self, controller: AppController
+    ) -> None:
+        controller._live_sessions.create_session = MagicMock(
+            side_effect=[{"id": "one"}, {"id": "two"}]
+        )
+        first = controller.start_live_session(
+            audio_source="system", sink_name="monitor-a", language="it"
+        )
+        second = controller.start_live_session(
+            audio_source="microphone", sink_name="mic-b", language="en"
+        )
+        assert first["id"] == "one"
+        assert second["id"] == "two"
+        assert controller._live_sessions.create_session.call_count == 2
+
+    def test_stop_live_session_is_scoped(self, controller: AppController) -> None:
+        controller._live_sessions.stop_session = MagicMock(return_value=True)
+        assert controller.stop_live_session("session-a", drain=True) is True
+        controller._live_sessions.stop_session.assert_called_once_with(
+            "session-a", drain=True
+        )
 
     def test_list_playback_streams_delegates_to_router(self, controller: AppController) -> None:
         controller._audio_router.list_streams.return_value = []
         assert controller.list_playback_streams() == []
         controller._audio_router.list_streams.assert_called_once_with()
+
+    def test_file_start_is_rejected_while_live_is_active(self, controller: AppController) -> None:
+        controller._live_sessions.has_active_sessions = MagicMock(return_value=True)
+        with pytest.raises(RuntimeError, match="sessioni Live"):
+            controller.start_file_transcription("example.wav")
 
     def test_stop_transcription_when_idle(self, controller: AppController) -> None:
         controller.stop_transcription()
