@@ -179,11 +179,11 @@ class FileBatchCoordinator:
         self._emit_changed()
 
     def _on_completed(self, _payload: Any) -> None:
-        if self._finish_active("completed"):
+        if self._finish_active("completed") or self._has_pending():
             self._advance_after_worker()
 
     def _on_error(self, payload: Any) -> None:
-        if self._finish_active("error", str(payload or "")):
+        if self._finish_active("error", str(payload or "")) or self._has_pending():
             self._advance_after_worker()
 
     def _finish_active(self, status: str, error: str = "") -> bool:
@@ -199,6 +199,10 @@ class FileBatchCoordinator:
         self._bus.emit("file_queue_job_updated", snapshot)
         self._emit_changed()
         return True
+
+    def _has_pending(self) -> bool:
+        with self._lock:
+            return any(job.status == "queued" for job in self._jobs)
 
     def _advance_after_worker(self) -> None:
         def advance() -> None:
