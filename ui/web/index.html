@@ -6,6 +6,7 @@
   <meta name="color-scheme" content="dark">
   <title>UltraTranscribr</title>
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="history.css">
 </head>
 <body>
 <div class="shell">
@@ -17,6 +18,7 @@
     <nav aria-label="Sezioni">
       <button class="nav active" data-view="live" aria-current="page">Live</button>
       <button class="nav" data-view="file">File</button>
+      <button class="nav" data-view="history">Cronologia</button>
       <button class="nav" data-view="settings">Impostazioni</button>
       <button class="nav" data-view="logs">Log</button>
     </nav>
@@ -93,6 +95,42 @@
       <section class="card transcript-card">
         <div class="card-head"><div><p class="kicker">OUTPUT</p><h2>Trascrizione file</h2></div><div class="toolbar"><button type="button" id="file-copy">Copia</button><button type="button" id="file-clear">Pulisci</button></div></div>
         <div id="file-transcript" class="transcript" tabindex="0" aria-live="polite"><p class="placeholder">Il testo trascritto apparirà qui.</p></div>
+      </section>
+    </section>
+
+    <section class="view scroll-view" data-panel="history" hidden>
+      <div class="history-grid">
+        <section class="card">
+          <div class="card-head">
+            <div><p class="kicker">AUTOSAVE</p><h2>Trascrizioni recenti</h2></div>
+            <div class="toolbar"><button type="button" id="history-refresh">Aggiorna</button></div>
+          </div>
+          <div id="history-list" class="history-list" aria-live="polite"><p class="empty-state">Nessuna trascrizione salvata.</p></div>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <div><p class="kicker">SESSIONE</p><h2 id="history-title">Seleziona una trascrizione</h2></div>
+            <div class="toolbar"><button type="button" id="history-copy" disabled>Copia</button></div>
+          </div>
+          <dl class="history-meta" id="history-meta" hidden>
+            <div><dt>Tipo</dt><dd id="history-kind">—</dd></div>
+            <div><dt>Stato</dt><dd id="history-status">—</dd></div>
+            <div><dt>Modello</dt><dd id="history-model">—</dd></div>
+            <div><dt>Lingua</dt><dd id="history-language">—</dd></div>
+            <div><dt>Avvio</dt><dd id="history-started">—</dd></div>
+            <div><dt>Sorgente</dt><dd id="history-source">—</dd></div>
+          </dl>
+          <div id="history-transcript" class="transcript history-transcript" tabindex="0"><p class="placeholder">Il contenuto della sessione selezionata apparirà qui.</p></div>
+        </section>
+      </div>
+
+      <section class="card recovery-card">
+        <div class="card-head">
+          <div><p class="kicker">RECOVERY</p><h2>Audio non trascritto</h2></div>
+        </div>
+        <p class="help">Questi WAV vengono creati automaticamente quando un segmento live non può essere trascritto o viene interrotto prima del flush. La ritrascrizione con un clic verrà aggiunta nel prossimo step della roadmap.</p>
+        <div id="recovery-list" class="recovery-list"><p class="empty-state">Nessun audio da recuperare.</p></div>
       </section>
     </section>
 
