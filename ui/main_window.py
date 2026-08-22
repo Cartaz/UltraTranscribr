@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QApplication, QMainWindow
 from config.constants import AppMeta, UIConstraints
 from core.app_controller import AppController
 from ui.bridge import BridgeLogHandler
-from ui.phase10_bridge import Phase10BackendBridge
+from ui.final_features_bridge import FinalFeaturesBackendBridge
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ class MainWindow(QMainWindow):
             max(UIConstraints.MIN_WINDOW_HEIGHT, settings.window_height),
         )
 
-        self._bridge = Phase10BackendBridge(controller, self)
+        self._bridge = FinalFeaturesBackendBridge(controller, self)
         self._bridge.eventReceived.connect(self._observe_backend_event)
 
         self._log_handler = BridgeLogHandler(self._bridge)

@@ -5,7 +5,7 @@ const phase6SettingSections = {
   history: ["history_retention_days", "meeting_audio_retention_days"],
   tuning: ["beam_size", "vad_min_silence_ms", "buffer_warn_threshold"],
   audio: ["chunk_ms", "channels", "sink_name", "sink_search_keyword"],
-  backend: ["server_port", "gpu_layers", "compute_type"],
+  backend: ["server_port", "gpu_layers", "compute_type", "backend_instances", "preload_model"],
 };
 
 let phase6SettingsDefaults = null;
@@ -139,7 +139,7 @@ function phase6InjectScript(src, marker) {
   const script = document.createElement("script");
   script.src = src;
   // Dynamically inserted scripts are async by default. Disable async so the
-  // wrapper chain is deterministic: power_user -> phase10 -> hardening.
+  // wrapper chain is deterministic: power_user -> phase10 -> hardening -> final.
   script.async = false;
   script.dataset.ultraModule = marker;
   document.head.append(script);
@@ -151,4 +151,5 @@ function phase6InjectScript(src, marker) {
   phase6InjectStyle("phase10.css", "phase10");
   phase6InjectScript("phase10.js", "phase10");
   phase6InjectScript("phase10_hardening.js", "phase10-hardening");
+  phase6InjectScript("final_features.js", "final-features");
 })();
