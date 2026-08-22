@@ -14,7 +14,10 @@ from config.constants import AppMeta, UIConstraints
 from core.app_controller import AppController
 from ui.bridge import BridgeLogHandler
 from ui.final_features_bridge import FinalFeaturesBackendBridge
-from ui.phase10_bridge import Phase10BackendBridge  # compatibility contract for Phase 10
+from ui.phase10_bridge import Phase10BackendBridge
+
+# Keep the Phase 10 shell contract stable while extending its implementation.
+Phase10BackendBridge = FinalFeaturesBackendBridge
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +88,7 @@ class MainWindow(QMainWindow):
             max(UIConstraints.MIN_WINDOW_HEIGHT, settings.window_height),
         )
 
-        self._bridge = FinalFeaturesBackendBridge(controller, self)
+        self._bridge = Phase10BackendBridge(controller, self)
         self._bridge.eventReceived.connect(self._observe_backend_event)
 
         self._log_handler = BridgeLogHandler(self._bridge)

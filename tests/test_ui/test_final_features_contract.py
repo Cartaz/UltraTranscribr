@@ -23,4 +23,5 @@ def test_final_features_expose_session_name_and_backend_controls() -> None:
 def test_main_window_uses_final_bridge() -> None:
     text = (_root() / "ui" / "main_window.py").read_text(encoding="utf-8")
     assert "from ui.final_features_bridge import FinalFeaturesBackendBridge" in text
-    assert "self._bridge = FinalFeaturesBackendBridge(controller, self)" in text
+    assert "Phase10BackendBridge = FinalFeaturesBackendBridge" in text
+    assert "self._bridge = Phase10BackendBridge(controller, self)" in text
