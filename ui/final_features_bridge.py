@@ -61,6 +61,53 @@ class FinalFeaturesBackendBridge(Phase10BackendBridge):
         raw = json.loads(super().getHistorySession(session_id))
         return json.dumps(self._named(raw), ensure_ascii=False, default=str)
 
+    @Slot(str, result=str)
+    def applySettings(self, payload_json: str) -> str:
+        """Apply settings and make backend-affecting changes effective immediately."""
+        try:
+            payload = json.loads(payload_json)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return super().applySettings(payload_json)
+        if not isinstance(payload, dict):
+            return super().applySettings(payload_json)
+
+        backend_keys = {
+            "model_size",
+            "beam_size",
+            "vad_filter",
+            "vad_min_silence_ms",
+            "server_port",
+            "gpu_layers",
+            "compute_type",
+            "backend_instances",
+        }
+        before = self._controller.settings
+        backend_changed = any(
+            key in payload and payload[key] != getattr(before, key, None)
+            for key in backend_keys
+        )
+        if backend_changed and (
+            self._controller.active_live_count() > 0
+            or self._controller.is_file_transcribing()
+            or self._controller._file_busy()
+        ):
+            return json.dumps(
+                {"ok": False, "error": "Ferma le trascrizioni attive prima di modificare il backend"},
+                ensure_ascii=False,
+            )
+
+        raw = super().applySettings(payload_json)
+        response = json.loads(raw)
+        if response.get("ok") and backend_changed:
+            try:
+                if self._controller.backend.is_running:
+                    self._controller.stop_backend()
+                self._controller.backend.reconfigure(self._controller.settings)
+            except Exception as exc:
+                logger.exception("Riconfigurazione backend fallita")
+                return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+        return raw
+
     @Slot(str, str, result=str)
     def renameHistorySession(self, session_id: str, name: str) -> str:
         try:

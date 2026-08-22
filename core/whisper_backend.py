@@ -52,8 +52,12 @@ class WhisperBackend:
         self._log_file_handle: Optional[Any] = None
         self._api_endpoint = _ENDPOINTS[0]
         self._server_vad_enabled = False
+        # In single-instance mode this remains the historical FIFO scheduling
+        # boundary. In pool mode every backend has its own lock.
         self._io_lock = threading.RLock()
         self._lifecycle_lock = threading.RLock()
+        # Only the primary backend owns the auxiliary pool. Auxiliary
+        # WhisperBackend objects are always configured with backend_instances=1.
         self._aux_backends: list[WhisperBackend] = []
         self._pool_queue: Optional[queue.Queue[WhisperBackend]] = None
         self._pool_stopping = False
@@ -137,6 +141,13 @@ class WhisperBackend:
             finally:
                 self._pool_stopping = False
 
+    def reconfigure(self, settings: Settings) -> None:
+        """Replace launch/request settings while the backend is stopped."""
+        with self._lifecycle_lock:
+            if self._process_running() or any(backend.is_running for backend in self._aux_backends):
+                raise RuntimeError("Ferma whisper-server prima di riconfigurarlo")
+            self._settings = settings
+
     def stop(self) -> None:
         with self._lifecycle_lock:
             self._pool_stopping = True
@@ -144,6 +155,8 @@ class WhisperBackend:
             self._cleanup_aux_backends()
 
     def abort_active_request(self) -> None:
+        # Stopping every pool member guarantees an in-flight request on any
+        # selected server cannot outlive an explicit abort.
         with self._lifecycle_lock:
             self._pool_stopping = True
             self._cleanup_process()
@@ -161,6 +174,8 @@ class WhisperBackend:
         on_queue_wait: Optional[Callable[[float], None]] = None,
     ) -> str | dict:
         del vad
+        # Preserve the old single-server call path exactly when the experiment
+        # is disabled. This keeps compatibility and avoids queue overhead.
         if not self._aux_backends:
             return self._transcribe_single(
                 audio_data,
@@ -206,6 +221,9 @@ class WhisperBackend:
                 on_queue_wait=None,
             )
         finally:
+            # Queue a stable worker reference rather than a mutable list index.
+            # During shutdown the old queue can outlive self._aux_backends for a
+            # moment; returning this reference can never become an IndexError.
             pool.put(backend)
 
     def _transcribe_single(

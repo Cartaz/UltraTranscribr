@@ -94,3 +94,14 @@ def test_multi_instance_queue_wait_callback_is_reported(monkeypatch, tmp_path) -
     assert primary.transcribe_audio(b"one", on_queue_wait=waits.append) == "ok"
     assert len(waits) == 1
     assert waits[0] >= 0.0
+
+
+def test_backend_reconfigure_updates_launch_settings_only_when_stopped(tmp_path) -> None:
+    backend = WhisperBackend(Settings(server_port=8082), tmp_path)
+    backend.reconfigure(Settings(server_port=8090, backend_instances=2))
+    assert backend.server_url.endswith(":8090")
+    assert backend._settings.backend_instances == 2
+
+    backend._process = _running_process()
+    with pytest.raises(RuntimeError, match="Ferma whisper-server"):
+        backend.reconfigure(Settings(server_port=8091))
