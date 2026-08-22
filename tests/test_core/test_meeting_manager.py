@@ -1,3 +1,4 @@
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -177,3 +178,35 @@ def test_shutdown_during_recording_preserves_audio_and_marks_interrupted(monkeyp
     recording = combined["meeting"]["recording"]
     assert recording["path"].endswith(".flac")
     assert Path(recording["path"]).is_file()
+
+
+def test_orphan_recovery_does_not_block_manager_construction(monkeypatch, tmp_path: Path) -> None:
+    recordings = tmp_path / "recordings"
+    data = tmp_path / "data"
+    monkeypatch.setattr(AppMeta, "RECORDINGS_DIR", recordings)
+    monkeypatch.setattr(AppMeta, "DATA_DIR", data)
+    controller = _Controller(tmp_path)
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_recovery(cls, root=None):
+        del cls, root
+        entered.set()
+        release.wait(timeout=2.0)
+        return []
+
+    monkeypatch.setattr(
+        meeting_module.MicrophoneRecorder,
+        "recover_orphaned",
+        classmethod(slow_recovery),
+    )
+
+    manager = MeetingManager(controller)
+    assert entered.wait(timeout=1.0)
+    # Construction returned while the recovery worker is intentionally blocked.
+    assert manager._recovery_thread.is_alive()
+
+    release.set()
+    manager._recovery_thread.join(timeout=1.0)
+    assert not manager._recovery_thread.is_alive()
