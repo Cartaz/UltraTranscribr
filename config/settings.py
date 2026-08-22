@@ -43,8 +43,6 @@ class ComputeDevice(str, Enum):
 class AudioSource(str, Enum):
     SYSTEM = "system"
     APPLICATION = "application"
-    # Alias interno temporaneo: consente ai componenti non ancora rinominati
-    # di interpretare il vecchio simbolo come la nuova sorgente di sistema.
     FIREFOX = "system"
     MICROPHONE = "microphone"
 
@@ -75,14 +73,14 @@ class Settings:
     buffer_warn_threshold: int = ProcessDefaults.BUFFER_WARN_THRESHOLD
     history_retention_days: int = ProcessDefaults.HISTORY_RETENTION_DAYS
     meeting_audio_retention_days: int = ProcessDefaults.MEETING_AUDIO_RETENTION_DAYS
-    # Live microphone recording is opt-in and OFF by default. Meeting sessions
-    # always record regardless of this preference.
     live_microphone_recording: bool = False
     sink_name: Optional[str] = None
     sink_search_keyword: str = ProcessDefaults.SINK_SEARCH_KEYWORD
 
     gpu_layers: int = SYCLDefaults.GPU_LAYERS
     server_port: int = SYCLDefaults.PORT
+    backend_instances: int = 1
+    preload_model: bool = False
 
     window_width: int = UIConstraints.WINDOW_WIDTH
     window_height: int = UIConstraints.WINDOW_HEIGHT
@@ -117,14 +115,14 @@ class Settings:
             errors.append("meeting_audio_retention_days deve essere tra 0 e 3650")
         if not 1 <= self.server_port <= 65535:
             errors.append("server_port deve essere tra 1 e 65535")
+        if not 1 <= int(self.backend_instances) <= 4:
+            errors.append("backend_instances deve essere tra 1 e 4")
+        if self.server_port + int(self.backend_instances) - 1 > 65535:
+            errors.append("le porte delle istanze backend superano 65535")
         if self.window_width < UIConstraints.MIN_WINDOW_WIDTH:
-            errors.append(
-                f"window_width deve essere >= {UIConstraints.MIN_WINDOW_WIDTH}"
-            )
+            errors.append(f"window_width deve essere >= {UIConstraints.MIN_WINDOW_WIDTH}")
         if self.window_height < UIConstraints.MIN_WINDOW_HEIGHT:
-            errors.append(
-                f"window_height deve essere >= {UIConstraints.MIN_WINDOW_HEIGHT}"
-            )
+            errors.append(f"window_height deve essere >= {UIConstraints.MIN_WINDOW_HEIGHT}")
         if errors:
             raise ValueError("; ".join(errors))
 
@@ -149,9 +147,7 @@ class Settings:
         """Salva atomicamente settings.json per evitare file troncati."""
         AppMeta.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         data = asdict(self)
-        fd, tmp_name = tempfile.mkstemp(
-            prefix="settings.", suffix=".tmp", dir=AppMeta.CONFIG_DIR
-        )
+        fd, tmp_name = tempfile.mkstemp(prefix="settings.", suffix=".tmp", dir=AppMeta.CONFIG_DIR)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
@@ -177,8 +173,6 @@ class Settings:
             filtered = {k: v for k, v in data.items() if k in valid_keys}
             filtered["device"] = ComputeDevice.SYCL.value
 
-            # Migrazione non distruttiva dalla vecchia sorgente browser-specifica.
-            # Il valore verrà scritto come "system" al successivo salvataggio.
             if filtered.get("audio_source") == "firefox":
                 filtered["audio_source"] = AudioSource.SYSTEM.value
                 logger.info("Sorgente audio migrata: firefox -> system")
@@ -189,20 +183,12 @@ class Settings:
 
             old_width = filtered.get("window_width", UIConstraints.WINDOW_WIDTH)
             old_height = filtered.get("window_height", UIConstraints.WINDOW_HEIGHT)
-            filtered["window_width"] = max(
-                int(old_width), UIConstraints.MIN_WINDOW_WIDTH
-            )
-            filtered["window_height"] = max(
-                int(old_height), UIConstraints.MIN_WINDOW_HEIGHT
-            )
-            if (
-                filtered["window_width"] != old_width
-                or filtered["window_height"] != old_height
-            ):
+            filtered["window_width"] = max(int(old_width), UIConstraints.MIN_WINDOW_WIDTH)
+            filtered["window_height"] = max(int(old_height), UIConstraints.MIN_WINDOW_HEIGHT)
+            if filtered["window_width"] != old_width or filtered["window_height"] != old_height:
                 logger.info(
                     "Dimensioni finestra migrate al minimo supportato: %dx%d",
-                    filtered["window_width"],
-                    filtered["window_height"],
+                    filtered["window_width"], filtered["window_height"],
                 )
 
             return cls(**filtered)

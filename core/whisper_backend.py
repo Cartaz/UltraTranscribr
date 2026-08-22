@@ -1,9 +1,10 @@
-"""whisper.cpp server lifecycle and serialized REST client."""
+"""whisper.cpp server lifecycle and optional multi-instance REST scheduler."""
 from __future__ import annotations
 
 import json
 import logging
 import os
+import queue
 import struct
 import subprocess
 import threading
@@ -26,9 +27,24 @@ def _alternate_endpoint(current: str) -> str:
 
 
 class WhisperBackend:
-    def __init__(self, settings: Settings, project_root: Optional[Path] = None) -> None:
+    """Own one or more whisper-server processes behind one stable API.
+
+    ``backend_instances=1`` deliberately keeps the historical single-server
+    path unchanged. With more instances, requests are assigned FIFO to the
+    first available server while each individual server still serializes its
+    own HTTP requests. Ports are consecutive starting from ``server_port``.
+    """
+
+    def __init__(
+        self,
+        settings: Settings,
+        project_root: Optional[Path] = None,
+        *,
+        instance_label: str = "",
+    ) -> None:
         self._settings = settings
         self._project_root = project_root or Path(__file__).resolve().parent.parent
+        self._instance_label = str(instance_label or "")
         self._process: Optional[subprocess.Popen[bytes]] = None
         self._server_binary: Optional[str] = None
         self._model_path: Optional[Path] = None
@@ -36,11 +52,15 @@ class WhisperBackend:
         self._log_file_handle: Optional[Any] = None
         self._api_endpoint = _ENDPOINTS[0]
         self._server_vad_enabled = False
-        # One whisper-server serves every live/file request. The IO lock is the
-        # scheduling policy: capture can happen concurrently, inference is FIFO
-        # at the lock boundary and never overlaps on the shared server.
+        # In single-instance mode this remains the historical FIFO scheduling
+        # boundary. In pool mode every backend has its own lock.
         self._io_lock = threading.RLock()
         self._lifecycle_lock = threading.RLock()
+        # Only the primary backend owns the auxiliary pool. Auxiliary
+        # WhisperBackend objects are always configured with backend_instances=1.
+        self._aux_backends: list[WhisperBackend] = []
+        self._pool_queue: Optional[queue.Queue[WhisperBackend]] = None
+        self._pool_stopping = False
 
     @property
     def server_url(self) -> str:
@@ -48,8 +68,13 @@ class WhisperBackend:
 
     @property
     def is_running(self) -> bool:
+        if self._pool_stopping:
+            return False
         p = self._process
-        return p is not None and p.poll() is None
+        primary = p is not None and p.poll() is None
+        if not primary:
+            return False
+        return all(backend.is_running for backend in self._aux_backends)
 
     @property
     def api_endpoint(self) -> str:
@@ -59,39 +84,83 @@ class WhisperBackend:
     def server_vad_enabled(self) -> bool:
         return self._server_vad_enabled
 
+    @property
+    def instance_count(self) -> int:
+        return 1 + len(self._aux_backends) if self._process is not None else 0
+
     def start(self, model_path: Path, vad_model_path: Optional[Path] = None) -> None:
         with self._lifecycle_lock:
+            self._pool_stopping = True
+            self._cleanup_aux_backends()
             self._model_path = Path(model_path)
             self._vad_model_path = Path(vad_model_path) if vad_model_path else None
             self._server_binary = find_whisper_server(self._project_root)
             if not self._server_binary:
+                self._pool_stopping = False
                 raise RuntimeError("whisper-server non trovato. Eseguire install.sh.")
             if not verify_sycl_binary(self._server_binary, self._project_root):
+                self._pool_stopping = False
                 raise RuntimeError(f"whisper-server non compilato con SYCL: {self._server_binary}")
             use_vad = bool(self._settings.vad_filter and self._vad_model_path)
-            self._spawn(use_vad)
-            self._detect_api_endpoint()
+            try:
+                self._spawn(use_vad)
+                self._detect_api_endpoint()
+                self._start_aux_backends(use_vad)
+                self._reset_pool_queue()
+            except Exception:
+                self._cleanup_aux_backends()
+                self._cleanup_process()
+                self._pool_stopping = False
+                raise
+            self._pool_stopping = False
 
     def ensure_vad_mode(self, enabled: bool, vad_model_path: Optional[Path] = None) -> None:
         with self._lifecycle_lock:
             if vad_model_path is not None:
                 self._vad_model_path = Path(vad_model_path)
             wanted = bool(enabled and self._vad_model_path)
-            if self.is_running and self._server_vad_enabled == wanted:
+            all_same = self._server_vad_enabled == wanted and all(
+                backend.server_vad_enabled == wanted for backend in self._aux_backends
+            )
+            if self.is_running and all_same:
                 return
             if self._model_path is None:
                 raise RuntimeError("Backend non inizializzato")
-            self._cleanup_process()
-            self._spawn(wanted)
-            self._detect_api_endpoint()
+            self._pool_stopping = True
+            try:
+                self._cleanup_aux_backends()
+                self._cleanup_process()
+                self._spawn(wanted)
+                self._detect_api_endpoint()
+                self._start_aux_backends(wanted)
+                self._reset_pool_queue()
+            except Exception:
+                self._cleanup_aux_backends()
+                self._cleanup_process()
+                raise
+            finally:
+                self._pool_stopping = False
+
+    def reconfigure(self, settings: Settings) -> None:
+        """Replace launch/request settings while the backend is stopped."""
+        with self._lifecycle_lock:
+            if self._process_running() or any(backend.is_running for backend in self._aux_backends):
+                raise RuntimeError("Ferma whisper-server prima di riconfigurarlo")
+            self._settings = settings
 
     def stop(self) -> None:
         with self._lifecycle_lock:
+            self._pool_stopping = True
             self._cleanup_process()
+            self._cleanup_aux_backends()
 
     def abort_active_request(self) -> None:
+        # Stopping every pool member guarantees an in-flight request on any
+        # selected server cannot outlive an explicit abort.
         with self._lifecycle_lock:
+            self._pool_stopping = True
             self._cleanup_process()
+            self._cleanup_aux_backends()
 
     def transcribe_audio(
         self,
@@ -104,7 +173,70 @@ class WhisperBackend:
         vad: Optional[bool] = None,
         on_queue_wait: Optional[Callable[[float], None]] = None,
     ) -> str | dict:
+        del vad
+        # Preserve the old single-server call path exactly when the experiment
+        # is disabled. This keeps compatibility and avoids queue overhead.
+        if not self._aux_backends:
+            return self._transcribe_single(
+                audio_data,
+                language=language,
+                prompt=prompt,
+                verbose=verbose,
+                timeout=timeout,
+                on_queue_wait=on_queue_wait,
+            )
+
         if not self.is_running:
+            raise RuntimeError("whisper-server non in esecuzione")
+        pool = self._pool_queue
+        if pool is None:
+            raise RuntimeError("pool whisper-server non inizializzato")
+
+        queued_at = time.monotonic()
+        backend: Optional[WhisperBackend] = None
+        while backend is None:
+            if not self.is_running:
+                raise RuntimeError("whisper-server non in esecuzione")
+            try:
+                backend = pool.get(timeout=0.2)
+            except queue.Empty:
+                continue
+
+        wait_ms = max(0.0, (time.monotonic() - queued_at) * 1000.0)
+        if on_queue_wait is not None:
+            try:
+                on_queue_wait(wait_ms)
+            except Exception:
+                logger.exception("Callback metrica coda inferenza fallita")
+
+        try:
+            if not self.is_running:
+                raise RuntimeError("whisper-server non in esecuzione")
+            return backend._transcribe_single(
+                audio_data,
+                language=language,
+                prompt=prompt,
+                verbose=verbose,
+                timeout=timeout,
+                on_queue_wait=None,
+            )
+        finally:
+            # Queue a stable worker reference rather than a mutable list index.
+            # During shutdown the old queue can outlive self._aux_backends for a
+            # moment; returning this reference can never become an IndexError.
+            pool.put(backend)
+
+    def _transcribe_single(
+        self,
+        audio_data: bytes,
+        *,
+        language: Optional[str],
+        prompt: Optional[str],
+        verbose: bool,
+        timeout: Optional[float],
+        on_queue_wait: Optional[Callable[[float], None]],
+    ) -> str | dict:
+        if self._pool_stopping or not self._process_running():
             raise RuntimeError("whisper-server non in esecuzione")
         timeout_s = float(timeout or SYCLDefaults.LIVE_REQUEST_TIMEOUT_S)
         queued_at = time.monotonic()
@@ -115,7 +247,7 @@ class WhisperBackend:
                     on_queue_wait(wait_ms)
                 except Exception:
                     logger.exception("Callback metrica coda inferenza fallita")
-            if not self.is_running:
+            if self._pool_stopping or not self._process_running():
                 raise RuntimeError("whisper-server non in esecuzione")
             last_error: Exception | None = None
             for _ in range(len(_ENDPOINTS)):
@@ -152,16 +284,71 @@ class WhisperBackend:
                     raise RuntimeError(f"Trascrizione fallita su {endpoint}: {exc}") from exc
             raise RuntimeError("Nessun endpoint di trascrizione disponibile") from last_error
 
+    def _process_running(self) -> bool:
+        p = self._process
+        return p is not None and p.poll() is None
+
+    def _start_aux_backends(self, use_vad: bool) -> None:
+        if self._instance_label:
+            return
+        count = int(self._settings.backend_instances)
+        if count <= 1:
+            return
+        if self._model_path is None:
+            raise RuntimeError("Backend non configurato")
+        for index in range(1, count):
+            cfg = self._settings.with_(
+                server_port=self._settings.server_port + index,
+                backend_instances=1,
+                preload_model=False,
+                vad_filter=use_vad,
+            )
+            backend = WhisperBackend(
+                cfg,
+                self._project_root,
+                instance_label=f"-{index + 1}",
+            )
+            try:
+                backend.start(self._model_path, self._vad_model_path)
+            except Exception:
+                backend.stop()
+                raise
+            self._aux_backends.append(backend)
+        logger.info(
+            "Pool whisper-server attivo: %d istanze sulle porte %d-%d",
+            count,
+            self._settings.server_port,
+            self._settings.server_port + count - 1,
+        )
+
+    def _cleanup_aux_backends(self) -> None:
+        backends = self._aux_backends
+        self._aux_backends = []
+        self._pool_queue = None
+        for backend in backends:
+            try:
+                backend.stop()
+            except Exception:
+                logger.exception("Arresto istanza whisper-server ausiliaria fallito")
+
+    def _reset_pool_queue(self) -> None:
+        if not self._aux_backends:
+            self._pool_queue = None
+            return
+        pool: queue.Queue[WhisperBackend] = queue.Queue(maxsize=1 + len(self._aux_backends))
+        pool.put_nowait(self)
+        for backend in self._aux_backends:
+            pool.put_nowait(backend)
+        self._pool_queue = pool
+
     def _spawn(self, use_vad: bool) -> None:
         if self._model_path is None or self._server_binary is None:
             raise RuntimeError("Backend non configurato")
         self._cleanup_process()
-        log_path = self._project_root / ".venv" / "whisper-server.log"
-        if not log_path.parent.exists():
-            log_path = self._project_root / "whisper-server.log"
+        log_path = self._server_log_path()
         self._log_file_handle = open(log_path, "w", encoding="utf-8")
         cmd = self._build_cmd(self._model_path, use_vad)
-        logger.info("Avvio whisper-server: %s", " ".join(cmd))
+        logger.info("Avvio whisper-server%s: %s", self._instance_label, " ".join(cmd))
         self._process = subprocess.Popen(
             cmd,
             env=self._build_env(),
@@ -302,10 +489,15 @@ class WhisperBackend:
                 continue
         self._api_endpoint = "/inference"
 
+    def _server_log_path(self) -> Path:
+        name = f"whisper-server{self._instance_label}.log"
+        path = self._project_root / ".venv" / name
+        if not path.parent.exists():
+            path = self._project_root / name
+        return path
+
     def _read_log_tail(self, chars: int = 2500) -> str:
-        path = self._project_root / ".venv" / "whisper-server.log"
-        if not path.exists():
-            path = self._project_root / "whisper-server.log"
+        path = self._server_log_path()
         try:
             return path.read_text(encoding="utf-8", errors="replace")[-chars:]
         except OSError:
