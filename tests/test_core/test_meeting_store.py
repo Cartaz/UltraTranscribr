@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from config.constants import AppMeta
@@ -43,6 +44,7 @@ def test_meeting_history_kind_and_sidecar_are_combined(tmp_path: Path) -> None:
 
     assert combined is not None
     assert combined["kind"] == "meeting"
+    assert history.get_session(session_id)["kind"] == "meeting"
     assert combined["text"] == "Testo raw originale"
     assert combined["meeting"]["num_speakers"] == 2
     assert len(combined["meeting"]["review_segments"]) == 2
@@ -92,3 +94,21 @@ def test_meeting_audio_can_be_deleted_without_history(tmp_path: Path, monkeypatc
     assert not audio.exists()
     assert history.get_session(session_id)["text"] == "Testo raw originale"
     assert store.get(session_id)["meeting"]["recording"] == {}
+
+
+def test_audio_retention_never_deletes_path_outside_recordings(tmp_path: Path, monkeypatch) -> None:
+    _, store, session_id = _meeting(tmp_path)
+    recordings = tmp_path / "recordings"
+    recordings.mkdir()
+    monkeypatch.setattr(AppMeta, "RECORDINGS_DIR", recordings)
+
+    outside = tmp_path / "outside.flac"
+    outside.write_bytes(b"must survive")
+    os.utime(outside, (1, 1))
+    store.set_recording(
+        session_id,
+        {"path": str(outside), "duration_s": 1.0, "size_bytes": outside.stat().st_size},
+    )
+
+    assert store.prune_audio(1) == 0
+    assert outside.read_bytes() == b"must survive"
