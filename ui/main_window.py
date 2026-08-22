@@ -14,6 +14,7 @@ from config.constants import AppMeta, UIConstraints
 from core.app_controller import AppController
 from ui.bridge import BridgeLogHandler
 from ui.final_features_bridge import FinalFeaturesBackendBridge
+from ui.phase10_bridge import Phase10BackendBridge  # compatibility contract for Phase 10
 
 logger = logging.getLogger(__name__)
 
