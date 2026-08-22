@@ -73,5 +73,5 @@ def test_postprocessing_never_replaces_raw_history_text() -> None:
 def test_timestamped_file_events_are_persisted() -> None:
     worker = (ROOT / "core" / "file_transcriber.py").read_text(encoding="utf-8")
     journal = (ROOT / "core" / "file_segment_journal.py").read_text(encoding="utf-8")
-    assert 'bus.emit("file_transcriber_segments", segments)' in worker
+    assert 'self._emit("file_transcriber_segments", segments)' in worker
     assert "append_segments(session_id, payload)" in journal

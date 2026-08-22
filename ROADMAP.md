@@ -125,31 +125,38 @@ Only after the safety/session architecture is stable:
 
 ## Phase 10 — Meeting recording, diarization and review
 
-The existing **Live → Microphone** workflow remains unchanged. Meeting-specific recording and diarization live in a separate **Riunione** tab and session type.
+**Live → Microphone** keeps its lightweight transcription behavior by default. A per-session **Salva registrazione** toggle is available only for microphone Live sessions and defaults to OFF. The dedicated **Riunione** workflow always records the microphone and uses the retained audio for final transcription, diarization and later review.
+
+### 10.0 Shared microphone recording
+- [x] Add one shared PCM16→FLAC recorder used by both Live Microphone and Riunione.
+- [x] Add a per-session Live Microphone `Salva registrazione` toggle, default OFF.
+- [x] Keep Audio di sistema and Applicazione behavior unchanged.
+- [x] Journal microphone PCM progressively and recover interrupted journals without blocking GUI startup.
+- [x] Allow retained Live microphone audio to be played/deleted independently from its transcript.
 
 ### 10.1 Meeting capture and persistence
-- [ ] Add a dedicated `meeting` session type and Riunione tab.
-- [ ] Record the selected microphone for the whole meeting without changing normal Live microphone behavior.
-- [ ] Store microphone audio progressively in a crash-resistant local format, targeting lossless FLAC mono 16 kHz.
-- [ ] Keep recording metadata, duration, audio path and processing status with the meeting session.
-- [ ] Allow deleting only the retained audio while preserving the transcript.
-- [ ] Add an audio-retention setting independent from transcript-history retention.
+- [x] Add a dedicated `meeting` session type and Riunione tab.
+- [x] Record the selected microphone for the whole meeting.
+- [x] Store microphone audio progressively in a crash-resistant journal and finalize to lossless FLAC mono 16 kHz.
+- [x] Keep recording metadata, duration, audio path and processing status with the meeting session.
+- [x] Allow deleting only the retained audio while preserving the transcript.
+- [x] Add an audio-retention setting independent from transcript-history retention.
 
 ### 10.2 Post-meeting transcription and diarization
-- [ ] Produce a timestamp-preserving final transcription from the complete recording.
-- [ ] Run speaker diarization after recording and persist stable speaker IDs such as `SPEAKER_00`.
-- [ ] Align diarization intervals with transcript segments without overwriting raw Whisper output.
-- [ ] Support overlapping/uncertain speaker regions explicitly rather than inventing an identity.
+- [x] Produce a timestamp-preserving final transcription from the complete recording.
+- [x] Run fully local speaker diarization after recording and persist stable speaker IDs such as `SPEAKER_00`.
+- [x] Align diarization intervals with transcript segments without overwriting raw Whisper output.
+- [x] Support overlapping/uncertain speaker regions explicitly rather than inventing an identity.
 
 ### 10.3 Manual review UI
-- [ ] Show detected speakers as `Speaker 1`, `Speaker 2`, etc. until manually named.
-- [ ] Let the user assign or change a display name for each speaker and propagate it through the rendered transcript.
-- [ ] Persist speaker-name mappings separately from diarization results.
-- [ ] Add an audio player with seek controls in the meeting review view.
-- [ ] Clicking a transcript intervention seeks the player to that timestamp.
-- [ ] Allow manual correction of transcription text during review while retaining the original raw transcript separately.
+- [x] Show detected speakers as `Speaker 1`, `Speaker 2`, etc. until manually named.
+- [x] Let the user assign or change a display name for each speaker and propagate it through the rendered transcript.
+- [x] Persist speaker-name mappings separately from diarization results.
+- [x] Add an audio player with seek controls in the meeting review view.
+- [x] Clicking a transcript intervention seeks the player to that timestamp.
+- [x] Allow manual correction of transcription text during review while retaining the original raw transcript separately.
 
 ### 10.4 Meeting export and regression coverage
-- [ ] Export reviewed meetings as speaker-aware `.txt`, `.srt` and `.vtt`.
-- [ ] Fall back to `Speaker N` wherever no manual name has been assigned.
-- [ ] Test crash recovery, long recordings, diarization alignment, speaker renaming, manual transcript edits, audio deletion/retention and exports.
+- [x] Export reviewed meetings as speaker-aware `.txt`, `.srt` and `.vtt`.
+- [x] Fall back to `Speaker N` wherever no manual name has been assigned.
+- [x] Test crash recovery, long-recording streaming behavior, diarization alignment, speaker renaming, manual transcript edits, audio deletion/retention and exports.

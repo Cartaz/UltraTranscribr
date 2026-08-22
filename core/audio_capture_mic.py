@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from typing import Callable, Optional
 
 import numpy as np
 import sounddevice as sd
@@ -11,12 +12,14 @@ from core.audio_resampler import StreamingLinearResampler, WHISPER_SAMPLE_RATE
 from core.buffer_manager import BufferManager
 
 logger = logging.getLogger(__name__)
+SampleSink = Callable[[np.ndarray], None]
 
 
 def microphone_capture_loop(*, stream: sd.InputStream, stop_event: threading.Event,
                             lock: threading.Lock, buffer: BufferManager,
                             chunk_samples: int, native_sr: int,
-                            needs_resample: bool) -> None:
+                            needs_resample: bool,
+                            sample_sink: Optional[SampleSink] = None) -> None:
     overflow = np.array([], dtype=np.float32)
     converter = (
         StreamingLinearResampler(native_sr, WHISPER_SAMPLE_RATE)
@@ -39,6 +42,11 @@ def microphone_capture_loop(*, stream: sd.InputStream, stop_event: threading.Eve
             data = np.asarray(data, dtype=np.float32).reshape(-1)
         if converter is not None:
             data = converter.process(data)
+        if data.size and sample_sink is not None:
+            # The recorder sees the exact normalized 16 kHz mono stream before
+            # chunking for Whisper. A copy prevents later buffer operations from
+            # mutating the persisted data.
+            sample_sink(data.copy())
         if overflow.size:
             data = np.concatenate((overflow, data))
             overflow = np.array([], dtype=np.float32)
@@ -51,6 +59,8 @@ def microphone_capture_loop(*, stream: sd.InputStream, stop_event: threading.Eve
     if converter is not None:
         tail = converter.flush()
         if tail.size:
+            if sample_sink is not None:
+                sample_sink(tail.copy())
             overflow = np.concatenate((overflow, tail)) if overflow.size else tail
     if overflow.size:
         buffer.put(overflow)

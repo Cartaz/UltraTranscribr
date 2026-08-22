@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QApplication, QMainWindow
 from config.constants import AppMeta, UIConstraints
 from core.app_controller import AppController
 from ui.bridge import BridgeLogHandler
-from ui.multi_session_bridge import MultiSessionBackendBridge
+from ui.phase10_bridge import Phase10BackendBridge
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ class MainWindow(QMainWindow):
             max(UIConstraints.MIN_WINDOW_HEIGHT, settings.window_height),
         )
 
-        self._bridge = MultiSessionBackendBridge(controller, self)
+        self._bridge = Phase10BackendBridge(controller, self)
         self._bridge.eventReceived.connect(self._observe_backend_event)
 
         self._log_handler = BridgeLogHandler(self._bridge)
@@ -153,7 +153,7 @@ class MainWindow(QMainWindow):
         try:
             self._bridge.closePowerUser()
         except Exception:
-            logger.exception("Cleanup coordinatore batch fallito durante shutdown")
+            logger.exception("Cleanup coordinatori UI fallito durante shutdown")
         finally:
             self._controller.shutdown()
 

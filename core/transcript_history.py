@@ -89,7 +89,7 @@ class TranscriptHistoryStore:
         source_path: str = "",
         status: str = "starting",
     ) -> str:
-        if kind not in {"live", "file"}:
+        if kind not in {"live", "file", "meeting"}:
             raise ValueError(f"kind non valido: {kind}")
         now = _utc_now()
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
