@@ -14,7 +14,7 @@ Legend: `[ ]` planned · `[~]` in progress · `[x]` completed
 - [x] Add a History view to browse recent sessions and reopen their text.
 - [x] Export a saved session to `.txt`.
 - [x] Add delete/retention controls for saved sessions.
-- [ ] Add optional session naming.
+- [x] Add optional session naming.
 
 ### 1.2 Recovery audio made visible
 - [x] Emit an explicit event whenever untranscribed live audio is saved.
@@ -36,7 +36,7 @@ Legend: `[ ]` planned · `[~]` in progress · `[x]` completed
 - [x] Add Download and Delete actions.
 - [x] Surface real download progress and download errors.
 - [x] Keep resumable `.part` downloads and hash validation.
-- [ ] Optional preload-on-start setting.
+- [x] Optional preload-on-start setting.
 
 ### 2.2 Runtime status
 - [x] Make backend/model loading states explicit without modal dialogs.
@@ -73,10 +73,12 @@ The first multi-session architecture keeps one shared whisper-server while captu
 - [x] Define backend scheduling policy for multiple sessions.
 - [x] First implementation: serialize inference requests through one whisper-server while capturing all streams concurrently.
 - [x] Measure queue latency and expose it in the UI.
-- [ ] Optional later experiment: multiple whisper-server instances only where hardware/RAM permits.
+- [x] Optional later experiment: multiple whisper-server instances only where hardware/RAM permits.
 - [x] UI for two or more independent live transcript cards.
 - [x] Stop/drain/recover each session independently.
 - [x] Stress tests for two simultaneous audio sources and shutdown during queued inference.
+
+Technical note: the multi-server experiment is now available as an opt-in Advanced setting with 1–4 instances on consecutive ports. The default remains one instance to preserve the lower-memory scheduling path; extra instances should be enabled only after measuring RAM/VRAM headroom on the target machine.
 
 ## Phase 5 — Audio source UX and diagnostics
 
