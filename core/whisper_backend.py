@@ -55,7 +55,7 @@ class WhisperBackend:
         self._io_lock = threading.RLock()
         self._lifecycle_lock = threading.RLock()
         self._aux_backends: list[WhisperBackend] = []
-        self._pool_queue: Optional[queue.Queue[int]] = None
+        self._pool_queue: Optional[queue.Queue[WhisperBackend]] = None
         self._pool_stopping = False
 
     @property
@@ -178,12 +178,12 @@ class WhisperBackend:
             raise RuntimeError("pool whisper-server non inizializzato")
 
         queued_at = time.monotonic()
-        index: Optional[int] = None
-        while index is None:
+        backend: Optional[WhisperBackend] = None
+        while backend is None:
             if not self.is_running:
                 raise RuntimeError("whisper-server non in esecuzione")
             try:
-                index = pool.get(timeout=0.2)
+                backend = pool.get(timeout=0.2)
             except queue.Empty:
                 continue
 
@@ -197,7 +197,6 @@ class WhisperBackend:
         try:
             if not self.is_running:
                 raise RuntimeError("whisper-server non in esecuzione")
-            backend = self if index == 0 else self._aux_backends[index - 1]
             return backend._transcribe_single(
                 audio_data,
                 language=language,
@@ -207,7 +206,7 @@ class WhisperBackend:
                 on_queue_wait=None,
             )
         finally:
-            pool.put(index)
+            pool.put(backend)
 
     def _transcribe_single(
         self,
@@ -318,9 +317,10 @@ class WhisperBackend:
         if not self._aux_backends:
             self._pool_queue = None
             return
-        pool: queue.Queue[int] = queue.Queue(maxsize=1 + len(self._aux_backends))
-        for index in range(1 + len(self._aux_backends)):
-            pool.put_nowait(index)
+        pool: queue.Queue[WhisperBackend] = queue.Queue(maxsize=1 + len(self._aux_backends))
+        pool.put_nowait(self)
+        for backend in self._aux_backends:
+            pool.put_nowait(backend)
         self._pool_queue = pool
 
     def _spawn(self, use_vad: bool) -> None:

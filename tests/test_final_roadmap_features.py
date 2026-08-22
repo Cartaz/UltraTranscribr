@@ -20,12 +20,10 @@ def _running_process():
 def test_session_names_are_optional_atomic_and_normalized(tmp_path) -> None:
     store = SessionNameStore(tmp_path / "names.json")
     session = {"id": "session-1", "text": "ciao"}
-
     assert store.apply(session)["name"] == ""
     assert store.set("session-1", "  Riunione   progetto  ") == "Riunione progetto"
     assert SessionNameStore(tmp_path / "names.json").get("session-1") == "Riunione progetto"
     assert store.apply(session)["name"] == "Riunione progetto"
-
     assert store.set("session-1", "") == ""
     assert store.get("session-1") == ""
 
@@ -34,7 +32,6 @@ def test_session_name_search_is_case_insensitive_and_anded(tmp_path) -> None:
     store = SessionNameStore(tmp_path / "names.json")
     store.set("a", "Riunione Progetto Alpha")
     store.set("b", "Riunione Beta")
-
     assert store.matching_ids("progetto alpha") == {"a"}
     assert store.matching_ids("RIUNIONE") == {"a", "b"}
 
@@ -67,9 +64,9 @@ def test_multi_instance_scheduler_uses_available_backends(monkeypatch, tmp_path)
     auxiliary = WhisperBackend(Settings(server_port=8083), tmp_path, instance_label="-2")
     auxiliary._process = _running_process()
     primary._aux_backends = [auxiliary]
-    pool: queue.Queue[int] = queue.Queue()
-    pool.put(0)
-    pool.put(1)
+    pool: queue.Queue[WhisperBackend] = queue.Queue()
+    pool.put(primary)
+    pool.put(auxiliary)
     primary._pool_queue = pool
 
     monkeypatch.setattr(primary, "_transcribe_single", MagicMock(return_value="primary"))
@@ -87,9 +84,9 @@ def test_multi_instance_queue_wait_callback_is_reported(monkeypatch, tmp_path) -
     auxiliary = WhisperBackend(Settings(server_port=8083), tmp_path, instance_label="-2")
     auxiliary._process = _running_process()
     primary._aux_backends = [auxiliary]
-    pool: queue.Queue[int] = queue.Queue()
-    pool.put(0)
-    pool.put(1)
+    pool: queue.Queue[WhisperBackend] = queue.Queue()
+    pool.put(primary)
+    pool.put(auxiliary)
     primary._pool_queue = pool
     monkeypatch.setattr(primary, "_transcribe_single", MagicMock(return_value="ok"))
 
