@@ -33,21 +33,14 @@ class MeetingStore:
         microphone: str,
         num_speakers: int = 0,
     ) -> str:
-        # Reuse the history store's ID generation and atomic schema, then only
-        # change the kind. TranscriptSession itself accepts arbitrary kind values
-        # when reading existing records, so older clients still degrade safely.
         session_id = self.history.create_session(
-            kind="file",
+            kind="meeting",
             model=model,
             language=language,
             source="microphone",
             source_path=microphone,
             status="recording",
         )
-        history_path = self.history.root / f"{session_id}.json"
-        payload = json.loads(history_path.read_text(encoding="utf-8"))
-        payload["kind"] = "meeting"
-        self._atomic_json(history_path, payload)
         self._write(
             session_id,
             {
@@ -241,7 +234,7 @@ class MeetingStore:
         candidate = Path(raw).expanduser()
         root = AppMeta.RECORDINGS_DIR.expanduser().resolve()
         resolved = candidate.resolve(strict=require_exists)
-        if resolved.parent != root:
+        if resolved.parent != root or resolved.suffix.lower() != ".flac":
             raise ValueError("percorso registrazione non valido")
         return resolved
 
