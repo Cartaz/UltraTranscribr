@@ -1,6 +1,6 @@
 # UltraTranscribr
 
-UltraTranscribr è un'applicazione desktop Linux per trascrizione **Live** e **File** basata su `whisper.cpp`, con accelerazione **Intel SYCL / Level Zero** e interfaccia PySide6 + WebEngine.
+UltraTranscribr è un'applicazione desktop Linux per trascrizione **Live**, **File** e **Riunione** basata su `whisper.cpp`, con accelerazione **Intel SYCL / Level Zero** e interfaccia PySide6 + WebEngine.
 
 Il progetto è pensato principalmente per **CachyOS / Arch Linux** con GPU Intel compatibile con Compute Runtime/Level Zero.
 
@@ -8,6 +8,11 @@ Il progetto è pensato principalmente per **CachyOS / Arch Linux** con GPU Intel
 
 - Trascrizione Live da audio di sistema, microfono o singolo stream/applicazione.
 - Più sessioni Live indipendenti con inferenza serializzata su un singolo `whisper-server`.
+- Registrazione opzionale delle sole Live da microfono, per singola sessione e con default OFF.
+- Modalità **Riunione** con registrazione microfono obbligatoria, trascrizione finale timestampata, diarizzazione locale e revisione manuale.
+- Assegnazione manuale dei nomi agli speaker senza riconoscimento biometrico dell'identità.
+- Correzione manuale del transcript di Riunione mantenendo separato il testo Whisper raw originale.
+- Player della registrazione con seek dai singoli interventi e export speaker-aware `.txt`, `.srt`, `.vtt`.
 - Trascrizione batch di più file audio/video con coda FIFO, avanzamento reale e cancellazione.
 - Selezione multipla e drag-and-drop di file locali.
 - Modalità Musica opzionale con Demucs per isolamento vocale.
@@ -61,13 +66,15 @@ L'installer:
 
 1. individua Python 3.11+;
 2. crea `.venv` se necessario;
-3. installa le dipendenze Python da `requirements.txt`;
+3. installa le dipendenze Python da `requirements.txt`, inclusa `sherpa-onnx` per la diarizzazione locale;
 4. carica Intel oneAPI;
 5. clona e compila il commit pin di `whisper.cpp` con SYCL;
 6. installa `whisper-server` e le librerie necessarie nella `.venv`;
 7. scarica il modello predefinito `large-v3-turbo` e il modello VAD se mancanti;
 8. crea il launcher desktop locale;
 9. esegue un self-check completo dell'ambiente.
+
+I modelli ONNX di diarizzazione vengono invece scaricati **solo al primo processamento di una Riunione**. Non sono necessari per Live o File e non richiedono servizi cloud durante l'uso.
 
 ### Reinstallazioni veloci / idempotenza
 
@@ -97,7 +104,7 @@ Per saltarlo esplicitamente:
 ULTRATRANSCRIBR_INSTALL_DEMUCS=0 ./install.sh
 ```
 
-Demucs non è richiesto per la trascrizione normale.
+Demucs non è richiesto per la trascrizione normale o per Riunione.
 
 ## Self-check dell'ambiente
 
@@ -134,13 +141,15 @@ La UI espone soltanto:
 
 `large-v3-turbo` è il modello predefinito e viene predisposto da `install.sh`. Gli altri modelli possono essere scaricati o eliminati dalla sezione di gestione modelli dell'applicazione.
 
-I modelli sono salvati in:
+I modelli Whisper sono salvati in:
 
 ```text
 ~/.cache/ultratranscribr/models/gguf/
 ```
 
 I download interrotti usano file `.part` riprendibili e, una volta completati, vengono verificati tramite SHA-256 salvato accanto al modello.
+
+I modelli per la diarizzazione sherpa-onnx vengono mantenuti separatamente nella cache di UltraTranscribr e sono usati soltanto dal workflow Riunione.
 
 ## Uso
 
@@ -153,6 +162,71 @@ La sezione Live permette di creare sessioni indipendenti scegliendo una sorgente
 - **Applicazione/stream**: singolo playback stream PipeWire/PulseAudio isolato temporaneamente in un null sink dedicato.
 
 Per ogni sessione sono disponibili Stop e Drain. Drain interrompe la cattura ma lascia terminare la trascrizione dell'audio già presente nel buffer.
+
+#### Registrazione opzionale Live Microfono
+
+Quando la sorgente selezionata è **Microfono**, compare il toggle **Salva registrazione**.
+
+- default: **OFF**;
+- viene deciso prima dello Start della singola sessione;
+- Audio di sistema e Applicazione non sono interessati;
+- quando attivo, lo stesso PCM mono 16 kHz inviato alla pipeline Whisper viene anche scritto dal recorder persistente;
+- la registrazione finale è FLAC lossless;
+- dalla Cronologia l'audio può essere ascoltato o eliminato senza cancellare la trascrizione.
+
+Una Live Microfono registrata resta una normale sessione Live: non viene automaticamente diarizzata o trasformata in Riunione.
+
+### Riunione
+
+La tab **Riunione** è pensata per riunioni, interviste e conversazioni con più interlocutori.
+
+Durante la registrazione:
+
+1. viene usato esclusivamente il microfono selezionato;
+2. la registrazione è sempre attiva;
+3. l'audio viene journalizzato progressivamente in PCM16 mono 16 kHz;
+4. il journal viene sincronizzato periodicamente su disco per ridurre la perdita possibile in caso di crash;
+5. a chiusura normale viene finalizzato in FLAC lossless senza caricare l'intera registrazione in RAM.
+
+Una Riunione è mutuamente esclusiva con Live e File. Durante il workflow non vengono avviate altre trascrizioni, recovery o operazioni distruttive sui modelli/impostazioni.
+
+Dopo **Termina riunione**:
+
+```text
+registrazione completa
+        ↓
+trascrizione Whisper finale con timestamp
+        ↓
+diarizzazione locale sherpa-onnx
+        ↓
+allineamento speaker ↔ segmenti Whisper
+        ↓
+review manuale
+```
+
+La diarizzazione assegna identificatori tecnici stabili come `SPEAKER_00`, `SPEAKER_01`, ecc. UltraTranscribr **non tenta di riconoscere automaticamente l'identità delle persone**.
+
+Se il numero di interlocutori è noto può essere indicato prima dell'elaborazione; altrimenti viene usato il clustering automatico.
+
+Quando due speaker hanno una sovrapposizione temporale troppo simile sullo stesso segmento, il risultato viene marcato come incerto invece di inventare un'assegnazione certa.
+
+#### Revisione manuale
+
+Nella review della Riunione è possibile:
+
+- rinominare `Speaker 1`, `Speaker 2`, ecc. con nomi scelti manualmente;
+- cambiare i nomi in qualunque momento e propagare la label a tutti gli interventi;
+- correggere manualmente il testo di ogni intervento;
+- cliccare un intervento per portare il player al timestamp corrispondente;
+- ascoltare la registrazione completa;
+- eliminare soltanto l'audio conservando transcript e review;
+- esportare la versione revisionata in `.txt`, `.srt` o `.vtt`.
+
+Il testo Whisper raw, i segmenti timestampati originali e i risultati della diarizzazione restano separati dai nomi e dalle correzioni manuali. La review non sovrascrive mai la fonte originale.
+
+### Recovery registrazioni microfono
+
+Durante una registrazione persistente il file di lavoro è un journal append-only `.pcm.part`. Dopo un arresto anomalo, UltraTranscribr rileva i journal rimasti e li converte in FLAC in background, senza bloccare l'apertura della GUI. Per le Riunioni associate viene aggiornato lo stato a `interrupted`; l'audio recuperato resta disponibile per revisione o elaborazioni successive.
 
 ### File e batch
 
@@ -179,6 +253,8 @@ Dalla Cronologia sono disponibili:
 - `.srt` quando esistono segmenti temporizzati;
 - `.vtt` quando esistono segmenti temporizzati.
 
+Le Riunioni esportano invece la **versione revisionata speaker-aware**, usando il nome manuale quando presente e `Speaker N` come fallback.
+
 Le vecchie sessioni salvate prima dell'introduzione dei timestamp restano leggibili; semplicemente non espongono gli export sottotitoli se non possiedono segmenti temporizzati.
 
 ### Cronologia, ricerca e recovery
@@ -200,6 +276,8 @@ Le impostazioni sono divise in:
 - **Normali**: modello, lingua, sorgente e VAD.
 - **Avanzate**: beam size, chunking, override sink, porta server e parametri tecnici SYCL/backend.
 
+La retention audio delle Riunioni è separata dalla retention della cronologia. `0` disabilita la cancellazione automatica dell'audio.
+
 La geometria della finestra viene salvata automaticamente. La dimensione minima resta 1200×800.
 
 ## Percorsi dati
@@ -207,10 +285,12 @@ La geometria della finestra viene salvata automaticamente. La dimensione minima 
 UltraTranscribr segue le directory XDG:
 
 ```text
-Configurazione: ~/.config/ultratranscribr/
-Log app:        ~/.config/ultratranscribr/ultratranscribr.log
-Dati/storico:   ~/.local/share/ultratranscribr/
-Cache/modelli:  ~/.cache/ultratranscribr/
+Configurazione:      ~/.config/ultratranscribr/
+Log app:             ~/.config/ultratranscribr/ultratranscribr.log
+Dati/storico:        ~/.local/share/ultratranscribr/
+Registrazioni:       ~/.local/share/ultratranscribr/recordings/
+Metadata riunioni:   ~/.local/share/ultratranscribr/meetings/
+Cache/modelli:       ~/.cache/ultratranscribr/
 ```
 
 I log applicativi ruotano automaticamente a circa **5 MiB** mantenendo fino a **4 backup**:
@@ -277,6 +357,14 @@ UltraTranscribr ripristina il routing originale quando la sessione termina e ten
 
 Aprire la gestione modelli nella UI e riprendere il download. I `.part` vengono riutilizzati automaticamente.
 
+### La prima Riunione resta su download diarizzazione
+
+Il primo processamento Riunione scarica i modelli ONNX di segmentation e speaker embedding. Il download non coinvolge audio o transcript dell'utente; serve soltanto a predisporre la pipeline locale. Dopo il download i modelli vengono riutilizzati dalla cache.
+
+### Riunione con speaker incerto
+
+`Speaker ?` indica che il segmento non aveva una sovrapposizione sufficientemente chiara con un singolo interlocutore. È intenzionale: UltraTranscribr evita di assegnare un'identità quando due speaker risultano troppo vicini temporalmente. Il testo resta comunque correggibile manualmente.
+
 ### Demucs non disponibile
 
 La trascrizione normale continua a funzionare. Per installarlo successivamente:
@@ -297,9 +385,11 @@ node --check ui/web/app.js
 node --check ui/web/multi_live.js
 node --check ui/web/settings_cleanup.js
 node --check ui/web/power_user.js
+node --check ui/web/phase10.js
+node --check ui/web/phase10_hardening.js
 ```
 
-La CI GitHub esegue questi controlli ad ogni pull request.
+La CI GitHub esegue questi controlli ad ogni pull request. I test Phase 10 usano recorder, capture, Whisper e diarizzazione finti/deterministici: la CI non scarica modelli ONNX e non richiede hardware audio reale.
 
 ## Packaging Arch
 
