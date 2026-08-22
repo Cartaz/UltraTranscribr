@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 
-from PySide6.QtCore import Slot
+from PySide6.QtCore import QTimer, Slot
 
 from core.session_names import SessionNameStore
 from ui.phase10_bridge import Phase10BackendBridge
@@ -23,10 +23,15 @@ class FinalFeaturesBackendBridge(Phase10BackendBridge):
                 for item in controller.list_models()
             )
             if installed:
-                self._run_async(
-                    "preload-model",
-                    controller.ensure_backend_started,
-                    "backend_preload_error",
+                # Defer until the Qt event loop starts so MainWindow has already
+                # connected eventReceived and the first preload status is visible.
+                QTimer.singleShot(
+                    0,
+                    lambda: self._run_async(
+                        "preload-model",
+                        controller.ensure_backend_started,
+                        "backend_preload_error",
+                    ),
                 )
             else:
                 logger.info("Preload saltato: modello %s non installato", selected)
