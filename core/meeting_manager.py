@@ -62,7 +62,15 @@ class MeetingManager:
         self._bus = EventBus()
         self._lock = threading.RLock()
         self._runtime: Optional[MeetingRuntime] = None
-        self._recover_orphans()
+        # Recovering a multi-hour PCM journal can take noticeable time. Keep the
+        # desktop startup path non-blocking; finalize orphaned journals on a
+        # daemon worker and associate them with their persisted sessions later.
+        self._recovery_thread = threading.Thread(
+            target=self._recover_orphans,
+            daemon=True,
+            name="MeetingRecordingRecovery",
+        )
+        self._recovery_thread.start()
 
     def is_busy(self) -> bool:
         with self._lock:
@@ -404,10 +412,14 @@ class MeetingManager:
             session_id = Path(info.path).stem
             meeting = self.store.get(session_id)
             if meeting is None:
+                # Live microphone recordings are recovered by the same shared
+                # recorder and remain discoverable by session ID in History.
                 continue
             try:
                 self.store.set_recording(session_id, info.to_dict())
                 self.store.set_status(session_id, "interrupted", terminal=True)
+                self._emit("meeting_recording_saved", {"session_id": session_id, **info.to_dict()})
+                self._emit("history_changed", session_id)
             except Exception:
                 logger.exception("Associazione recovery Meeting fallita: %s", session_id)
 
