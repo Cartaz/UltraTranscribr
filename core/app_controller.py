@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from config.settings import AudioSource, Settings
+from core.audio_discovery import AudioDiscoveryService
 from core.audio_routing import PulseAudioRouter
 from core.event_bus import EventBus
 from core.exceptions import GPUNotAvailableError, SinkNotFoundError
@@ -150,7 +151,13 @@ class AppController:
         self._buffer_view = _AggregateLiveBufferView(self._live_sessions)
         self._meeting = MeetingManager(_MeetingControllerView(self))
         self._file_batch = FileBatchCoordinator(_FileBatchControllerView(self))
+        self._audio_discovery = AudioDiscoveryService(
+            settings_provider=lambda: self._settings,
+            stream_provider=self.list_playback_streams,
+            event_sink=self._bus.emit,
+        )
         self._subscribe_history_events()
+        self._audio_discovery.request_refresh()
 
     @property
     def settings(self) -> Settings:
@@ -502,6 +509,31 @@ class AppController:
     def list_playback_streams(self) -> list[dict[str, Any]]:
         return [stream.to_dict() for stream in self._audio_router.list_streams()]
 
+    def audio_discovery_snapshot(self) -> dict[str, list[dict[str, Any]]]:
+        return self._audio_discovery.snapshot()
+
+    def request_audio_discovery(
+        self,
+        *,
+        devices: bool = True,
+        streams: bool = True,
+    ) -> None:
+        self._audio_discovery.request_refresh(devices=devices, streams=streams)
+
+    def cached_audio_source_health(
+        self,
+        source: str,
+        selected_input: str = "",
+    ) -> dict[str, Any]:
+        return self._audio_discovery.cached_health(source, selected_input)
+
+    def request_audio_source_probe(
+        self,
+        source: str,
+        selected_input: str = "",
+    ) -> None:
+        self._audio_discovery.request_probe(source, selected_input)
+
     def download_model(self, model_size: str) -> str:
         self._require_idle_for_model_operation()
         if model_size not in self._model_manager.ui_model_choices():
@@ -611,6 +643,7 @@ class AppController:
         self._bus.subscribe(event, handler)
 
     def shutdown(self) -> None:
+        self._audio_discovery.close()
         self._file_batch.close()
         self._meeting.shutdown()
         self.stop_file_transcription()
