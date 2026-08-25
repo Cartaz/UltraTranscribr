@@ -221,7 +221,7 @@ class AppController:
         language: Optional[str] = None,
         stream_id: Optional[int] = None,
     ) -> dict[str, Any]:
-        if self._file_busy():
+        if self.is_file_busy():
             raise RuntimeError(
                 "Ferma la trascrizione file prima di avviare una sessione Live"
             )
@@ -292,7 +292,7 @@ class AppController:
         )
 
     # ------------------------------------------------------------------
-    # File transcription (kept exclusive from Live sessions in Phase 4)
+    # File transcription (exclusive from Live sessions)
     # ------------------------------------------------------------------
     def start_file_transcription(
         self,
@@ -351,7 +351,7 @@ class AppController:
         self._run_async(generation, start, "file_transcriber_error")
 
     def start_recovery_transcription(self, recovery_path: str) -> None:
-        if self._live_sessions.has_active_sessions() or self._file_busy():
+        if self._live_sessions.has_active_sessions() or self.is_file_busy():
             raise RuntimeError(
                 "Ferma la trascrizione attiva prima di recuperare l'audio"
             )
@@ -385,7 +385,8 @@ class AppController:
         worker = self._file_thread
         return bool(worker and worker.is_alive())
 
-    def _file_busy(self) -> bool:
+    def is_file_busy(self) -> bool:
+        """Return whether a File worker is running or still starting."""
         if self.is_file_transcribing():
             return True
         startup = self._startup_thread
@@ -460,7 +461,7 @@ class AppController:
             self._model_operation_lock.release()
 
     def _require_idle_for_model_operation(self) -> None:
-        if self._live_sessions.has_active_sessions() or self._file_busy():
+        if self._live_sessions.has_active_sessions() or self.is_file_busy():
             raise RuntimeError(
                 "Ferma la trascrizione attiva prima di gestire i modelli"
             )
@@ -502,7 +503,7 @@ class AppController:
         return self._history.list_recovery_audio()
 
     def delete_recovery_audio(self, recovery_path: str) -> bool:
-        if self._file_busy():
+        if self.is_file_busy():
             raise RuntimeError(
                 "Ferma la trascrizione file prima di eliminare un recovery"
             )
