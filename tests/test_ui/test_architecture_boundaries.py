@@ -62,3 +62,13 @@ def test_phase10_live_bridge_uses_public_controller_api_only() -> None:
     assert "self._controller.live_sessions" not in source
     assert "self._controller.start_live_session(" in source
     assert "self._controller.is_file_busy()" in source
+
+
+def test_webengine_is_local_only_and_external_links_leave_the_app() -> None:
+    shell = _read("ui/main_window.py")
+    assert "class LocalOnlyWebPage(QWebEnginePage)" in shell
+    assert 'if scheme in self._EXTERNAL_SCHEMES:' in shell
+    assert "QDesktopServices.openUrl(url)" in shell
+    assert "LocalContentCanAccessRemoteUrls" in shell
+    assert "False," in shell
+    assert "def createWindow" in shell
