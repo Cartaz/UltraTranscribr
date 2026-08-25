@@ -74,8 +74,10 @@ def test_meeting_control_waits_are_owned_by_core_not_webchannel_bridge() -> None
     assert ".join(" not in bridge
 
 
-def test_audio_discovery_io_is_owned_by_core_service_not_webchannel() -> None:
+def test_audio_subsystem_has_one_managed_pactl_owner() -> None:
     service = _read("core/audio_discovery.py")
+    routing = _read("core/audio_routing.py")
+    sink_finder = _read("core/sink_finder.py")
     pactl = _read("core/pactl.py")
     controller = _read("core/app_controller.py")
     bridge = _read("ui/bridge.py")
@@ -83,18 +85,28 @@ def test_audio_discovery_io_is_owned_by_core_service_not_webchannel() -> None:
     frontend = _read("ui/web/multi_live.js")
 
     assert "class AudioDiscoveryService" in service
+    assert "stream_provider" not in service
     assert "PactlRunner" in service
-    assert "self._pactl.close()" in service
+    assert "PactlRunner" in routing
+    assert "PactlRunner" in sink_finder
     assert "subprocess.run(" not in service
-    assert 'name="AudioDiscoveryRefresh"' in service
-    assert 'name=f"AudioSourceProbe-' in service
+    assert "subprocess.run(" not in routing
+    assert "subprocess.run(" not in sink_finder
     assert "class PactlRunner" in pactl
     assert "subprocess.Popen(" in pactl
     assert "shell=True" not in pactl
     assert "process.terminate()" in pactl
     assert "process.kill()" in pactl
-    assert "self._audio_discovery = AudioDiscoveryService(" in controller
+
+    assert controller.count("self._pactl = PactlRunner()") == 1
+    assert "PulseAudioRouter(pactl_runner=self._pactl)" in controller
+    assert "pactl_runner=self._pactl" in controller
+    assert "stream_provider=self.list_playback_streams" not in controller
+    assert "self._audio_router.close()" in controller
     assert "self._audio_discovery.close()" in controller
+    assert "self._pactl.close()" in controller
+    assert controller.index("self._live_sessions.shutdown()") < controller.index("self._pactl.close()")
+
     assert "list_available_devices" not in bridge
     assert "evaluate_audio_source_health" not in multi_bridge
     assert "find_source" not in multi_bridge
