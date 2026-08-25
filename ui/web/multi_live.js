@@ -246,7 +246,6 @@ function multiLiveSyncAggregate() {
   if ($("live-drain-all")) $("live-drain-all").disabled = capturing.length === 0;
   if ($("file-start")) $("file-start").disabled = active.length > 0 || !!state.file;
   lockSettings();
-  renderModels(state.models);
   if (active.length) globalStatus(`In uso · ${active.length} Live`, "active");
   else if (!state.file) restoreBackendStatus();
 }
@@ -389,7 +388,6 @@ const liveSessionsModule = {
         multiLiveUpsert(value);
         multiLiveRender();
         multiLiveSyncAggregate();
-        if (name === "live_session_updated" && value?.terminal && historyIsVisible()) refreshHistory();
         probeSelectedAudioSource();
         return true;
       case "live_session_buffer_level": {
@@ -459,13 +457,6 @@ const liveSessionsModule = {
       case "audio_discovery_error":
         showError(value, "audio");
         return true;
-      case "recovery_audio_saved":
-        if (value && typeof value === "object" && value.path) {
-          notice("Audio non trascritto salvato in Recovery", true);
-          if (historyIsVisible()) refreshRecovery();
-          return true;
-        }
-        return false;
       default:
         return false;
     }
