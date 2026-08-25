@@ -2,7 +2,7 @@
 
 // Central extension boundary for the local frontend. app.js remains the base
 // presentation module; feature modules register hooks here instead of replacing
-// one another's globals through Legacy* wrapper chains.
+// one another's globals through chained wrapper overrides.
 const ultraBaseUI = {
   bind,
   hydrate,
