@@ -84,6 +84,9 @@ class _FileBatchControllerView:
     def subscribe(self, event: str, handler: Callable) -> None:
         self._controller.subscribe(event, handler)
 
+    def unsubscribe(self, event: str, handler: Callable) -> None:
+        self._controller.unsubscribe(event, handler)
+
     def active_live_count(self) -> int:
         return self._controller.active_live_count()
 
@@ -142,6 +145,7 @@ class AppController:
         self._backend_started = False
         self._file_history_id: Optional[str] = None
         self._history_subscriptions: list[tuple[str, Callable[[Any], None]]] = []
+        self._shutdown_started = False
 
         self._live_sessions = LiveSessionManager(
             backend=self._backend,
@@ -301,9 +305,6 @@ class AppController:
             self._startup_thread = thread
         thread.start()
 
-    # ------------------------------------------------------------------
-    # Live sessions
-    # ------------------------------------------------------------------
     def start_live_session(
         self,
         *,
@@ -386,9 +387,6 @@ class AppController:
             for item in self._live_sessions.list_sessions()
         )
 
-    # ------------------------------------------------------------------
-    # File transcription (exclusive from Live sessions)
-    # ------------------------------------------------------------------
     def start_file_transcription(
         self,
         file_path: str,
@@ -476,15 +474,11 @@ class AppController:
         return bool(worker and worker.is_alive())
 
     def is_file_busy(self) -> bool:
-        """Return whether a File worker is running or still starting."""
         if self.is_file_transcribing():
             return True
         startup = self._startup_thread
         return bool(startup and startup.is_alive())
 
-    # ------------------------------------------------------------------
-    # Settings, models and discovery
-    # ------------------------------------------------------------------
     def update_settings(self, **overrides: object) -> None:
         self._settings = self._settings.with_(**overrides)
         self._settings.save()
@@ -581,9 +575,6 @@ class AppController:
                 "Ferma la trascrizione attiva prima di gestire i modelli"
             )
 
-    # ------------------------------------------------------------------
-    # History and recovery
-    # ------------------------------------------------------------------
     def list_history(self, limit: int = 50) -> list[dict[str, Any]]:
         self.prune_history()
         return self._history.list_recent(limit)
@@ -627,21 +618,42 @@ class AppController:
             self._bus.emit("history_changed", None)
         return deleted
 
-    # ------------------------------------------------------------------
-    # Lifecycle and helpers
-    # ------------------------------------------------------------------
     def subscribe(self, event: str, handler: Callable) -> None:
         self._bus.subscribe(event, handler)
 
+    def unsubscribe(self, event: str, handler: Callable) -> None:
+        self._bus.unsubscribe(event, handler)
+
     def shutdown(self) -> None:
-        self._file_batch.close()
-        self._meeting.shutdown()
-        self.stop_file_transcription()
-        self._live_sessions.shutdown()
-        self._audio_router.close()
-        self._audio_discovery.close()
-        self._pactl.close()
-        self.stop_backend()
+        with self._lock:
+            if self._shutdown_started:
+                return
+            self._shutdown_started = True
+        self._next_generation()
+
+        steps = (
+            ("FileBatch", self._file_batch.close),
+            ("Meeting", self._meeting.shutdown),
+            ("File", self.stop_file_transcription),
+            ("Live", self._live_sessions.shutdown),
+            ("AudioRouter", self._audio_router.close),
+            ("AudioDiscovery", self._audio_discovery.close),
+            ("Pactl", self._pactl.close),
+            ("WhisperBackend", self.stop_backend),
+        )
+        for label, action in steps:
+            try:
+                action()
+            except Exception:
+                logger.exception("Shutdown %s fallito", label)
+
+        with self._lock:
+            startup = self._startup_thread
+        if startup and startup.is_alive() and startup is not threading.current_thread():
+            startup.join(timeout=5.0)
+            if startup.is_alive():
+                logger.warning("ControllerStartup ancora attivo dopo shutdown bounded")
+
         for event, handler in self._history_subscriptions:
             self._bus.unsubscribe(event, handler)
         self._history_subscriptions.clear()
@@ -680,6 +692,7 @@ class AppController:
                 "file_transcriber_new_text",
                 lambda payload: self._append_file_history_text(payload),
             ),
+            ("file_transcriber_segments", self._append_file_history_segments),
             ("file_transcriber_status_changed", self._on_file_history_status),
             (
                 "file_transcriber_error",
@@ -714,6 +727,19 @@ class AppController:
             self._history.append_text(session_id, str(payload or ""))
         except Exception as exc:
             logger.exception("Autosave trascrizione file fallito")
+            self._bus.emit("history_error", str(exc))
+
+    def _append_file_history_segments(self, payload: Any) -> None:
+        if not isinstance(payload, list) or not payload:
+            return
+        with self._lock:
+            session_id = self._file_history_id
+        if session_id is None:
+            return
+        try:
+            self._history.append_segments(session_id, payload)
+        except Exception as exc:
+            logger.exception("Autosave segmenti temporizzati fallito")
             self._bus.emit("history_error", str(exc))
 
     def _set_file_history_status(self, status: str) -> None:

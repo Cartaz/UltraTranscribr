@@ -21,6 +21,8 @@ class FileBatchController(Protocol):
 
     def subscribe(self, event: str, handler) -> None: ...
 
+    def unsubscribe(self, event: str, handler) -> None: ...
+
     def active_live_count(self) -> int: ...
 
     def is_file_transcribing(self) -> bool: ...
@@ -151,7 +153,7 @@ class FileBatchCoordinator:
                 return
             self._closed = True
         for event, handler in self._subscriptions:
-            self._bus.unsubscribe(event, handler)
+            self._controller.unsubscribe(event, handler)
         self._tasks.close()
 
     def _maybe_start_next_async(self) -> None:

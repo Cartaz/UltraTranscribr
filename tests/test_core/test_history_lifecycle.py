@@ -20,14 +20,11 @@ def controller(tmp_path: Path) -> AppController:
         instance = AppController(settings=Settings(history_retention_days=0))
     history = TranscriptHistoryStore(tmp_path / "history")
     instance._history = history
-    # Live history is owned directly by LiveSessionManager in Phase 4.
     instance._live_sessions._history = history
     return instance
 
 
 def test_live_autosave_lifecycle(controller: AppController) -> None:
-    # Creating a Live session persists the history record synchronously; worker
-    # startup is patched because this test targets persistence, not PortAudio.
     with patch.object(controller._live_sessions, "_start_session"):
         snapshot = controller.start_live_session(
             sink_name="speaker.monitor",
@@ -69,16 +66,19 @@ def test_file_autosave_lifecycle(controller: AppController) -> None:
     assert len(records) == 1
     session_id = records[0]["id"]
 
+    segments = [{"start": 0.0, "end": 1.25, "text": "hello"}]
     bus = EventBus()
     bus.emit("file_transcriber_status_changed", "running")
     bus.emit("file_transcriber_new_text", "hello")
     bus.emit("file_transcriber_new_text", "world")
+    bus.emit("file_transcriber_segments", segments)
     bus.emit("file_transcriber_completed", None)
 
     session = controller.get_history_session(session_id)
     assert session is not None
     assert session["status"] == "completed"
     assert session["text"] == "hello world"
+    assert session["segments"] == segments
     assert session["model"] == "medium"
     assert session["language"] == "en"
     assert session["source_path"] == "/tmp/example.wav"

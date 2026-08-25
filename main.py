@@ -25,7 +25,6 @@ from config.settings import Settings
 from core.app_controller import AppController
 from core.application_service import ApplicationService
 from core.exceptions import GPUNotAvailableError
-from core.file_segment_journal import FileSegmentJournal
 from ui.main_window import MainWindow
 from ui.tray_icon import TrayIcon
 
@@ -88,7 +87,6 @@ def main() -> None:
         sys.exit(1)
 
     application = ApplicationService(controller)
-    segment_journal = FileSegmentJournal(controller)
     window = MainWindow(controller=controller, application=application)
 
     icon_path = Path(__file__).parent / "assets" / "icons" / "icon.png"
@@ -117,10 +115,12 @@ def main() -> None:
     window.show()
 
     logger.info("UltraTranscribr pronto (SYCL GPU)")
-    exit_code = app.exec()
-
-    segment_journal.close()
-    controller.stop_backend()
+    exit_code = 1
+    try:
+        exit_code = app.exec()
+    finally:
+        application.close()
+        controller.shutdown()
     sys.exit(exit_code)
 
 
