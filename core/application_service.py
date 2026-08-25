@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any, Callable
 
+from config.constants import AppMeta
 from config.settings import AudioSource, ModelSize, Settings
 from core.app_controller import AppController
 from core.audio_diagnostics import build_audio_diagnostics
@@ -49,6 +51,13 @@ class ApplicationService:
     def close(self) -> None:
         """Stop accepting background work and wait boundedly for owned tasks."""
         self._tasks.close()
+
+    def subscribe(self, event: str, handler: Callable[[Any], None]) -> None:
+        self.controller.subscribe(event, handler)
+
+    @property
+    def settings(self) -> Settings:
+        return self.controller.settings
 
     def submit(
         self,
@@ -118,6 +127,10 @@ class ApplicationService:
     def settings_defaults() -> dict[str, Any]:
         return asdict(Settings())
 
+    def filter_settings_overrides(self, payload: dict[str, Any]) -> dict[str, Any]:
+        allowed = set(self.controller.settings.__dataclass_fields__)
+        return {key: value for key, value in payload.items() if key in allowed}
+
     def apply_settings(self, overrides: dict[str, Any]) -> Settings:
         if self.meeting.is_busy():
             raise RuntimeError("Termina la riunione prima di modificare le impostazioni")
@@ -139,6 +152,34 @@ class ApplicationService:
                 self.controller.stop_backend()
             self.controller.backend.reconfigure(current)
         return current
+
+    def refresh_devices(self, audio_source: str) -> list[dict[str, Any]]:
+        source = (
+            audio_source
+            if audio_source in AudioSource.choices()
+            else self.controller.settings.audio_source
+        )
+        if source == AudioSource.APPLICATION.value:
+            return []
+        self.controller.request_audio_discovery(devices=True, streams=False)
+        devices = self.controller.audio_discovery_snapshot()["devices"]
+        key = "is_monitor" if source == AudioSource.SYSTEM.value else "is_mic"
+        return [device for device in devices if bool(device.get(key))]
+
+    def list_playback_streams(self) -> list[dict[str, Any]]:
+        self.controller.request_audio_discovery(devices=False, streams=True)
+        return self.controller.audio_discovery_snapshot()["streams"]
+
+    def probe_audio_source(self, audio_source: str, selected_input: str) -> dict[str, Any]:
+        source = (
+            audio_source
+            if audio_source in AudioSource.choices()
+            else self.controller.settings.audio_source
+        )
+        selection = str(selected_input or "").strip()
+        status = self.controller.cached_audio_source_health(source, selection)
+        self.controller.request_audio_source_probe(source, selection)
+        return status
 
     def start_live(
         self,
@@ -196,12 +237,15 @@ class ApplicationService:
         song_mode: bool,
         isolate_vocals: bool,
     ) -> None:
+        source = Path(path).expanduser()
+        if not source.is_file():
+            raise FileNotFoundError("Seleziona un file esistente")
         if self.meeting.is_busy():
             raise RuntimeError(
                 "Termina la riunione prima di avviare una trascrizione File"
             )
         self.controller.start_file_transcription(
-            path,
+            str(source),
             language=language,
             model_size=model_size,
             song_mode=song_mode,
@@ -234,6 +278,22 @@ class ApplicationService:
             isolate_vocals=isolate_vocals,
         )
 
+    def existing_files(self, paths: list[str]) -> list[str]:
+        return [
+            str(path)
+            for raw in paths
+            if (path := Path(str(raw)).expanduser()).is_file()
+        ]
+
+    def list_file_queue(self) -> list[dict[str, Any]]:
+        return self.file_batch.list_jobs()
+
+    def cancel_file_queue(self) -> list[dict[str, Any]]:
+        return self.file_batch.cancel(clear_pending=True)
+
+    def clear_finished_file_queue(self) -> list[dict[str, Any]]:
+        return self.file_batch.clear_finished()
+
     def batch_busy(self) -> bool:
         return any(
             str(job.get("status")) in {"queued", "starting", "running"}
@@ -257,6 +317,36 @@ class ApplicationService:
             num_speakers=num_speakers,
         )
 
+    def finish_meeting(self) -> dict[str, Any]:
+        return self.meeting.finish()
+
+    def cancel_meeting(self) -> dict[str, Any] | None:
+        self.meeting.cancel()
+        return self.meeting.snapshot()
+
+    def get_meeting(self, session_id: str) -> dict[str, Any] | None:
+        return self.meeting.get(session_id)
+
+    def meeting_audio_path(self, session_id: str) -> str:
+        meeting = self.meeting.get(session_id)
+        path = Path(
+            str((meeting or {}).get("meeting", {}).get("recording", {}).get("path") or "")
+        )
+        return str(path) if path.is_file() else ""
+
+    def set_meeting_speaker_name(
+        self, session_id: str, speaker_id: str, name: str
+    ) -> dict[str, Any]:
+        return self.meeting.set_speaker_name(session_id, speaker_id, name)
+
+    def edit_meeting_segment(
+        self, session_id: str, index: int, text: str
+    ) -> dict[str, Any]:
+        return self.meeting.edit_segment(session_id, index, text)
+
+    def delete_meeting_audio(self, session_id: str) -> bool:
+        return self.meeting.delete_audio(session_id)
+
     def require_meeting_idle(self, action: str) -> None:
         if self.meeting.is_busy():
             raise RuntimeError(f"Termina la riunione prima di {action}")
@@ -266,6 +356,9 @@ class ApplicationService:
             raise RuntimeError(
                 "Ferma la trascrizione attiva prima di gestire i modelli"
             )
+
+    def list_models(self) -> list[dict[str, object]]:
+        return self.controller.list_models()
 
     def download_model(self, model_size: str) -> None:
         self.require_meeting_idle("gestire i modelli")
@@ -378,6 +471,27 @@ class ApplicationService:
         deleted = delete_recording(session_id)
         self._bus.emit("history_changed", session_id)
         return deleted
+
+    def list_recovery_audio(self) -> list[dict[str, Any]]:
+        return self.controller.list_recovery_audio()
+
+    def start_recovery(self, recovery_path: str) -> None:
+        self.require_meeting_idle("recuperare audio")
+        self.controller.start_recovery_transcription(recovery_path)
+
+    def delete_recovery(self, recovery_path: str) -> bool:
+        return self.controller.delete_recovery_audio(recovery_path)
+
+    def read_log_tail(self, line_count: int) -> str:
+        try:
+            with AppMeta.LOG_PATH.open(
+                "r", encoding="utf-8", errors="replace"
+            ) as handle:
+                lines = handle.readlines()
+            return "".join(lines[-line_count:])
+        except OSError as exc:
+            logger.debug("Log applicativo non disponibile: %s", exc)
+            return ""
 
     def run_audio_diagnostics(self) -> None:
         self.submit(
