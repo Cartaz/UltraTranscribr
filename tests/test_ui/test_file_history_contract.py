@@ -35,7 +35,8 @@ def test_history_refresh_preserves_active_search_filter_without_wrapping() -> No
     source = (WEB / "file_history.js").read_text(encoding="utf-8")
     assert 'const query = $("history-search")?.value?.trim() || ""' in source
     assert "fileHistorySearch()" in source
-    assert "refreshHistoryList()" not in source
+    assert "refreshHistoryList() {" in source
+    assert "refreshHistoryList = function" not in source
     assert "Legacy" not in source
 
 
