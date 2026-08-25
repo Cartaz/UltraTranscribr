@@ -81,7 +81,8 @@ def test_application_service_explicit_unsubscribe_updates_owned_registry() -> No
     service.unsubscribe("history_changed", handler)
     service.close()
 
-    assert events == ["unsubscribe:history_changed", "tasks", "controller"]
+    assert controller.subscriptions == []
+    assert events == ["unsubscribe:history_changed", "controller"]
 
 
 def test_presentation_and_composition_root_do_not_teardown_controller_directly() -> None:
