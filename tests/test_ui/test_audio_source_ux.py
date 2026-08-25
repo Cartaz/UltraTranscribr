@@ -94,18 +94,28 @@ def test_frontend_refreshes_sources_on_live_entry_without_polling() -> None:
     assert "probeAudioSource" in script
     for status in ("available", "playing", "disconnected"):
         assert status in script
+    assert 'name === "audio_devices_changed"' in script
+    assert 'name === "playback_streams_changed"' in script
+    assert 'name === "audio_source_health_changed"' in script
     assert "setInterval(" not in script
 
 
-def test_bridge_probe_uses_pure_health_evaluator() -> None:
+def test_source_probe_rules_live_in_core_discovery_service() -> None:
     bridge_source = (ROOT / "ui" / "multi_session_bridge.py").read_text(
         encoding="utf-8"
     )
-    assert "evaluate_audio_source_health" in bridge_source
-    assert "probeAudioSource" in bridge_source
-    assert "list_available_devices" in bridge_source
-    assert "find_source" in bridge_source
-    assert "list_playback_streams" in bridge_source
+    service_source = (ROOT / "core" / "audio_discovery.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "evaluate_audio_source_health" in service_source
+    assert "list_available_devices" in service_source
+    assert "find_source" in service_source
+    assert "evaluate_audio_source_health" not in bridge_source
+    assert "list_available_devices" not in bridge_source
+    assert "find_source" not in bridge_source
+    assert "cached_audio_source_health" in bridge_source
+    assert "request_audio_source_probe" in bridge_source
 
 
 def test_audio_diagnostics_include_streams_and_live_routing() -> None:
