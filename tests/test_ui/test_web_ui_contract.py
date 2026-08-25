@@ -10,7 +10,6 @@ def test_web_ui_files_and_native_stack_are_present() -> None:
     expected = [
         ROOT / "ui" / "__init__.py",
         ROOT / "ui" / "bridge.py",
-        ROOT / "ui" / "multi_session_bridge.py",
         ROOT / "ui" / "phase10_bridge.py",
         ROOT / "ui" / "main_window.py",
         ROOT / "ui" / "tray_icon.py",
@@ -50,9 +49,8 @@ def test_dark_neumorphism_uses_exact_surface_and_accent_without_gradients() -> N
 
 
 def test_frontend_is_wired_to_real_backend_operations() -> None:
-    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
-    multi_bridge = (ROOT / "ui" / "multi_session_bridge.py").read_text(encoding="utf-8")
-    phase10_bridge = (ROOT / "ui" / "phase10_bridge.py").read_text(encoding="utf-8")
+    base_bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "phase10_bridge.py").read_text(encoding="utf-8")
     script = (WEB / "app.js").read_text(encoding="utf-8")
     multi_script = (WEB / "multi_live.js").read_text(encoding="utf-8")
     phase10_script = (WEB / "phase10.js").read_text(encoding="utf-8")
@@ -62,22 +60,22 @@ def test_frontend_is_wired_to_real_backend_operations() -> None:
         "stop_file_transcription",
         "update_settings",
     ):
-        assert operation in bridge
+        assert operation in base_bridge
     for operation in (
         "start_live_session",
         "stop_live_session",
         "stopAllLive",
         "drainAllLive",
+        "startLiveWithRecording",
+        "startMeeting",
+        "editMeetingSegment",
     ):
-        assert operation in multi_bridge
-    assert "startLiveWithRecording" in phase10_bridge
-    assert "startMeeting" in multi_bridge
-    assert "editMeetingSegment" in multi_bridge
+        assert operation in bridge
 
     for event in ("file_transcriber_progress", "file_transcriber_full_text"):
-        assert event in bridge
+        assert event in base_bridge
         assert event in script
-    assert "live_session_updated" in multi_bridge
+    assert "live_session_updated" in bridge
     assert "live_session_updated" in multi_script
-    assert "meeting_updated" in multi_bridge
+    assert "meeting_updated" in bridge
     assert "meeting_updated" in phase10_script
