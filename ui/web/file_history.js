@@ -110,6 +110,11 @@ function fileHistoryEnsureRecordingUI() {
   meta.after(box);
 }
 
+function fileHistoryFileName(path) {
+  const parts = String(path || "").split(/[\\/]/);
+  return parts[parts.length - 1] || String(path || "");
+}
+
 function fileHistoryDuration(seconds) {
   const total = Math.max(0, Math.floor(Number(seconds) || 0));
   const h = Math.floor(total / 3600);
@@ -133,6 +138,43 @@ function fileHistoryFormatBytes(value) {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
 }
 
+function fileHistorySetFileProgress(value) {
+  const progressValue = Math.max(0, Math.min(100, Number(value) || 0));
+  $("file-fill").style.width = `${progressValue}%`;
+  $("file-progress").setAttribute("aria-valuenow", String(progressValue));
+  $("file-progress-value").textContent = `${Math.round(progressValue)}%`;
+}
+
+function fileHistorySetFileText(value, full = false) {
+  const addition = String(value || "");
+  if (full) state.fileText = addition;
+  else state.fileText += (state.fileText ? " " : "") + addition;
+  const transcript = $("file-transcript");
+  transcript.textContent = state.fileText || "Il testo trascritto apparirà qui.";
+  transcript.classList.toggle("placeholder", !state.fileText);
+  transcript.scrollTop = transcript.scrollHeight;
+}
+
+function fileHistoryUpdateFileSummary(path = null) {
+  const settings = state.boot?.settings || {};
+  const sourcePath = path || (fileHistorySelectedPaths.length === 1 ? fileHistorySelectedPaths[0] : "");
+  $("file-model-value").textContent = modelLabels[settings.model_size] || settings.model_size || "—";
+  $("file-language-value").textContent = settings.language || "auto";
+  $("file-name-value").textContent = fileHistorySelectedPaths.length > 1
+    ? `${fileHistorySelectedPaths.length} file`
+    : sourcePath ? fileHistoryFileName(sourcePath) : "—";
+  $("file-name-value").title = sourcePath;
+}
+
+function fileHistoryFileUI(status) {
+  $("file-status").textContent = status;
+  if ($("file-start")) $("file-start").disabled = sessionBusy() || !fileHistorySelectedPaths.length;
+  if ($("file-stop")) $("file-stop").disabled = !state.file;
+  if ($("file-pick")) $("file-pick").disabled = state.live || state.draining;
+  setOrb("file-orb", state.file);
+  lockSettings();
+}
+
 function fileHistoryIsVisible() {
   const panel = document.querySelector('[data-panel="history"]');
   return !!panel && panel.classList.contains("active");
@@ -143,7 +185,7 @@ function fileHistoryTitle(session) {
   if (custom) return custom;
   if (session?.kind === "meeting") return "Riunione";
   if (session?.kind === "file") {
-    const name = fileName(session.source_path) || "Trascrizione file";
+    const name = fileHistoryFileName(session.source_path) || "Trascrizione file";
     return session.source === "recovery" ? `Recovery · ${name}` : name;
   }
   if (session?.source === "microphone") return "Trascrizione microfono";
@@ -190,19 +232,16 @@ function fileHistoryRenderSelectedPaths() {
   if (!fileHistorySelectedPaths.length) {
     input.value = "";
     input.placeholder = "Nessun file selezionato";
+    input.title = "";
   } else if (fileHistorySelectedPaths.length === 1) {
     input.value = fileHistorySelectedPaths[0];
+    input.title = fileHistorySelectedPaths[0];
   } else {
     input.value = `${fileHistorySelectedPaths.length} file selezionati`;
     input.title = fileHistorySelectedPaths.join("\n");
   }
-  const settings = state.boot?.settings || {};
-  $("file-start").disabled = sessionBusy() || !fileHistorySelectedPaths.length;
-  $("file-model-value").textContent = modelLabels[settings.model_size] || settings.model_size || "—";
-  $("file-language-value").textContent = settings.language || "auto";
-  $("file-name-value").textContent = fileHistorySelectedPaths.length === 1
-    ? fileName(fileHistorySelectedPaths[0])
-    : fileHistorySelectedPaths.length ? `${fileHistorySelectedPaths.length} file` : "—";
+  fileHistoryUpdateFileSummary();
+  fileHistoryFileUI($("file-status").textContent || "Idle");
 }
 
 function fileHistorySetSelectedPaths(paths) {
@@ -258,7 +297,7 @@ function fileHistoryRenderQueue(items) {
     row.className = `file-queue-item status-${job.status || "queued"}`;
     const info = document.createElement("div");
     const title = document.createElement("strong");
-    title.textContent = fileName(job.path);
+    title.textContent = fileHistoryFileName(job.path);
     title.title = job.path;
     const detail = document.createElement("small");
     detail.textContent = `${fileHistoryQueueStatus(job.status)} · ${Math.max(0, Math.min(100, Number(job.progress) || 0))}%${job.error ? ` · ${job.error}` : ""}`;
@@ -505,14 +544,13 @@ function fileHistoryStartRecovery(item) {
     }
     state.file = true;
     state.fileText = "";
-    text("file", "", true);
-    progress("file", 0);
-    $("file-path").value = item.path || "";
+    fileHistorySetFileText("", true);
+    fileHistorySetFileProgress(0);
+    fileHistorySetSelectedPaths([item.path]);
     $("song-mode").checked = false;
     $("isolate-vocals").checked = false;
     $("isolate-vocals").disabled = true;
-    updateFileSummary(item.path);
-    fileUI("Avvio");
+    fileHistoryFileUI("Avvio");
     switchView("file");
     notice("Ritrascrizione recovery avviata");
   });
@@ -590,6 +628,13 @@ const fileHistoryModule = {
     $("file-pick").onclick = () => call("chooseAudioFiles", [], result => fileHistorySetSelectedPaths(json(result)));
     $("file-start").textContent = "Accoda";
     $("file-start").onclick = () => fileHistoryEnqueue(fileHistorySelectedPaths);
+    $("file-stop").onclick = () => call("stopFile");
+    $("song-mode").onchange = eventObject => {
+      $("isolate-vocals").disabled = !eventObject.target.checked;
+      if (!eventObject.target.checked) $("isolate-vocals").checked = false;
+    };
+    $("file-copy").onclick = () => copyValue(state.fileText);
+    $("file-clear").onclick = () => fileHistorySetFileText("", true);
     $("file-queue-cancel").onclick = () => call("cancelFileQueue", [], result => fileHistoryRenderQueue(json(result)?.jobs || []));
     $("file-queue-clear").onclick = () => call("clearFinishedFileQueue", [], result => fileHistoryRenderQueue(json(result)?.jobs || []));
     $("history-refresh").onclick = fileHistoryRefresh;
@@ -617,6 +662,9 @@ const fileHistoryModule = {
     fileHistoryRenderQueue(bootstrap?.fileQueue || []);
     fileHistorySetSelectedPaths([]);
     fileHistoryPopulateProfiles(null);
+    state.file = !!bootstrap?.runtime?.fileRunning;
+    fileHistorySetFileProgress(0);
+    fileHistoryFileUI(state.file ? "In esecuzione" : "Idle");
   },
   view(name) {
     if (name === "history") fileHistoryRefresh();
@@ -632,8 +680,7 @@ const fileHistoryModule = {
       else if (value) fileHistoryQueue.push(value);
       fileHistoryRenderQueue(fileHistoryQueue);
       if (["starting", "running"].includes(String(value?.status))) {
-        $("file-name-value").textContent = fileName(value.path);
-        $("file-name-value").title = value.path || "";
+        fileHistoryUpdateFileSummary(value.path);
       }
       return true;
     }
@@ -641,6 +688,42 @@ const fileHistoryModule = {
       const paths = Array.isArray(value) ? value : [];
       if (paths.length) fileHistoryEnqueue(paths);
       return true;
+    }
+    if (name === "file_transcriber_status_changed") {
+      state.file = !["completed", "stopped", "error"].includes(String(value));
+      fileHistoryFileUI(label(value));
+      if (state.file) globalStatus("In uso · File", "active");
+      else restoreBackendStatus();
+      return true;
+    }
+    if (name === "file_transcriber_progress") {
+      fileHistorySetFileProgress(value);
+      return true;
+    }
+    if (name === "file_transcriber_new_text") {
+      fileHistorySetFileText(value);
+      return true;
+    }
+    if (name === "file_transcriber_full_text") {
+      fileHistorySetFileText(value, true);
+      return true;
+    }
+    if (name === "file_transcriber_completed") {
+      state.file = false;
+      fileHistoryFileUI("Completata");
+      fileHistorySetFileProgress(100);
+      restoreBackendStatus();
+      return true;
+    }
+    if (name === "file_transcriber_error") {
+      state.file = false;
+      fileHistoryFileUI("Errore");
+      showError(value, "file");
+      return true;
+    }
+    if (name === "config_changed") {
+      fileHistoryUpdateFileSummary();
+      return false;
     }
     if (name === "history_changed") {
       if (fileHistoryIsVisible()) fileHistoryRefresh();
@@ -661,9 +744,8 @@ const fileHistoryModule = {
     }
     return false;
   },
-  fileUI() {
-    if ($("file-start")) $("file-start").disabled = sessionBusy() || !fileHistorySelectedPaths.length;
-    if ($("file-pick")) $("file-pick").disabled = state.live || state.draining;
+  fileUI(status) {
+    fileHistoryFileUI(status);
   },
 };
 
