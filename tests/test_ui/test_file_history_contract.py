@@ -30,6 +30,11 @@ def test_file_history_module_exposes_batch_search_exports_and_postprocess() -> N
         'fileHistoryExport("vtt")',
         "generatePostprocess",
         "renameHistorySession",
+        "fileHistoryRenderHistory",
+        "fileHistoryLoadSession",
+        "fileHistoryDeleteSelected",
+        "fileHistoryRenderRecovery",
+        "fileHistoryRefreshRecovery",
     ):
         assert token in source
 
@@ -38,9 +43,35 @@ def test_history_refresh_preserves_active_search_filter_without_wrapping() -> No
     source = (WEB / "file_history.js").read_text(encoding="utf-8")
     assert 'const query = $("history-search")?.value?.trim() || ""' in source
     assert "fileHistorySearch()" in source
-    assert "refreshHistoryList() {" in source
+    assert "function fileHistoryRefreshList()" in source
     assert "refreshHistoryList = function" not in source
     assert "Legacy" not in source
+
+
+def test_history_and_recovery_are_not_implemented_in_frontend_root() -> None:
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    source = (WEB / "file_history.js").read_text(encoding="utf-8")
+    meeting = (WEB / "meeting.js").read_text(encoding="utf-8")
+
+    for legacy_owner in (
+        "function renderHistory(",
+        "function loadHistorySession(",
+        "function deleteSelectedHistory(",
+        "function refreshHistoryList(",
+        "function renderRecovery(",
+        "function refreshRecovery(",
+        'case "history_changed"',
+        'case "recovery_audio_saved"',
+    ):
+        assert legacy_owner not in app
+
+    assert 'name === "history_changed"' in source
+    assert 'name === "recovery_audio_saved"' in source
+    assert 'name === "meeting_completed"' in source
+    assert "UltraUI.notify(\"historySession\", session)" in source
+    assert "UltraUI.notify(\"historyClear\")" in source
+    assert "refreshHistory()" not in meeting
+    assert "historyIsVisible()" not in meeting
 
 
 def test_live_recording_can_be_reopened_and_deleted_from_history() -> None:
