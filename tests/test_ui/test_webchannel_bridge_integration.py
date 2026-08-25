@@ -70,6 +70,12 @@ class _QUrl:
         return self.value
 
 
+class _QTimer:
+    @staticmethod
+    def singleShot(_delay, callback):
+        callback()
+
+
 class _QFileDialog:
     @staticmethod
     def getOpenFileName(*args, **kwargs):
@@ -94,6 +100,7 @@ def _load_bridges(monkeypatch):
     qtcore.Signal = _SignalDescriptor
     qtcore.Slot = _slot
     qtcore.QUrl = _QUrl
+    qtcore.QTimer = _QTimer
     qtwidgets = ModuleType("PySide6.QtWidgets")
     qtwidgets.QFileDialog = _QFileDialog
     monkeypatch.setitem(sys.modules, "PySide6", pyside)
@@ -113,16 +120,16 @@ def _load_bridges(monkeypatch):
         return module
 
     bridge = load("ui.bridge", ROOT / "ui" / "bridge.py")
-    multi = load("ui.multi_session_bridge", ROOT / "ui" / "multi_session_bridge.py")
-    return bridge, multi
+    unified = load("ui.phase10_bridge", ROOT / "ui" / "phase10_bridge.py")
+    return bridge, unified
 
 
 class _FakeController:
     def __init__(self) -> None:
         self.settings = Settings(language="it", audio_source="system")
-        self.backend = SimpleNamespace(is_running=False)
+        self.backend = SimpleNamespace(is_running=False, reconfigure=lambda _settings: None)
         self.buffer = SimpleNamespace(buffer_level=17)
-        self.history = SimpleNamespace()
+        self.history = SimpleNamespace(search=lambda *_args: [], list_recent=lambda *_args: [])
         self.file_batch = SimpleNamespace(list_jobs=lambda: [])
         self.meeting = SimpleNamespace(
             snapshot=lambda: None,
@@ -152,7 +159,7 @@ class _FakeController:
         self.subscriptions.setdefault(event, []).append(handler)
 
     def list_models(self):
-        return [{"model": "medium", "installed": True}]
+        return [{"id": "medium", "model": "medium", "installed": True}]
 
     def list_playback_streams(self):
         return list(self.discovery_streams)
@@ -200,6 +207,9 @@ class _FakeController:
             payload["text"] = "ciao"
         return [payload]
 
+    def active_live_count(self):
+        return 0
+
     def is_running(self):
         return True
 
@@ -207,6 +217,9 @@ class _FakeController:
         return False
 
     def is_file_transcribing(self):
+        return False
+
+    def is_file_busy(self):
         return False
 
     def start_live_session(self, **kwargs):
@@ -220,12 +233,15 @@ class _FakeController:
     def prune_history(self):
         return 0
 
+    def stop_backend(self):
+        self.backend.is_running = False
+
 
 def test_bootstrap_contains_real_multi_session_runtime(monkeypatch) -> None:
-    _, multi_module = _load_bridges(monkeypatch)
+    _, unified_module = _load_bridges(monkeypatch)
     controller = _FakeController()
 
-    bridge = multi_module.MultiSessionBackendBridge(controller)
+    bridge = unified_module.Phase10BackendBridge(controller)
     payload = json.loads(bridge.getBootstrap())
 
     assert payload["settings"]["language"] == "it"
@@ -240,9 +256,9 @@ def test_bootstrap_contains_real_multi_session_runtime(monkeypatch) -> None:
 
 
 def test_bridge_forwards_session_event_as_json(monkeypatch) -> None:
-    _, multi_module = _load_bridges(monkeypatch)
+    _, unified_module = _load_bridges(monkeypatch)
     controller = _FakeController()
-    bridge = multi_module.MultiSessionBackendBridge(controller)
+    bridge = unified_module.Phase10BackendBridge(controller)
     received = []
     bridge.eventReceived.connect(lambda name, payload: received.append((name, json.loads(payload))))
 
@@ -255,9 +271,9 @@ def test_bridge_forwards_session_event_as_json(monkeypatch) -> None:
 
 
 def test_probe_application_source_returns_cache_and_schedules_refresh(monkeypatch) -> None:
-    _, multi_module = _load_bridges(monkeypatch)
+    _, unified_module = _load_bridges(monkeypatch)
     controller = _FakeController()
-    bridge = multi_module.MultiSessionBackendBridge(controller)
+    bridge = unified_module.Phase10BackendBridge(controller)
 
     response = json.loads(bridge.probeAudioSource("application", "42"))
 
@@ -267,9 +283,9 @@ def test_probe_application_source_returns_cache_and_schedules_refresh(monkeypatc
 
 
 def test_start_live_application_converts_selection_to_stream_id(monkeypatch) -> None:
-    _, multi_module = _load_bridges(monkeypatch)
+    _, unified_module = _load_bridges(monkeypatch)
     controller = _FakeController()
-    bridge = multi_module.MultiSessionBackendBridge(controller)
+    bridge = unified_module.Phase10BackendBridge(controller)
     monkeypatch.setattr(
         bridge,
         "_run_async",
@@ -291,9 +307,9 @@ def test_start_live_application_converts_selection_to_stream_id(monkeypatch) -> 
 
 
 def test_apply_settings_round_trip_uses_controller_validation(monkeypatch) -> None:
-    _, multi_module = _load_bridges(monkeypatch)
+    _, unified_module = _load_bridges(monkeypatch)
     controller = _FakeController()
-    bridge = multi_module.MultiSessionBackendBridge(controller)
+    bridge = unified_module.Phase10BackendBridge(controller)
 
     response = json.loads(bridge.applySettings(json.dumps({"language": "en", "beam_size": 7})))
 
@@ -304,8 +320,8 @@ def test_apply_settings_round_trip_uses_controller_validation(monkeypatch) -> No
 
 
 def test_settings_defaults_are_generated_from_settings_model(monkeypatch) -> None:
-    _, multi_module = _load_bridges(monkeypatch)
-    bridge = multi_module.MultiSessionBackendBridge(_FakeController())
+    _, unified_module = _load_bridges(monkeypatch)
+    bridge = unified_module.Phase10BackendBridge(_FakeController())
 
     defaults = json.loads(bridge.getSettingsDefaults())
 
