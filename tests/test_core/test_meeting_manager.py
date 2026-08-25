@@ -31,7 +31,7 @@ class _Controller:
     def active_live_count(self) -> int:
         return self.live_count
 
-    def _file_busy(self) -> bool:
+    def is_file_busy(self) -> bool:
         return self.file_busy
 
     def ensure_backend_started(self, **kwargs) -> None:
