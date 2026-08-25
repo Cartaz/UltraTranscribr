@@ -231,36 +231,42 @@ def _find_mic_via_sounddevice(keyword: str = "") -> Optional[str]:
 
 
 def debug_dump(*, pactl_runner: Optional[PactlRunner] = None) -> str:
-    """Dump delle informazioni audio utili al troubleshooting."""
-    runner = pactl_runner or PactlRunner()
-    owns_runner = pactl_runner is None
+    """Dump diagnostico; pactl viene interrogato solo con ownership esplicita."""
+    lines: list[str] = []
+    lines.append("=== default playback ===")
+    if pactl_runner is None:
+        lines.append("  default sink: non interrogato (runner applicativo richiesto)")
+        lines.append(
+            f"  system monitor: {_find_default_monitor_via_sounddevice() or 'non disponibile'}"
+        )
+    else:
+        lines.append(
+            f"  default sink: {_default_sink_name_via_pactl(pactl_runner) or 'non disponibile'}"
+        )
+        lines.append(
+            f"  system monitor: {find_system_monitor(pactl_runner=pactl_runner) or 'non disponibile'}"
+        )
+
+    lines.append("")
+    lines.append("=== sounddevice devices (input only) ===")
     try:
-        lines: list[str] = []
-        lines.append("=== default playback ===")
-        lines.append(
-            f"  default sink: {_default_sink_name_via_pactl(runner) or 'non disponibile'}"
-        )
-        lines.append(
-            f"  system monitor: {find_system_monitor(pactl_runner=runner) or 'non disponibile'}"
-        )
+        devices = sd.query_devices()
+        for i, dev in enumerate(devices):
+            if dev.get("max_input_channels", 0) > 0:
+                lines.append(f"  [{i}] {dev.get('name', '?')}")
+                lines.append(
+                    f"      channels={dev.get('max_input_channels')} "
+                    f"rate={dev.get('default_samplerate')}"
+                )
+    except Exception as exc:
+        lines.append(f"  Errore: {exc}")
 
-        lines.append("")
-        lines.append("=== sounddevice devices (input only) ===")
-        try:
-            devices = sd.query_devices()
-            for i, dev in enumerate(devices):
-                if dev.get("max_input_channels", 0) > 0:
-                    lines.append(f"  [{i}] {dev.get('name', '?')}")
-                    lines.append(
-                        f"      channels={dev.get('max_input_channels')} "
-                        f"rate={dev.get('default_samplerate')}"
-                    )
-        except Exception as exc:
-            lines.append(f"  Errore: {exc}")
-
-        lines.append("")
-        lines.append("=== pactl sources (monitors) ===")
-        sources = runner.run(["list", "short", "sources"])
+    lines.append("")
+    lines.append("=== pactl sources (monitors) ===")
+    if pactl_runner is None:
+        lines.append("  non interrogato (runner applicativo richiesto)")
+    else:
+        sources = pactl_runner.run(["list", "short", "sources"])
         if sources is None:
             lines.append("  pactl non disponibile")
         else:
@@ -271,7 +277,4 @@ def debug_dump(*, pactl_runner: Optional[PactlRunner] = None) -> str:
                     found = True
             if not found:
                 lines.append("  nessun monitor")
-        return "\n".join(lines)
-    finally:
-        if owns_runner:
-            runner.close()
+    return "\n".join(lines)
