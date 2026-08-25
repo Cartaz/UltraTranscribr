@@ -20,6 +20,7 @@ from PySide6.QtWidgets import QApplication, QMainWindow
 
 from config.constants import AppMeta, UIConstraints
 from core.app_controller import AppController
+from core.application_service import ApplicationService
 from ui.bridge import BackendBridge, BridgeLogHandler
 
 logger = logging.getLogger(__name__)
@@ -93,7 +94,11 @@ class DropAwareWebView(QWebEngineView):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, controller: AppController) -> None:
+    def __init__(
+        self,
+        controller: AppController,
+        application: ApplicationService,
+    ) -> None:
         super().__init__()
         self._controller = controller
         self._tray_icon = None
@@ -114,7 +119,7 @@ class MainWindow(QMainWindow):
             max(UIConstraints.MIN_WINDOW_HEIGHT, settings.window_height),
         )
 
-        self._bridge = BackendBridge(controller, self)
+        self._bridge = BackendBridge(controller, application, self)
         self._bridge.eventReceived.connect(self._observe_backend_event)
 
         self._log_handler = BridgeLogHandler(self._bridge)
