@@ -31,6 +31,11 @@ class FakeProcess:
     def poll(self):
         return self.returncode
 
+    def wait(self, timeout=None):
+        if self.returncode is None and not self.released.wait(timeout=timeout):
+            raise subprocess.TimeoutExpired("pactl", timeout)
+        return self.returncode
+
     def terminate(self):
         self.terminated = True
         if not self.stubborn:
