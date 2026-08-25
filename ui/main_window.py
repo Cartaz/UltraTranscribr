@@ -5,8 +5,16 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, QUrl, Signal
-from PySide6.QtGui import QCloseEvent, QDragEnterEvent, QDragMoveEvent, QDropEvent, QResizeEvent
+from PySide6.QtGui import (
+    QCloseEvent,
+    QDesktopServices,
+    QDragEnterEvent,
+    QDragMoveEvent,
+    QDropEvent,
+    QResizeEvent,
+)
 from PySide6.QtWebChannel import QWebChannel
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QMainWindow
 
@@ -20,6 +28,29 @@ from ui.phase10_bridge import Phase10BackendBridge
 Phase10BackendBridge = FinalFeaturesBackendBridge
 
 logger = logging.getLogger(__name__)
+
+
+class LocalOnlyWebPage(QWebEnginePage):
+    """Keep application content local and hand external web links to the OS."""
+
+    _LOCAL_SCHEMES = {"about", "file", "qrc"}
+    _EXTERNAL_SCHEMES = {"http", "https"}
+
+    def acceptNavigationRequest(self, url: QUrl, navigation_type, is_main_frame: bool) -> bool:
+        scheme = url.scheme().lower()
+        if url.isLocalFile() or scheme in self._LOCAL_SCHEMES:
+            return super().acceptNavigationRequest(url, navigation_type, is_main_frame)
+        if scheme in self._EXTERNAL_SCHEMES:
+            logger.info("Apertura URL esterno nel browser di sistema: %s", url.toString())
+            QDesktopServices.openUrl(url)
+            return False
+        logger.warning("Navigazione WebEngine bloccata per schema non consentito: %s", scheme or "<vuoto>")
+        return False
+
+    def createWindow(self, _window_type):
+        # Route target=_blank through this page so acceptNavigationRequest keeps
+        # the same local-only policy instead of spawning an unmanaged WebEngine.
+        return self
 
 
 class DropAwareWebView(QWebEngineView):
@@ -95,12 +126,23 @@ class MainWindow(QMainWindow):
         logging.getLogger().addHandler(self._log_handler)
 
         self._web_view = DropAwareWebView(self)
+        self._web_page = LocalOnlyWebPage(self._web_view)
+        self._web_view.setPage(self._web_page)
+        web_settings = self._web_page.settings()
+        web_settings.setAttribute(
+            QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls,
+            False,
+        )
+        web_settings.setAttribute(
+            QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls,
+            True,
+        )
         self._web_view.filesDropped.connect(self._bridge.emitDroppedFiles)
         self.setCentralWidget(self._web_view)
 
-        channel = QWebChannel(self._web_view.page())
+        channel = QWebChannel(self._web_page)
         channel.registerObject("backend", self._bridge)
-        self._web_view.page().setWebChannel(channel)
+        self._web_page.setWebChannel(channel)
         self._channel = channel
 
         index_path = Path(__file__).resolve().parent / "web" / "index.html"
