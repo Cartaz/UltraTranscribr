@@ -95,11 +95,9 @@ class BackendBridge(QObject):
     ) -> None:
         super().__init__(parent)
         self._application = application
-        self._subscriptions: list[tuple[str, Callable[[Any], None]]] = []
         for event in self._EVENTS:
             handler = self._make_event_handler(event)
             self._application.subscribe(event, handler)
-            self._subscriptions.append((event, handler))
         QTimer.singleShot(0, self._application.preload_model_if_requested)
 
     def _make_event_handler(self, event: str) -> Callable[[Any], None]:
