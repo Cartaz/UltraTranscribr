@@ -18,7 +18,8 @@ def controller() -> AppController:
          patch("core.app_controller.WhisperBackend"), \
          patch("core.app_controller.PulseAudioRouter"), \
          patch("core.app_controller.MeetingManager"), \
-         patch("core.app_controller.FileBatchCoordinator"):
+         patch("core.app_controller.FileBatchCoordinator"), \
+         patch("core.app_controller.AudioDiscoveryService"):
         return AppController(settings=Settings())
 
 
@@ -128,6 +129,38 @@ class TestAppController:
         controller._audio_router.list_streams.return_value = []
         assert controller.list_playback_streams() == []
         controller._audio_router.list_streams.assert_called_once_with()
+
+    def test_audio_discovery_api_delegates_to_owned_service(
+        self, controller: AppController
+    ) -> None:
+        controller._audio_discovery.snapshot.return_value = {
+            "devices": [{"name": "Mic"}],
+            "streams": [],
+        }
+        controller._audio_discovery.cached_health.return_value = {
+            "status": "available"
+        }
+
+        assert controller.audio_discovery_snapshot()["devices"][0]["name"] == "Mic"
+        controller.request_audio_discovery(devices=True, streams=False)
+        assert controller.cached_audio_source_health("microphone", "Mic") == {
+            "status": "available"
+        }
+        controller.request_audio_source_probe("microphone", "Mic")
+
+        controller._audio_discovery.snapshot.assert_called_once_with()
+        controller._audio_discovery.request_refresh.assert_any_call(
+            devices=True,
+            streams=False,
+        )
+        controller._audio_discovery.cached_health.assert_called_once_with(
+            "microphone",
+            "Mic",
+        )
+        controller._audio_discovery.request_probe.assert_called_once_with(
+            "microphone",
+            "Mic",
+        )
 
     def test_file_start_is_rejected_while_live_is_active(self, controller: AppController) -> None:
         controller._live_sessions.has_active_sessions = MagicMock(return_value=True)
