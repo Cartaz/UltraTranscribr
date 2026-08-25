@@ -141,9 +141,11 @@ function phase10SetProgress(id, value) {
 function phase10MeetingStatus(value) {
   return ({
     recording: "Registrazione",
+    finishing: "Chiusura registrazione",
     transcribing: "Trascrizione finale",
     downloading_diarization: "Download modelli diarizzazione",
     diarizing: "Diarizzazione",
+    cancelling: "Annullamento",
     completed: "Completata",
     interrupted: "Interrotta · audio recuperato",
     cancelled: "Annullata",
@@ -177,21 +179,22 @@ function phase10RenderRuntime(runtime) {
   }
 }
 
-function phase10RefreshMeetingDevices() {
-  call("refreshDevices", ["microphone"], result => {
-    const list = json(result);
-    const select = $("meeting-device");
-    if (!select) return;
-    const current = select.value;
-    select.innerHTML = '<option value="">Rilevamento automatico</option>';
-    (Array.isArray(list) ? list : []).forEach(device => {
-      const option = document.createElement("option");
-      option.value = device.name;
-      option.textContent = device.name + (device.hostapi_name ? ` · ${device.hostapi_name}` : "");
-      select.append(option);
-    });
-    if ([...select.options].some(option => option.value === current)) select.value = current;
+function phase10RenderMeetingDevices(items) {
+  const select = $("meeting-device");
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = '<option value="">Rilevamento automatico</option>';
+  (Array.isArray(items) ? items : []).filter(device => !!device?.is_mic).forEach(device => {
+    const option = document.createElement("option");
+    option.value = device.name;
+    option.textContent = device.name + (device.hostapi_name ? ` · ${device.hostapi_name}` : "");
+    select.append(option);
   });
+  if ([...select.options].some(option => option.value === current)) select.value = current;
+}
+
+function phase10RefreshMeetingDevices() {
+  call("refreshDevices", ["microphone"], result => phase10RenderMeetingDevices(json(result)));
 }
 
 function phase10StartMeeting() {
@@ -216,7 +219,7 @@ function phase10FinishMeeting() {
       return;
     }
     phase10RenderRuntime(response.meeting);
-    notice("Registrazione salvata. Trascrizione finale in corso.");
+    notice("Chiusura registrazione in corso. L'analisi partirà automaticamente.");
   });
 }
 
@@ -445,6 +448,7 @@ hydrate = function(bootstrap) {
   phase10EnsureUI();
   if ($("meeting-language")) $("meeting-language").value = bootstrap.settings?.language || "auto";
   if ($("s-meeting-audio-retention")) $("s-meeting-audio-retention").value = bootstrap.settings?.meeting_audio_retention_days ?? 30;
+  phase10RenderMeetingDevices(bootstrap.devices || []);
   phase10RenderRuntime(bootstrap.meetingRuntime || null);
   sourceUI();
 };
@@ -469,6 +473,8 @@ event = function(name, payload) {
     if (historyIsVisible()) refreshHistory();
   } else if (name === "meeting_model_progress") {
     $("meeting-model-note").textContent = `Download ${value?.model || "modello"}: ${Number(value?.percent) || 0}%`;
+  } else if (name === "audio_devices_changed") {
+    phase10RenderMeetingDevices(value);
   }
 };
 
