@@ -8,6 +8,7 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 from config.settings import Settings
+from core.application_service import ApplicationService
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -229,11 +230,16 @@ class _FakeController:
         self.backend.is_running = False
 
 
-def test_bootstrap_contains_real_multi_session_runtime(monkeypatch) -> None:
+def _bridge(monkeypatch):
     module = _load_bridge(monkeypatch)
     controller = _FakeController()
-    bridge = module.BackendBridge(controller)
+    application = ApplicationService(controller)
+    bridge = module.BackendBridge(controller, application)
+    return bridge, controller, application
 
+
+def test_bootstrap_contains_real_multi_session_runtime(monkeypatch) -> None:
+    bridge, controller, _application = _bridge(monkeypatch)
     payload = json.loads(bridge.getBootstrap())
 
     assert payload["settings"]["language"] == "it"
@@ -248,14 +254,15 @@ def test_bootstrap_contains_real_multi_session_runtime(monkeypatch) -> None:
 
 
 def test_bridge_forwards_session_event_as_json(monkeypatch) -> None:
-    module = _load_bridge(monkeypatch)
-    controller = _FakeController()
-    bridge = module.BackendBridge(controller)
+    bridge, controller, _application = _bridge(monkeypatch)
     received = []
-    bridge.eventReceived.connect(lambda name, payload: received.append((name, json.loads(payload))))
+    bridge.eventReceived.connect(
+        lambda name, payload: received.append((name, json.loads(payload)))
+    )
 
-    handler = controller.subscriptions["live_session_updated"][0]
-    handler({"id": "live-1", "status": "draining"})
+    controller.subscriptions["live_session_updated"][0](
+        {"id": "live-1", "status": "draining"}
+    )
 
     assert received == [
         ("live_session_updated", {"id": "live-1", "status": "draining"})
@@ -263,10 +270,7 @@ def test_bridge_forwards_session_event_as_json(monkeypatch) -> None:
 
 
 def test_probe_application_source_returns_cache_and_schedules_refresh(monkeypatch) -> None:
-    module = _load_bridge(monkeypatch)
-    controller = _FakeController()
-    bridge = module.BackendBridge(controller)
-
+    bridge, controller, _application = _bridge(monkeypatch)
     response = json.loads(bridge.probeAudioSource("application", "42"))
 
     assert response["status"] == "playing"
@@ -275,12 +279,10 @@ def test_probe_application_source_returns_cache_and_schedules_refresh(monkeypatc
 
 
 def test_start_live_application_converts_selection_to_stream_id(monkeypatch) -> None:
-    module = _load_bridge(monkeypatch)
-    controller = _FakeController()
-    bridge = module.BackendBridge(controller)
+    bridge, controller, application = _bridge(monkeypatch)
     monkeypatch.setattr(
-        bridge,
-        "_run_async",
+        application,
+        "submit",
         lambda name, operation, error_event: operation(),
     )
 
@@ -297,12 +299,11 @@ def test_start_live_application_converts_selection_to_stream_id(monkeypatch) -> 
     ]
 
 
-def test_apply_settings_round_trip_uses_controller_validation(monkeypatch) -> None:
-    module = _load_bridge(monkeypatch)
-    controller = _FakeController()
-    bridge = module.BackendBridge(controller)
-
-    response = json.loads(bridge.applySettings(json.dumps({"language": "en", "beam_size": 7})))
+def test_apply_settings_round_trip_uses_application_policy(monkeypatch) -> None:
+    bridge, controller, _application = _bridge(monkeypatch)
+    response = json.loads(
+        bridge.applySettings(json.dumps({"language": "en", "beam_size": 7}))
+    )
 
     assert response["ok"] is True
     assert response["settings"]["language"] == "en"
@@ -311,9 +312,7 @@ def test_apply_settings_round_trip_uses_controller_validation(monkeypatch) -> No
 
 
 def test_settings_defaults_are_generated_from_settings_model(monkeypatch) -> None:
-    module = _load_bridge(monkeypatch)
-    bridge = module.BackendBridge(_FakeController())
-
+    bridge, _controller, _application = _bridge(monkeypatch)
     defaults = json.loads(bridge.getSettingsDefaults())
 
     assert defaults["model_size"] == Settings().model_size
