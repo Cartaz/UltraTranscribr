@@ -67,7 +67,9 @@ def test_meeting_control_waits_are_owned_by_core_not_webchannel_bridge() -> None
     assert 'name=f"MeetingFinalize-' in meeting
     assert 'name=f"MeetingCancel-' in meeting
     assert "runtime.capture.join(timeout=8.0)" in meeting
-    assert ".join(" not in bridge
+    assert "runtime.capture.join(" not in bridge
+    assert "runtime.control_thread.join(" not in bridge
+    assert "transcriber.join(" not in bridge
 
 
 def test_audio_subsystem_has_one_managed_pactl_owner() -> None:
