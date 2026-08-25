@@ -95,4 +95,5 @@ def test_main_window_uses_single_backend_bridge_and_application_service() -> Non
     text = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
     assert "from ui.bridge import BackendBridge, BridgeLogHandler" in text
     assert "from core.application_service import ApplicationService" in text
-    assert "self._bridge = BackendBridge(controller, application, self)" in text
+    assert "self._bridge = BackendBridge(application, self)" in text
+    assert "BackendBridge(controller" not in text
