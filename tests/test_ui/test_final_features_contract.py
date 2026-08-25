@@ -20,16 +20,16 @@ def test_final_features_expose_session_name_and_backend_controls() -> None:
     assert 'name="preload_model"' in text
 
 
-def test_main_window_uses_collapsed_phase10_bridge_directly() -> None:
+def test_main_window_uses_single_backend_bridge() -> None:
     text = (_root() / "ui" / "main_window.py").read_text(encoding="utf-8")
-    assert "from ui.phase10_bridge import Phase10BackendBridge" in text
+    assert "from ui.bridge import BackendBridge, BridgeLogHandler" in text
+    assert "phase10_bridge" not in text
     assert "final_features_bridge" not in text
-    assert "FinalFeaturesBackendBridge" not in text
-    assert "self._bridge = Phase10BackendBridge(controller, self)" in text
+    assert "self._bridge = BackendBridge(controller, self)" in text
 
 
-def test_phase10_bridge_contains_final_history_features() -> None:
-    text = (_root() / "ui" / "phase10_bridge.py").read_text(encoding="utf-8")
+def test_single_bridge_contains_final_history_features() -> None:
+    text = (_root() / "ui" / "bridge.py").read_text(encoding="utf-8")
     assert "SessionNameStore" in text
     assert "generate_history_postprocess" in text
     assert "renameHistorySession" in text
