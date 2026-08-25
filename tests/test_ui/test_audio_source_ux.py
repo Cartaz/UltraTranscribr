@@ -131,11 +131,18 @@ def test_source_probe_rules_live_in_core_discovery_service() -> None:
     assert "request_audio_source_probe" in bridge_source
 
 
-def test_audio_diagnostics_include_streams_and_live_routing() -> None:
+def test_audio_diagnostics_live_in_core_and_bridge_only_delegates() -> None:
     bridge_source = (ROOT / "ui" / "multi_session_bridge.py").read_text(
         encoding="utf-8"
     )
-    assert "=== playback streams ===" in bridge_source
-    assert "=== UltraTranscribr live routing ===" in bridge_source
-    assert "queue_wait" in bridge_source
-    assert "routing=" in bridge_source
+    diagnostics_source = (ROOT / "core" / "audio_diagnostics.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "build_audio_diagnostics(self._controller)" in bridge_source
+    assert "debug_dump" not in bridge_source
+    assert "list_playback_streams" not in bridge_source
+    assert "=== playback streams ===" in diagnostics_source
+    assert "=== UltraTranscribr live routing ===" in diagnostics_source
+    assert "queue_wait" in diagnostics_source
+    assert "routing=" in diagnostics_source
