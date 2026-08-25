@@ -52,7 +52,6 @@ const views = {
   settings: "IMPOSTAZIONI",
   logs: "LOG E DIAGNOSTICA",
 };
-const allowedModelChoices = ["large-v3", "large-v3-turbo", "medium"];
 const modelLabels = {
   "large-v3": "Large v3",
   "large-v3-turbo": "Large v3 Turbo",
@@ -99,7 +98,6 @@ function switchView(name) {
     panel.classList.toggle("active", active);
   });
   $("eyebrow").textContent = views[name];
-  if (name === "settings") refreshModels();
   uiModules.forEach(module => module.view?.(name));
 }
 
@@ -154,7 +152,6 @@ function sessionBusy() {
 }
 
 function lockSettings() {
-  $("settings-save").disabled = sessionBusy() || !!state.modelBusy;
   uiModules.forEach(module => module.lockSettings?.());
 }
 
@@ -172,7 +169,6 @@ function liveUI(status) {
   $("live-drain").disabled = !state.live || state.draining;
   setOrb("live-orb", busy);
   lockSettings();
-  renderModels(state.models);
 }
 
 function fileUI(status) {
@@ -181,19 +177,7 @@ function fileUI(status) {
   $("file-stop").disabled = !state.file;
   setOrb("file-orb", state.file);
   lockSettings();
-  renderModels(state.models);
   uiModules.forEach(module => module.fileUI?.(status));
-}
-
-function options(select, values, current) {
-  select.replaceChildren();
-  values.forEach(value => {
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = modelLabels[value] || value;
-    option.selected = value === current;
-    select.append(option);
-  });
 }
 
 function normalizeSource(source) {
@@ -357,39 +341,15 @@ function hydrate(bootstrap) {
   state.models = Array.isArray(bootstrap.models) ? bootstrap.models : [];
   state.streams = Array.isArray(bootstrap.playbackStreams) ? bootstrap.playbackStreams : [];
   $("version").textContent = "v" + bootstrap.app.version;
-  const selectedModel = allowedModelChoices.includes(bootstrap.settings.model_size)
-    ? bootstrap.settings.model_size : "large-v3-turbo";
-  options($("s-model"), allowedModelChoices, selectedModel);
   state.source = normalizeSource(bootstrap.settings.audio_source);
   devices(state.source === "application" ? "system" : state.source, bootstrap.devices);
   renderPlaybackStreams(state.streams);
   sourceUI();
 
-  const map = {
-    "s-language": "language",
-    "s-source": "audio_source",
-    "s-beam": "beam_size",
-    "s-vad-silence": "vad_min_silence_ms",
-    "s-buffer": "buffer_warn_threshold",
-    "s-chunk": "chunk_ms",
-    "s-channels": "channels",
-    "s-sink": "sink_name",
-    "s-keyword": "sink_search_keyword",
-    "s-port": "server_port",
-    "s-gpu": "gpu_layers",
-    "s-compute": "compute_type",
-    "s-width": "window_width",
-    "s-height": "window_height",
-    "s-retention": "history_retention_days",
-  };
-  for (const [id, key] of Object.entries(map)) $(id).value = bootstrap.settings[key] ?? "";
-  $("s-vad").checked = !!bootstrap.settings.vad_filter;
-
   state.live = !!bootstrap.runtime.liveRunning;
   state.draining = !!bootstrap.runtime.liveDraining;
   state.file = !!bootstrap.runtime.fileRunning;
   progress("buffer", bootstrap.runtime.bufferLevel);
-  renderModels(state.models);
   updateLiveSummary();
   updateFileSummary();
   liveUI(state.draining ? "Completamento buffer" : state.live ? "In esecuzione" : "Idle");
@@ -554,33 +514,6 @@ function event(name, payload) {
       break;
     case "audio_diagnostics": $("diagnostics-output").textContent = String(value); break;
     case "audio_diagnostics_error": $("diagnostics-output").textContent = String(value); showError(value, "audio"); break;
-    case "model_download_started":
-      state.modelBusy = value?.model || null;
-      state.modelProgress[state.modelBusy] = {downloaded: 0, total: null, percent: 0};
-      renderModels(state.models);
-      lockSettings();
-      break;
-    case "model_download_progress":
-      updateModelProgress(value);
-      if (state.backendState === "downloading_model" && value?.model) {
-        const pct = value.percent == null ? "" : ` · ${Math.max(0, Math.min(100, Number(value.percent) || 0))}%`;
-        globalStatus(`Download ${modelLabels[value.model] || value.model}${pct}`, "working");
-      }
-      break;
-    case "model_status_changed":
-      state.modelBusy = null;
-      state.modelProgress = {};
-      lockSettings();
-      refreshModels();
-      break;
-    case "model_download_error":
-    case "model_delete_error":
-      state.modelBusy = null;
-      state.modelProgress = {};
-      lockSettings();
-      showError(value, "model");
-      refreshModels();
-      break;
   }
 }
 
@@ -644,174 +577,9 @@ function startFile() {
   call("startFile", [path, settings.language || "auto", settings.model_size || "large-v3-turbo", $("song-mode").checked, $("isolate-vocals").checked]);
 }
 
-function saveSettings(eventObject) {
-  const handler = lastUIHandler("saveSettings");
-  if (handler && handler.saveSettings(eventObject) === true) return;
-  eventObject.preventDefault();
-  const payload = {};
-  for (const element of eventObject.currentTarget.elements) {
-    if (!element.name) continue;
-    if (element.type === "checkbox") payload[element.name] = element.checked;
-    else if (element.type === "number") payload[element.name] = Number(element.value);
-    else payload[element.name] = element.value === "" && element.name === "sink_name" ? null : element.value;
-  }
-  call("applySettings", [JSON.stringify(payload)], result => {
-    const response = json(result);
-    if (!response.ok) { showError(response.error, "settings"); return; }
-    state.boot.settings = response.settings;
-    state.source = normalizeSource(response.settings.audio_source);
-    sourceUI();
-    refreshDevices();
-    updateFileSummary();
-    notice("Impostazioni salvate");
-  });
-}
-
 function fileName(path) {
   const parts = String(path || "").split(/[\\/]/);
   return parts[parts.length - 1] || String(path || "");
-}
-
-function formatBytes(value) {
-  const bytes = Number(value) || 0;
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KiB`;
-  if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MiB`;
-  return `${(bytes / 1073741824).toFixed(2)} GiB`;
-}
-
-function modelDetail(item) {
-  if (item.installed) return `${formatBytes(item.size_bytes)}${item.verified ? " · hash registrato" : ""}`;
-  if (Number(item.partial_bytes) > 0) return `Parziale: ${formatBytes(item.partial_bytes)}`;
-  return `Minimo atteso: ${formatBytes(item.min_bytes)}`;
-}
-
-function renderModels(items) {
-  const list = $("model-list");
-  if (!list) return;
-  list.replaceChildren();
-  if (!Array.isArray(items) || !items.length) {
-    const empty = document.createElement("p");
-    empty.className = "model-empty";
-    empty.textContent = "Nessun modello disponibile.";
-    list.append(empty);
-    return;
-  }
-  items.forEach(item => {
-    const row = document.createElement("div");
-    row.className = "model-row";
-    row.dataset.model = item.model;
-    const main = document.createElement("div");
-    main.className = "model-main";
-    const title = document.createElement("strong");
-    title.textContent = modelLabels[item.model] || item.model;
-    const detail = document.createElement("small");
-    detail.textContent = modelDetail(item);
-    main.append(title, detail);
-
-    const progressWrap = document.createElement("div");
-    progressWrap.className = "model-progress-wrap";
-    const statusLine = document.createElement("div");
-    statusLine.className = "model-status-line";
-    const orb = document.createElement("span");
-    orb.className = "orb" + (item.installed ? " active" : "");
-    const stateLabel = document.createElement("span");
-    stateLabel.className = "model-state" + (item.installed ? " installed" : "");
-    const active = state.modelBusy === item.model;
-    stateLabel.textContent = active ? "Operazione in corso" : item.installed ? "Installato" : "Non installato";
-    statusLine.append(orb, stateLabel);
-
-    const bar = document.createElement("div");
-    bar.className = "progress";
-    bar.setAttribute("role", "progressbar");
-    bar.setAttribute("aria-valuemin", "0");
-    bar.setAttribute("aria-valuemax", "100");
-    const p = state.modelProgress[item.model] || null;
-    const percent = p?.percent == null ? 0 : Math.max(0, Math.min(100, Number(p.percent)));
-    const fill = document.createElement("span");
-    fill.style.width = `${percent}%`;
-    bar.setAttribute("aria-valuenow", String(percent));
-    bar.append(fill);
-    const progressLabel = document.createElement("div");
-    progressLabel.className = "model-progress-label";
-    if (active && p) {
-      progressLabel.textContent = p.total
-        ? `${formatBytes(p.downloaded)} / ${formatBytes(p.total)} · ${percent}%`
-        : `${formatBytes(p.downloaded)} scaricati`;
-    } else if (!item.installed && Number(item.partial_bytes) > 0) {
-      progressLabel.textContent = `Download riprendibile da ${formatBytes(item.partial_bytes)}`;
-    } else {
-      progressLabel.textContent = item.installed ? "Pronto all'uso" : "Non scaricato";
-    }
-    progressWrap.append(statusLine, bar, progressLabel);
-
-    const actions = document.createElement("div");
-    actions.className = "model-actions";
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "button" + (!item.installed ? " selected" : "");
-    button.textContent = active ? "Attendi…" : item.installed ? "Elimina" : Number(item.partial_bytes) > 0 ? "Riprendi" : "Scarica";
-    button.disabled = sessionBusy() || !!state.modelBusy;
-    button.onclick = () => item.installed ? requestDeleteModel(item.model) : requestDownloadModel(item.model);
-    actions.append(button);
-    row.append(main, progressWrap, actions);
-    list.append(row);
-  });
-}
-
-function updateModelProgress(payload) {
-  if (!payload?.model) return;
-  state.modelBusy = payload.model;
-  state.modelProgress[payload.model] = {
-    downloaded: Number(payload.downloaded) || 0,
-    total: payload.total == null ? null : Number(payload.total),
-    percent: payload.percent == null ? null : Number(payload.percent),
-  };
-  renderModels(state.models);
-  lockSettings();
-}
-
-function refreshModels() {
-  call("listModels", [], result => {
-    const models = json(result);
-    state.models = Array.isArray(models) ? models : [];
-    renderModels(state.models);
-  });
-}
-
-function requestDownloadModel(model) {
-  if (sessionBusy() || state.modelBusy) return;
-  state.modelBusy = model;
-  state.modelProgress[model] = {downloaded: 0, total: null, percent: 0};
-  renderModels(state.models);
-  lockSettings();
-  call("downloadModel", [model], result => {
-    const response = json(result);
-    if (!response?.ok) {
-      state.modelBusy = null;
-      state.modelProgress = {};
-      renderModels(state.models);
-      lockSettings();
-      showError(response?.error || "Download modello non avviato", "model");
-    }
-  });
-}
-
-function requestDeleteModel(model) {
-  if (sessionBusy() || state.modelBusy) return;
-  if (!window.confirm(`Eliminare ${modelLabels[model] || model} dal disco?`)) return;
-  state.modelBusy = model;
-  renderModels(state.models);
-  lockSettings();
-  call("deleteModel", [model], result => {
-    const response = json(result);
-    if (!response?.ok) {
-      state.modelBusy = null;
-      renderModels(state.models);
-      lockSettings();
-      showError(response?.error || "Eliminazione modello non avviata", "model");
-    }
-  });
 }
 
 function bind() {
@@ -844,8 +612,6 @@ function bind() {
   $("file-copy").onclick = () => copyValue(state.fileText);
   $("live-clear").onclick = () => { state.liveText = ""; text("live", "", true); };
   $("file-clear").onclick = () => { state.fileText = ""; text("file", "", true); };
-  $("models-refresh").onclick = refreshModels;
-  $("settings-form").onsubmit = saveSettings;
   $("log-refresh").onclick = () => call("readLogTail", [300], result => {
     $("log-output").textContent = result || "Nessun log persistente disponibile.";
   });
