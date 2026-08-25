@@ -10,7 +10,6 @@ def test_web_ui_files_and_native_stack_are_present() -> None:
     expected = [
         ROOT / "ui" / "__init__.py",
         ROOT / "ui" / "bridge.py",
-        ROOT / "ui" / "phase10_bridge.py",
         ROOT / "ui" / "main_window.py",
         ROOT / "ui" / "tray_icon.py",
         WEB / "index.html",
@@ -31,7 +30,10 @@ def test_web_ui_files_and_native_stack_are_present() -> None:
     main_window = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
     assert "QWebEngineView" in main_window
     assert "QWebChannel" in main_window
-    assert "Phase10BackendBridge" in main_window
+    assert "BackendBridge" in main_window
+    assert not (ROOT / "ui" / "phase10_bridge.py").exists()
+    assert not (ROOT / "ui" / "multi_session_bridge.py").exists()
+    assert not (ROOT / "ui" / "final_features_bridge.py").exists()
 
 
 def test_dark_neumorphism_uses_exact_surface_and_accent_without_gradients() -> None:
@@ -49,8 +51,7 @@ def test_dark_neumorphism_uses_exact_surface_and_accent_without_gradients() -> N
 
 
 def test_frontend_is_wired_to_real_backend_operations() -> None:
-    base_bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
-    bridge = (ROOT / "ui" / "phase10_bridge.py").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
     script = (WEB / "app.js").read_text(encoding="utf-8")
     multi_script = (WEB / "multi_live.js").read_text(encoding="utf-8")
     phase10_script = (WEB / "phase10.js").read_text(encoding="utf-8")
@@ -59,9 +60,6 @@ def test_frontend_is_wired_to_real_backend_operations() -> None:
         "start_file_transcription",
         "stop_file_transcription",
         "update_settings",
-    ):
-        assert operation in base_bridge
-    for operation in (
         "start_live_session",
         "stop_live_session",
         "stopAllLive",
@@ -73,7 +71,7 @@ def test_frontend_is_wired_to_real_backend_operations() -> None:
         assert operation in bridge
 
     for event in ("file_transcriber_progress", "file_transcriber_full_text"):
-        assert event in base_bridge
+        assert event in bridge
         assert event in script
     assert "live_session_updated" in bridge
     assert "live_session_updated" in multi_script
