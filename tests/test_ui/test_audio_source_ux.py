@@ -21,25 +21,15 @@ def test_system_source_probe_reports_available_automatic_monitor() -> None:
 
 
 def test_selected_application_stream_reports_playing_or_disconnected() -> None:
-    streams = [
-        {
-            "id": 42,
-            "display_name": "Browser · Video",
-            "state": "playing",
-        }
-    ]
+    streams = [{"id": 42, "display_name": "Browser · Video", "state": "playing"}]
     playing = evaluate_audio_source_health(
-        source="application",
-        selection="42",
-        streams=streams,
+        source="application", selection="42", streams=streams
     )
     assert playing["status"] == "playing"
     assert playing["stream"]["id"] == 42
 
     missing = evaluate_audio_source_health(
-        source="application",
-        selection="42",
-        streams=[],
+        source="application", selection="42", streams=[]
     )
     assert missing["status"] == "disconnected"
 
@@ -48,13 +38,7 @@ def test_paused_application_stream_is_available_but_not_playing() -> None:
     result = evaluate_audio_source_health(
         source="application",
         selection="7",
-        streams=[
-            {
-                "id": 7,
-                "display_name": "Player · Pausa",
-                "state": "paused",
-            }
-        ],
+        streams=[{"id": 7, "display_name": "Player · Pausa", "state": "paused"}],
     )
     assert result["status"] == "available"
     assert result["label"] == "Disponibile · in pausa"
@@ -64,13 +48,7 @@ def test_manual_device_that_disappears_is_disconnected() -> None:
     result = evaluate_audio_source_health(
         source="microphone",
         selection="Mic B",
-        devices=[
-            {
-                "name": "Mic A",
-                "is_mic": True,
-                "is_monitor": False,
-            }
-        ],
+        devices=[{"name": "Mic A", "is_mic": True, "is_monitor": False}],
     )
     assert result["status"] == "disconnected"
     assert result["detail"] == "Mic B"
@@ -78,9 +56,7 @@ def test_manual_device_that_disappears_is_disconnected() -> None:
 
 def test_no_automatic_system_source_is_actionable_disconnected_state() -> None:
     result = evaluate_audio_source_health(
-        source="system",
-        devices=[],
-        automatic_source=None,
+        source="system", devices=[], automatic_source=None
     )
     assert result["status"] == "disconnected"
     assert result["label"] == "Audio di sistema non disponibile"
@@ -94,19 +70,19 @@ def test_frontend_refreshes_sources_on_live_entry_without_polling() -> None:
     assert "probeAudioSource" in script
     for status in ("available", "playing", "disconnected"):
         assert status in script
-    assert 'name === "audio_devices_changed"' in script
-    assert 'name === "playback_streams_changed"' in script
-    assert 'name === "audio_source_health_changed"' in script
+    assert 'case "audio_devices_changed"' in script
+    assert 'case "playback_streams_changed"' in script
+    assert 'case "audio_source_health_changed"' in script
     assert "setInterval(" not in script
 
 
 def test_meeting_device_picker_consumes_fresh_discovery_events() -> None:
-    script = (WEB / "phase10.js").read_text(encoding="utf-8")
-    assert "function phase10RenderMeetingDevices" in script
+    script = (WEB / "meeting.js").read_text(encoding="utf-8")
+    assert "function meetingRenderDevices" in script
     assert "filter(device => !!device?.is_mic)" in script
     assert 'name === "audio_devices_changed"' in script
-    assert "phase10RenderMeetingDevices(value)" in script
-    assert "phase10RenderMeetingDevices(bootstrap.devices || [])" in script
+    assert "meetingRenderDevices(value)" in script
+    assert "meetingRenderDevices(bootstrap.devices || [])" in script
     assert 'finishing: "Chiusura registrazione"' in script
     assert 'cancelling: "Annullamento"' in script
 
