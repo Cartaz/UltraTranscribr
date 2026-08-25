@@ -120,7 +120,6 @@ def main() -> None:
         exit_code = app.exec()
     finally:
         application.close()
-        controller.shutdown()
     sys.exit(exit_code)
 
 
