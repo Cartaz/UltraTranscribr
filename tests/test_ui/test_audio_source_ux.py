@@ -100,6 +100,17 @@ def test_frontend_refreshes_sources_on_live_entry_without_polling() -> None:
     assert "setInterval(" not in script
 
 
+def test_meeting_device_picker_consumes_fresh_discovery_events() -> None:
+    script = (WEB / "phase10.js").read_text(encoding="utf-8")
+    assert "function phase10RenderMeetingDevices" in script
+    assert "filter(device => !!device?.is_mic)" in script
+    assert 'name === "audio_devices_changed"' in script
+    assert "phase10RenderMeetingDevices(value)" in script
+    assert "phase10RenderMeetingDevices(bootstrap.devices || [])" in script
+    assert 'finishing: "Chiusura registrazione"' in script
+    assert 'cancelling: "Annullamento"' in script
+
+
 def test_source_probe_rules_live_in_core_discovery_service() -> None:
     bridge_source = (ROOT / "ui" / "multi_session_bridge.py").read_text(
         encoding="utf-8"
