@@ -1,12 +1,13 @@
 # core/event_bus.py
-"""Event bus singleton per la comunicazione asincrona tra moduli.
+"""Synchronous process-wide event bus used by legacy cross-module integrations.
 
-Funge da canale di comunicazione disaccoppiato tra tutti i livelli
-dell'applicazione. I nomi degli eventi seguono il pattern
-modulo_azione_stato (es. process_started, config_changed).
+The bus is thread-safe for subscription bookkeeping, but event handlers execute
+synchronously in the emitter's thread. New focused services should prefer
+explicit callbacks/event sinks where practical instead of expanding this global
+singleton dependency.
 
-Classes:
-    EventBus: Event bus singleton thread-safe.
+Event names follow the ``module_action_state`` convention where applicable
+(e.g. ``process_started`` and ``config_changed``).
 """
 
 from __future__ import annotations
@@ -20,25 +21,19 @@ logger = logging.getLogger(__name__)
 
 
 class EventBus:
-    """Event bus singleton per la comunicazione disaccoppiata tra moduli.
+    """Thread-safe registry with synchronous handler dispatch.
 
-    Supporta registrazione (subscribe), emissione (emit) e
-    deregistrazione (unsubscribe) di handler per tipo di evento.
-    Thread-safe tramite lock interno.
-
-    L'event bus non blocca mai il thread principale: gli handler
-    vengono eseguiti sincronamente nel thread dell'emittente.
+    ``subscribe``/``unsubscribe`` are protected by an internal lock. ``emit``
+    snapshots the current handlers under that lock and then invokes them in the
+    emitter's thread. Consequently, a slow handler blocks its emitter; callers
+    must move expensive work off latency-sensitive threads themselves.
     """
 
     _instance: EventBus | None = None
     _lock: threading.Lock = threading.Lock()
 
     def __new__(cls) -> EventBus:
-        """Restituisce l'istanza singleton dell'EventBus.
-
-        Returns:
-            L'istanza singleton di EventBus.
-        """
+        """Return the process-wide EventBus singleton."""
         with cls._lock:
             if cls._instance is None:
                 cls._instance = super().__new__(cls)
@@ -48,16 +43,11 @@ class EventBus:
 
     @staticmethod
     def _handler_name(handler: Callable) -> str:
-        """Restituisce un nome leggibile anche per callable senza __name__."""
+        """Return a readable name for functions and callable objects."""
         return getattr(handler, "__name__", handler.__class__.__name__)
 
     def subscribe(self, event: str, handler: Callable) -> None:
-        """Registra un handler per un tipo di evento.
-
-        Args:
-            event: Nome dell'evento (es. 'process_started').
-            handler: Funzione callback da invocare quando l'evento viene emesso.
-        """
+        """Register ``handler`` for ``event``."""
         with self._bus_lock:
             self._handlers[event].append(handler)
         logger.debug(
@@ -67,12 +57,7 @@ class EventBus:
         )
 
     def unsubscribe(self, event: str, handler: Callable) -> None:
-        """Deregistra un handler per un tipo di evento.
-
-        Args:
-            event: Nome dell'evento.
-            handler: Funzione callback da rimuovere.
-        """
+        """Remove ``handler`` from ``event`` when currently registered."""
         with self._bus_lock:
             handlers = self._handlers.get(event, [])
             if handler in handlers:
@@ -84,14 +69,10 @@ class EventBus:
         )
 
     def emit(self, event: str, data: Any = None) -> None:
-        """Emette un evento, invocando tutti gli handler registrati.
+        """Invoke a snapshot of ``event`` handlers in the emitter's thread.
 
-        Gli handler vengono eseguiti sincronamente nel thread dell'emittente.
-        Gli errori in un handler non bloccano gli handler successivi.
-
-        Args:
-            event: Nome dell'evento (es. 'process_started').
-            data: Payload dell'evento (opzionale).
+        A failing handler is logged with its traceback and does not prevent
+        subsequent handlers from running.
         """
         with self._bus_lock:
             handlers = list(self._handlers.get(event, []))
@@ -99,16 +80,15 @@ class EventBus:
         for handler in handlers:
             try:
                 handler(data)
-            except Exception as exc:
-                logger.error(
-                    "Errore nell'handler %s per l'evento '%s': %s",
+            except Exception:
+                logger.exception(
+                    "Errore nell'handler %s per l'evento '%s'",
                     self._handler_name(handler),
                     event,
-                    exc,
                 )
 
     @classmethod
     def reset(cls) -> None:
-        """Resetta il singleton (solo per testing)."""
+        """Reset the singleton for isolated tests only."""
         with cls._lock:
             cls._instance = None
