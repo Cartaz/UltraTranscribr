@@ -9,12 +9,16 @@ def _read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
-def test_file_batch_does_not_inspect_controller_worker_threads() -> None:
+def test_file_batch_depends_on_narrow_application_contract() -> None:
     source = _read("core/file_batch.py")
+    controller = _read("core/app_controller.py")
     assert "_startup_thread" not in source
     assert "_file_thread" not in source
     assert "getattr(self._controller" not in source
-    assert "self._controller.is_file_transcribing()" in source
+    assert "from core.app_controller import AppController" not in source
+    assert "class FileBatchController(Protocol)" in source
+    assert "class _FileBatchControllerView" in controller
+    assert "FileBatchCoordinator(_FileBatchControllerView(self))" in controller
 
 
 def test_meeting_manager_uses_public_file_lifecycle_state() -> None:
@@ -28,7 +32,7 @@ def test_application_controller_owns_workflow_services_and_shutdown() -> None:
     bridge = _read("ui/multi_session_bridge.py")
     shell = _read("ui/main_window.py")
     assert "self._meeting = MeetingManager(_MeetingControllerView(self))" in controller
-    assert "self._file_batch = FileBatchCoordinator(self)" in controller
+    assert "self._file_batch = FileBatchCoordinator(_FileBatchControllerView(self))" in controller
     assert "self._meeting.shutdown()" in controller
     assert "self._file_batch.close()" in controller
     assert "MeetingManager(" not in bridge
