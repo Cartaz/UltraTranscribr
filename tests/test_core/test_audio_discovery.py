@@ -8,6 +8,7 @@ class FakePactl:
     def __init__(self, outputs=None) -> None:
         self.outputs = outputs or {}
         self.calls: list[tuple[str, ...]] = []
+        self.cancelled = False
         self.closed = False
 
     def run(self, args, *, timeout=10.0):
@@ -16,6 +17,9 @@ class FakePactl:
         if self.closed:
             return None
         return self.outputs.get(tuple(args))
+
+    def cancel_all(self) -> None:
+        self.cancelled = True
 
     def close(self) -> None:
         self.closed = True
@@ -39,7 +43,6 @@ def test_refresh_returns_before_slow_device_provider_finishes() -> None:
 
     service = AudioDiscoveryService(
         settings_provider=Settings,
-        stream_provider=lambda: [],
         event_sink=emit,
         device_provider=devices,
         pactl_runner=FakePactl(),
@@ -78,7 +81,6 @@ def test_probe_returns_cached_state_while_slow_microphone_resolution_runs(
 
     service = AudioDiscoveryService(
         settings_provider=Settings,
-        stream_provider=lambda: [],
         event_sink=emit,
         device_provider=lambda: [
             {"name": "Mic", "is_mic": True, "is_monitor": False}
@@ -100,7 +102,7 @@ def test_probe_returns_cached_state_while_slow_microphone_resolution_runs(
     service.close()
 
 
-def test_application_probe_uses_owned_pactl_and_refreshes_cache() -> None:
+def test_application_probe_uses_shared_pactl_and_refreshes_cache() -> None:
     health_ready = threading.Event()
     events: list[tuple[str, object]] = []
     pactl = FakePactl(
@@ -126,7 +128,6 @@ def test_application_probe_uses_owned_pactl_and_refreshes_cache() -> None:
 
     service = AudioDiscoveryService(
         settings_provider=Settings,
-        stream_provider=lambda: (_ for _ in ()).throw(AssertionError("legacy provider used")),
         event_sink=emit,
         device_provider=lambda: [],
         pactl_runner=pactl,
@@ -146,7 +147,7 @@ def test_application_probe_uses_owned_pactl_and_refreshes_cache() -> None:
     service.close()
 
 
-def test_system_probe_resolves_default_monitor_with_owned_pactl() -> None:
+def test_system_probe_resolves_default_monitor_with_shared_pactl() -> None:
     ready = threading.Event()
     pactl = FakePactl({("get-default-sink",): "alsa_output.main"})
     service = AudioDiscoveryService(
@@ -172,12 +173,11 @@ def test_system_probe_resolves_default_monitor_with_owned_pactl() -> None:
     service.close()
 
 
-def test_close_closes_pactl_and_rejects_new_discovery_work() -> None:
+def test_close_cancels_shared_pactl_without_owning_its_lifetime() -> None:
     called = threading.Event()
     pactl = FakePactl()
     service = AudioDiscoveryService(
         settings_provider=Settings,
-        stream_provider=lambda: [],
         event_sink=lambda _name, _payload: None,
         device_provider=lambda: called.set() or [],
         pactl_runner=pactl,
@@ -185,5 +185,6 @@ def test_close_closes_pactl_and_rejects_new_discovery_work() -> None:
     service.close()
     service.request_refresh()
     service.request_probe(AudioSource.SYSTEM.value, "")
-    assert pactl.closed is True
+    assert pactl.cancelled is True
+    assert pactl.closed is False
     assert not called.wait(timeout=0.05)
