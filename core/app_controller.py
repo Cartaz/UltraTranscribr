@@ -69,6 +69,47 @@ class _MeetingControllerView:
         self._controller.ensure_backend_started(vad=vad, settings=settings)
 
 
+class _FileBatchControllerView:
+    """Narrow application facade consumed by FileBatchCoordinator."""
+
+    def __init__(self, controller: "AppController") -> None:
+        self._controller = controller
+
+    @property
+    def settings(self) -> Settings:
+        return self._controller.settings
+
+    def subscribe(self, event: str, handler: Callable) -> None:
+        self._controller.subscribe(event, handler)
+
+    def active_live_count(self) -> int:
+        return self._controller.active_live_count()
+
+    def is_file_transcribing(self) -> bool:
+        return self._controller.is_file_transcribing()
+
+    def start_file_transcription(
+        self,
+        file_path: str,
+        language: Optional[str] = None,
+        model_size: Optional[str] = None,
+        song_mode: bool = False,
+        isolate_vocals_flag: bool = False,
+        history_source: str = "file",
+    ) -> None:
+        self._controller.start_file_transcription(
+            file_path,
+            language=language,
+            model_size=model_size,
+            song_mode=song_mode,
+            isolate_vocals_flag=isolate_vocals_flag,
+            history_source=history_source,
+        )
+
+    def stop_file_transcription(self) -> None:
+        self._controller.stop_file_transcription()
+
+
 class AppController:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -108,7 +149,7 @@ class AppController:
         )
         self._buffer_view = _AggregateLiveBufferView(self._live_sessions)
         self._meeting = MeetingManager(_MeetingControllerView(self))
-        self._file_batch = FileBatchCoordinator(self)
+        self._file_batch = FileBatchCoordinator(_FileBatchControllerView(self))
         self._subscribe_history_events()
 
     @property
