@@ -21,12 +21,26 @@ def test_system_source_probe_reports_available_automatic_monitor() -> None:
 
 
 def test_selected_application_stream_reports_playing_or_disconnected() -> None:
-    streams = [{"id": 42, "display_name": "Browser · Video", "state": "playing"}]
-    playing = evaluate_audio_source_health(source="application", selection="42", streams=streams)
+    streams = [
+        {
+            "id": 42,
+            "display_name": "Browser · Video",
+            "state": "playing",
+        }
+    ]
+    playing = evaluate_audio_source_health(
+        source="application",
+        selection="42",
+        streams=streams,
+    )
     assert playing["status"] == "playing"
     assert playing["stream"]["id"] == 42
 
-    missing = evaluate_audio_source_health(source="application", selection="42", streams=[])
+    missing = evaluate_audio_source_health(
+        source="application",
+        selection="42",
+        streams=[],
+    )
     assert missing["status"] == "disconnected"
 
 
@@ -34,7 +48,13 @@ def test_paused_application_stream_is_available_but_not_playing() -> None:
     result = evaluate_audio_source_health(
         source="application",
         selection="7",
-        streams=[{"id": 7, "display_name": "Player · Pausa", "state": "paused"}],
+        streams=[
+            {
+                "id": 7,
+                "display_name": "Player · Pausa",
+                "state": "paused",
+            }
+        ],
     )
     assert result["status"] == "available"
     assert result["label"] == "Disponibile · in pausa"
@@ -44,14 +64,24 @@ def test_manual_device_that_disappears_is_disconnected() -> None:
     result = evaluate_audio_source_health(
         source="microphone",
         selection="Mic B",
-        devices=[{"name": "Mic A", "is_mic": True, "is_monitor": False}],
+        devices=[
+            {
+                "name": "Mic A",
+                "is_mic": True,
+                "is_monitor": False,
+            }
+        ],
     )
     assert result["status"] == "disconnected"
     assert result["detail"] == "Mic B"
 
 
 def test_no_automatic_system_source_is_actionable_disconnected_state() -> None:
-    result = evaluate_audio_source_health(source="system", devices=[], automatic_source=None)
+    result = evaluate_audio_source_health(
+        source="system",
+        devices=[],
+        automatic_source=None,
+    )
     assert result["status"] == "disconnected"
     assert result["label"] == "Audio di sistema non disponibile"
     assert "Nessun ingresso compatibile" in result["detail"]
@@ -97,13 +127,15 @@ def test_source_probe_rules_live_in_core_discovery_service() -> None:
     assert "request_audio_source_probe" in bridge_source
 
 
-def test_audio_diagnostics_live_in_core_and_bridge_only_delegates() -> None:
+def test_audio_diagnostics_live_below_bridge() -> None:
     bridge_source = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    application_source = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
     diagnostics_source = (ROOT / "core" / "audio_diagnostics.py").read_text(encoding="utf-8")
 
-    assert "build_audio_diagnostics(self._controller)" in bridge_source
+    assert "self._application.run_audio_diagnostics()" in bridge_source
+    assert "build_audio_diagnostics" not in bridge_source
+    assert "build_audio_diagnostics(self.controller)" in application_source
     assert "debug_dump" not in bridge_source
-    assert "list_playback_streams" not in bridge_source
     assert "=== playback streams ===" in diagnostics_source
     assert "=== UltraTranscribr live routing ===" in diagnostics_source
     assert "queue_wait" in diagnostics_source
