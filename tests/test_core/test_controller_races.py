@@ -135,7 +135,7 @@ def test_shutdown_is_idempotent_for_session_and_backend_lifecycle(monkeypatch) -
     controller.shutdown()
     controller.shutdown()
 
-    assert stop_file.call_count == 2
-    assert live_shutdown.call_count == 2
-    assert stop_backend.call_count == 2
+    assert stop_file.call_count == 1
+    assert live_shutdown.call_count == 1
+    assert stop_backend.call_count == 1
     assert controller._history_subscriptions == []
