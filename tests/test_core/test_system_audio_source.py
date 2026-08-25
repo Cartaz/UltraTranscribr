@@ -75,3 +75,23 @@ def test_multiple_monitors_without_default_are_not_guessed(monkeypatch) -> None:
     monkeypatch.setattr(sink_finder.sd, "default", SimpleNamespace(device=(-1, -1)))
 
     assert sink_finder.find_system_monitor(pactl_runner=pactl) is None
+
+
+def test_debug_dump_without_owner_never_creates_pactl_runner(monkeypatch) -> None:
+    def forbidden_runner():
+        raise AssertionError("debug_dump must not create pactl ownership")
+
+    monkeypatch.setattr(sink_finder, "PactlRunner", forbidden_runner)
+    monkeypatch.setattr(
+        sink_finder.sd,
+        "query_devices",
+        lambda: [
+            {"name": "USB Microphone", "max_input_channels": 1, "default_samplerate": 48000},
+        ],
+    )
+    monkeypatch.setattr(sink_finder, "_find_default_monitor_via_sounddevice", lambda: None)
+
+    report = sink_finder.debug_dump()
+
+    assert "runner applicativo richiesto" in report
+    assert "USB Microphone" in report
