@@ -168,12 +168,12 @@ def test_file_presentation_is_owned_by_file_history_module() -> None:
         '$("file-stop").onclick',
         '$("file-copy").onclick',
         '$("file-clear").onclick',
-        'case "file_transcriber_status_changed"',
-        'case "file_transcriber_progress"',
-        'case "file_transcriber_new_text"',
-        'case "file_transcriber_full_text"',
-        'case "file_transcriber_completed"',
-        'case "file_transcriber_error"',
+        '"file_transcriber_status_changed"',
+        '"file_transcriber_progress"',
+        '"file_transcriber_new_text"',
+        '"file_transcriber_full_text"',
+        '"file_transcriber_completed"',
+        '"file_transcriber_error"',
     ):
         assert token not in app
 
@@ -185,9 +185,12 @@ def test_file_presentation_is_owned_by_file_history_module() -> None:
         "fileHistoryFileUI",
         '$("file-stop").onclick = () => call("stopFile")',
         '$("file-copy").onclick = () => copyValue(state.fileText)',
-        'case "file_transcriber_progress"',
-        'case "file_transcriber_full_text"',
-        'case "file_transcriber_completed"',
+        '"file_transcriber_status_changed"',
+        '"file_transcriber_progress"',
+        '"file_transcriber_new_text"',
+        '"file_transcriber_full_text"',
+        '"file_transcriber_completed"',
+        '"file_transcriber_error"',
     ):
         assert token in file_history
 
