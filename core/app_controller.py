@@ -16,6 +16,7 @@ from core.file_transcriber import FileTranscriberThread
 from core.live_sessions import LiveSessionManager
 from core.meeting_manager import MeetingManager
 from core.models import StatusEnum
+from core.pactl import PactlRunner
 from core.sink_finder import find_source
 from core.transcript_history import TranscriptHistoryStore
 from core.whisper_backend import WhisperBackend
@@ -125,7 +126,8 @@ class AppController:
         self._model_manager = WhisperModelManager()
         self._backend = WhisperBackend(settings, self._project_root)
         self._history = TranscriptHistoryStore()
-        self._audio_router = PulseAudioRouter()
+        self._pactl = PactlRunner()
+        self._audio_router = PulseAudioRouter(pactl_runner=self._pactl)
         try:
             self._audio_router.cleanup_stale_routes()
         except Exception as exc:
@@ -153,8 +155,8 @@ class AppController:
         self._file_batch = FileBatchCoordinator(_FileBatchControllerView(self))
         self._audio_discovery = AudioDiscoveryService(
             settings_provider=lambda: self._settings,
-            stream_provider=self.list_playback_streams,
             event_sink=self._bus.emit,
+            pactl_runner=self._pactl,
         )
         self._subscribe_history_events()
         self._audio_discovery.request_refresh()
@@ -261,10 +263,6 @@ class AppController:
         self.ensure_backend_started(vad=settings.vad_filter, settings=settings)
 
     def stop_backend(self) -> None:
-        # Startup and shutdown share the same lifecycle lock. This prevents a
-        # stop from racing a half-started whisper-server and also guarantees
-        # that shutdown wins once an in-flight startup leaves the critical
-        # section.
         with self._backend_init_lock:
             with self._lock:
                 self._backend.stop()
@@ -356,8 +354,6 @@ class AppController:
     def active_live_count(self) -> int:
         return self._live_sessions.active_count()
 
-    # Legacy compatibility API. A start now adds a session rather than
-    # replacing the previously active Live pipeline.
     def start_transcription(
         self,
         sink_name=None,
@@ -422,9 +418,6 @@ class AppController:
         )
 
         def start() -> None:
-            # Stop/Start and shutdown invalidate older generations. Check before
-            # doing expensive model/backend work so a stale queued startup can
-            # never resurrect whisper-server after the user has stopped it.
             if not self._is_current(generation):
                 return
             self.ensure_backend_started(
@@ -472,8 +465,6 @@ class AppController:
         if worker:
             worker.stop()
             if worker.is_alive():
-                # File mode is exclusive from Live sessions, therefore aborting
-                # the active request cannot terminate another Live pipeline.
                 self._backend.abort_active_request()
                 self._backend_started = False
             if worker is not threading.current_thread():
@@ -643,11 +634,13 @@ class AppController:
         self._bus.subscribe(event, handler)
 
     def shutdown(self) -> None:
-        self._audio_discovery.close()
         self._file_batch.close()
         self._meeting.shutdown()
         self.stop_file_transcription()
         self._live_sessions.shutdown()
+        self._audio_router.close()
+        self._audio_discovery.close()
+        self._pactl.close()
         self.stop_backend()
         for event, handler in self._history_subscriptions:
             self._bus.unsubscribe(event, handler)
@@ -661,7 +654,11 @@ class AppController:
                 "Per la sorgente Applicazione devi selezionare uno stream",
                 detail="Scegli uno stream attivo dall'elenco delle applicazioni.",
             )
-        found = find_source(self._settings, audio_source=audio_source)
+        found = find_source(
+            self._settings,
+            audio_source=audio_source,
+            pactl_runner=self._pactl,
+        )
         if found is not None:
             return found
         if audio_source == AudioSource.SYSTEM.value:
@@ -678,8 +675,6 @@ class AppController:
         )
 
     def _subscribe_history_events(self) -> None:
-        # Live history is owned directly by LiveSessionManager. Only the
-        # singleton File worker still uses global EventBus history hooks.
         handlers: tuple[tuple[str, Callable[[Any], None]], ...] = (
             (
                 "file_transcriber_new_text",
