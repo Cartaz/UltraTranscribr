@@ -21,8 +21,6 @@ jobs:
       - run: node --check ui/web/app.js
       - run: node --check ui/web/multi_live.js
       - run: node --check ui/web/settings_cleanup.js
-      - run: node --check ui/web/power_user.js
-      - run: node --check ui/web/phase10.js
-      - run: node --check ui/web/phase10_hardening.js
-      - run: node --check ui/web/final_features.js
+      - run: node --check ui/web/file_history.js
+      - run: node --check ui/web/meeting.js
       - run: pytest -q
