@@ -2,9 +2,9 @@
 """UltraTranscribr — Punto di ingresso (orchestratore puro).
 
 Inizializza l'applicazione Qt, verifica il backend SYCL, carica le
-impostazioni, crea il controller, la finestra principale e l'icona
-tray, e avvia il loop degli eventi. Nessuna logica applicativa in
-questo file.
+impostazioni, crea il controller, i servizi applicativi, la finestra
+principale e l'icona tray, e avvia il loop degli eventi. Nessuna logica
+applicativa in questo file.
 
 Usage:
     python main.py
@@ -23,6 +23,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from config.constants import AppMeta
 from config.settings import Settings
 from core.app_controller import AppController
+from core.application_service import ApplicationService
 from core.exceptions import GPUNotAvailableError
 from core.file_segment_journal import FileSegmentJournal
 from ui.main_window import MainWindow
@@ -74,7 +75,6 @@ def main() -> None:
     app.setDesktopFileName(AppMeta.ID)
     app.setQuitOnLastWindowClosed(True)
 
-    # Verifica SYCL e crea il controller
     try:
         controller = AppController(settings=settings)
     except GPUNotAvailableError as exc:
@@ -87,12 +87,10 @@ def main() -> None:
         )
         sys.exit(1)
 
-    # FileTranscriber emette segmenti temporizzati separatamente dal testo.
-    # Il journal li lega alla sessione File già posseduta dal controller.
+    application = ApplicationService(controller)
     segment_journal = FileSegmentJournal(controller)
-    window = MainWindow(controller=controller)
+    window = MainWindow(controller=controller, application=application)
 
-    # Icona della finestra e del tray
     icon_path = Path(__file__).parent / "assets" / "icons" / "icon.png"
     if not icon_path.exists():
         icon_path = Path(__file__).parent / "assets" / "icons" / "ultratranscribr.svg"
