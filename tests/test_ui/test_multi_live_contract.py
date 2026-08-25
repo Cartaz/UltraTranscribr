@@ -1,4 +1,4 @@
-"""Static contract for Phase 4 multi-session Live UI and WebChannel API."""
+"""Static contract for multi-session Live UI and WebChannel API."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,7 +42,7 @@ def test_session_cards_show_independent_runtime_metrics():
 
 
 def test_webchannel_exposes_session_scoped_operations_and_events():
-    bridge = (ROOT / "ui" / "multi_session_bridge.py").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "phase10_bridge.py").read_text(encoding="utf-8")
     controller = (ROOT / "core" / "app_controller.py").read_text(encoding="utf-8")
     manager = (ROOT / "core" / "live_sessions.py").read_text(encoding="utf-8")
 
