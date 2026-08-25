@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from config.settings import Settings
-from core.session_names import SessionNameStore
+from core.transcript_history import TranscriptHistoryStore
 from core.whisper_backend import WhisperBackend
 
 
@@ -17,29 +17,41 @@ def _running_process():
     return process
 
 
+def _history_session(store: TranscriptHistoryStore) -> str:
+    return store.create_session(
+        kind="file",
+        model="medium",
+        language="it",
+        source="file",
+        source_path="/tmp/example.wav",
+    )
+
+
 def test_session_names_are_optional_atomic_and_normalized(tmp_path) -> None:
-    store = SessionNameStore(tmp_path / "names.json")
-    session = {"id": "session-1", "text": "ciao"}
-    assert store.apply(session)["name"] == ""
-    assert store.set("session-1", "  Riunione   progetto  ") == "Riunione progetto"
-    assert SessionNameStore(tmp_path / "names.json").get("session-1") == "Riunione progetto"
-    assert store.apply(session)["name"] == "Riunione progetto"
-    assert store.set("session-1", "") == ""
-    assert store.get("session-1") == ""
+    store = TranscriptHistoryStore(tmp_path / "history")
+    session_id = _history_session(store)
+    assert store.get_session(session_id)["name"] == ""
+    assert store.set_name(session_id, "  Riunione   progetto  ") == "Riunione progetto"
+    assert TranscriptHistoryStore(tmp_path / "history").get_session(session_id)["name"] == "Riunione progetto"
+    assert store.set_name(session_id, "") == ""
+    assert store.get_session(session_id)["name"] == ""
 
 
 def test_session_name_search_is_case_insensitive_and_anded(tmp_path) -> None:
-    store = SessionNameStore(tmp_path / "names.json")
-    store.set("a", "Riunione Progetto Alpha")
-    store.set("b", "Riunione Beta")
-    assert store.matching_ids("progetto alpha") == {"a"}
-    assert store.matching_ids("RIUNIONE") == {"a", "b"}
+    store = TranscriptHistoryStore(tmp_path / "history")
+    first = _history_session(store)
+    second = _history_session(store)
+    store.set_name(first, "Riunione Progetto Alpha")
+    store.set_name(second, "Riunione Beta")
+    assert [item["id"] for item in store.search("progetto alpha")] == [first]
+    assert {item["id"] for item in store.search("RIUNIONE")} == {first, second}
 
 
 def test_session_name_rejects_excessive_length(tmp_path) -> None:
-    store = SessionNameStore(tmp_path / "names.json")
+    store = TranscriptHistoryStore(tmp_path / "history")
+    session_id = _history_session(store)
     with pytest.raises(ValueError, match="120"):
-        store.set("session-1", "x" * 121)
+        store.set_name(session_id, "x" * 121)
 
 
 def test_backend_instance_settings_are_bounded_and_ports_fit() -> None:
