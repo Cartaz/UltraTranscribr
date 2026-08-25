@@ -1,8 +1,6 @@
 """Native Qt/WebEngine smoke coverage for the real desktop shell."""
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from PySide6.QtWidgets import QApplication
 
 from config.settings import Settings
@@ -27,10 +25,10 @@ class _Controller:
 
 
 class _Application:
-    def __init__(self) -> None:
+    def __init__(self, controller: _Controller) -> None:
         self.closed = 0
         self.subscriptions: dict[str, list] = {}
-        self.controller = SimpleNamespace(settings=Settings())
+        self.controller = controller
 
     def subscribe(self, event, handler) -> None:
         self.subscriptions.setdefault(event, []).append(handler)
@@ -43,12 +41,13 @@ class _Application:
 
     def close(self) -> None:
         self.closed += 1
+        self.controller.shutdown()
 
 
 def test_real_main_window_constructs_local_webengine_shell() -> None:
     app = QApplication.instance() or QApplication([])
     controller = _Controller()
-    application = _Application()
+    application = _Application(controller)
 
     window = MainWindow(controller, application)
     app.processEvents()
