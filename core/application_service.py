@@ -46,10 +46,17 @@ class ApplicationService:
         self.controller.history.migrate_legacy_session_names()
         self._bus = EventBus()
         self._tasks = BackgroundTaskGroup("Application", join_timeout=10.0)
+        self._closed = False
 
     def close(self) -> None:
-        """Stop accepting background work and wait boundedly for owned tasks."""
-        self._tasks.close()
+        """Close application-owned work and the underlying runtime exactly once."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._tasks.close()
+        finally:
+            self.controller.shutdown()
 
     def subscribe(self, event: str, handler: Callable[[Any], None]) -> None:
         self.controller.subscribe(event, handler)
