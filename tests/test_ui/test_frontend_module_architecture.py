@@ -19,11 +19,17 @@ def test_domain_modules_are_loaded_without_milestone_chain() -> None:
     assert 'src="ui_runtime.js"' not in html
     assert 'src="multi_live.js"' in html
     assert html.index('src="app.js"') < html.index('src="multi_live.js"')
+    assert 'loadStyle("file_history.css", "file-history")' in settings
+    assert 'loadStyle("meeting.css", "meeting")' in settings
     assert 'loadScript("file_history.js", "file-history")' in settings
     assert 'loadScript("meeting.js", "meeting")' in settings
+    assert (WEB / "file_history.css").is_file()
+    assert (WEB / "meeting.css").is_file()
     assert "phase10_hardening.js" not in settings
     assert "final_features.js" not in settings
     assert "power_user.js" not in settings
+    assert "power_user.css" not in settings
+    assert "phase10.css" not in settings
     assert "node --check ui/web/ui_runtime.js" not in workflow
     assert "node --check ui/web/file_history.js" in workflow
     assert "node --check ui/web/meeting.js" in workflow
