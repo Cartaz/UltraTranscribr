@@ -11,8 +11,6 @@ from PySide6.QtWidgets import QFileDialog
 
 from config.settings import AudioSource, Settings
 from core.audio_source_health import evaluate_audio_source_health
-from core.file_batch import FileBatchCoordinator
-from core.meeting_manager import MeetingManager
 from core.sink_finder import debug_dump, find_source, list_available_devices
 from core.transcript_postprocess import process_text, profile_choices
 from ui.bridge import BackendBridge
@@ -47,13 +45,8 @@ class MultiSessionBackendBridge(BackendBridge):
 
     def __init__(self, controller, parent=None) -> None:
         super().__init__(controller, parent)
-        self._file_batch = FileBatchCoordinator(controller)
-        self._meeting = MeetingManager(controller)
-
-    def closePowerUser(self) -> None:
-        """Release coordinator subscriptions/workers before controller shutdown."""
-        self._file_batch.close()
-        self._meeting.shutdown()
+        self._file_batch = controller.file_batch
+        self._meeting = controller.meeting
 
     @Slot(result=str)
     def getBootstrap(self) -> str:
@@ -163,28 +156,13 @@ class MultiSessionBackendBridge(BackendBridge):
             if self._meeting.is_busy():
                 raise RuntimeError("Termina la riunione prima di avviare una sessione Live")
             self._prepare_backend_for_selected_model()
-            if save_recording:
-                startup = getattr(self._controller, "_startup_thread", None)
-                if self._controller.is_file_transcribing() or (startup and startup.is_alive()):
-                    raise RuntimeError("Ferma la trascrizione File prima di avviare Live")
-                session_settings = self._controller.settings.with_(
-                    language=lang,
-                    live_microphone_recording=True,
-                )
-                self._controller.live_sessions.create_session(
-                    settings=session_settings,
-                    audio_source=source,
-                    sink_name=sink,
-                    language=lang,
-                    stream_id=stream_id,
-                )
-            else:
-                self._controller.start_live_session(
-                    sink_name=sink,
-                    audio_source=source,
-                    language=lang,
-                    stream_id=stream_id,
-                )
+            self._controller.start_live_session(
+                sink_name=sink,
+                audio_source=source,
+                language=lang,
+                stream_id=stream_id,
+                record_audio=save_recording,
+            )
 
         self._run_async(
             "start-live-session",
