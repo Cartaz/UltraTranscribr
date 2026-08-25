@@ -93,7 +93,7 @@ class MeetingManager:
     ) -> dict[str, Any]:
         if self.is_busy():
             raise RuntimeError("Una riunione è già in corso")
-        if self._controller.active_live_count() > 0 or self._controller._file_busy():
+        if self._controller.active_live_count() > 0 or self._controller.is_file_busy():
             raise RuntimeError("Ferma Live/File prima di avviare una riunione")
         settings = self._controller.settings.with_(
             audio_source=AudioSource.MICROPHONE.value,
