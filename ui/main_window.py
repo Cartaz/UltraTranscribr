@@ -164,7 +164,7 @@ class MainWindow(QMainWindow):
         self._geometry_save_timer.stop()
         self._persist_window_geometry()
         try:
-            self._shutdown_runtime()
+            self._application.close()
         finally:
             logging.getLogger().removeHandler(self._log_handler)
             app = QApplication.instance()
@@ -177,7 +177,7 @@ class MainWindow(QMainWindow):
             self._geometry_save_timer.stop()
             self._persist_window_geometry()
             try:
-                self._shutdown_runtime()
+                self._application.close()
             finally:
                 logging.getLogger().removeHandler(self._log_handler)
         event.accept()
@@ -186,10 +186,6 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         if self._geometry_tracking_ready and not self._closing:
             self._geometry_save_timer.start(350)
-
-    def _shutdown_runtime(self) -> None:
-        self._application.close()
-        self._controller.shutdown()
 
     def _persist_window_geometry(self) -> None:
         width = max(UIConstraints.MIN_WINDOW_WIDTH, int(self.width()))
