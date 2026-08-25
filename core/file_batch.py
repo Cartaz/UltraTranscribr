@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -30,7 +31,10 @@ class FileBatchJob:
 
 
 class FileBatchCoordinator:
-    """Own a FIFO queue while reusing AppController's proven File lifecycle."""
+    """Own a FIFO queue while reusing AppController's public File lifecycle."""
+
+    _WORKER_EXIT_TIMEOUT_S = 10.0
+    _WORKER_EXIT_POLL_S = 0.05
 
     def __init__(self, controller: "AppController") -> None:
         self._controller = controller
@@ -102,8 +106,10 @@ class FileBatchCoordinator:
                 for job in self._jobs:
                     if job.status == "queued":
                         job.status = "cancelled"
-        if self._controller.is_file_transcribing() or getattr(self._controller, "_startup_thread", None):
-            self._controller.stop_file_transcription()
+        # This public lifecycle method is idempotent and invalidates an
+        # in-flight File startup generation as well as stopping a live worker.
+        # The coordinator therefore does not need to inspect controller threads.
+        self._controller.stop_file_transcription()
         self._emit_changed()
         return self.list_jobs()
 
@@ -216,12 +222,11 @@ class FileBatchCoordinator:
 
     def _advance_after_worker(self) -> None:
         def advance() -> None:
-            worker = getattr(self._controller, "_file_thread", None)
-            if worker is not None and worker is not threading.current_thread():
-                try:
-                    worker.join(timeout=10.0)
-                except RuntimeError:
-                    pass
+            deadline = time.monotonic() + self._WORKER_EXIT_TIMEOUT_S
+            while self._controller.is_file_transcribing():
+                if time.monotonic() >= deadline:
+                    return
+                time.sleep(self._WORKER_EXIT_POLL_S)
             self._maybe_start_next()
 
         threading.Thread(
