@@ -11,8 +11,6 @@ class FakeController:
     def __init__(self) -> None:
         self.settings = SimpleNamespace(language="it", model_size="medium")
         self._handlers = {}
-        self._file_thread = None
-        self._startup_thread = None
         self.started = []
         self.stopped = 0
 
@@ -96,6 +94,7 @@ def test_cancel_marks_active_and_pending_jobs(tmp_path: Path, monkeypatch) -> No
     jobs = batch.cancel(clear_pending=True)
 
     assert [job["status"] for job in jobs] == ["cancelled", "cancelled"]
+    assert controller.stopped == 1
     batch.close()
 
 
