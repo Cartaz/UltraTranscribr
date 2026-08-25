@@ -195,6 +195,45 @@ def test_file_presentation_is_owned_by_file_history_module() -> None:
         assert token in file_history
 
 
+def test_webchannel_exposes_session_scoped_live_events_only() -> None:
+    app = _read("app.js")
+    live = _read("multi_live.js")
+    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    transcriber = (ROOT / "core" / "transcriber.py").read_text(encoding="utf-8")
+    capture = (ROOT / "core" / "audio_capture.py").read_text(encoding="utf-8")
+
+    legacy_events = (
+        "process_started",
+        "process_stopped",
+        "capture_stopped",
+        "transcriber_status_changed",
+        "transcriber_buffer_level",
+        "transcriber_new_text",
+        "transcriber_error",
+        "transcriber_drained",
+        "playback_stream_status_changed",
+    )
+    for event_name in legacy_events:
+        assert f'"{event_name}"' not in app
+        assert f'"{event_name}"' not in bridge
+
+    for event_name in (
+        "live_session_created",
+        "live_session_updated",
+        "live_session_buffer_level",
+        "live_session_text",
+        "live_session_error",
+        "live_session_route_status",
+    ):
+        assert event_name in bridge
+        assert event_name in live
+
+    # Standalone workers retain their internal compatibility fallback; it no longer
+    # leaks through the WebChannel presentation contract.
+    assert "EventBus().emit(event, payload)" in transcriber
+    assert "EventBus().emit(event, payload)" in capture
+
+
 def test_backend_and_history_final_features_live_in_domain_modules() -> None:
     settings = _read("settings_cleanup.js")
     history = _read("file_history.js")
