@@ -220,14 +220,20 @@ class AppController:
         audio_source: Optional[str] = None,
         language: Optional[str] = None,
         stream_id: Optional[int] = None,
+        record_audio: bool = False,
     ) -> dict[str, Any]:
         if self.is_file_busy():
             raise RuntimeError(
                 "Ferma la trascrizione file prima di avviare una sessione Live"
             )
         source = audio_source or self._settings.audio_source
+        session_settings = self._settings.with_(
+            live_microphone_recording=bool(
+                record_audio and source == AudioSource.MICROPHONE.value
+            )
+        )
         return self._live_sessions.create_session(
-            settings=self._settings,
+            settings=session_settings,
             audio_source=source,
             sink_name=sink_name,
             language=language,
