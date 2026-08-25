@@ -61,7 +61,7 @@ def test_dark_neumorphism_uses_exact_surface_accent_and_radius_tokens() -> None:
 def test_frontend_is_wired_to_transport_api_and_application_workflows() -> None:
     bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
     application = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
-    script = (WEB / "app.js").read_text(encoding="utf-8")
+    file_script = (WEB / "file_history.js").read_text(encoding="utf-8")
     live_script = (WEB / "multi_live.js").read_text(encoding="utf-8")
     meeting_script = (WEB / "meeting.js").read_text(encoding="utf-8")
 
@@ -86,7 +86,7 @@ def test_frontend_is_wired_to_transport_api_and_application_workflows() -> None:
 
     for event in ("file_transcriber_progress", "file_transcriber_full_text"):
         assert event in bridge
-        assert event in script
+        assert event in file_script
     assert "live_session_updated" in bridge
     assert "live_session_updated" in live_script
     assert "meeting_updated" in bridge
