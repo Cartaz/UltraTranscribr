@@ -1,6 +1,8 @@
 """Lifecycle contracts for the application boundary and desktop shell."""
 from pathlib import Path
 
+import pytest
+
 from core.application_service import ApplicationService
 
 
@@ -18,6 +20,16 @@ class _FakeController:
         self.meeting = object()
         self.history = _FakeHistory()
         self._events = events
+        self.subscriptions: list[tuple[str, object]] = []
+
+    def subscribe(self, event: str, handler) -> None:
+        self.subscriptions.append((event, handler))
+
+    def unsubscribe(self, event: str, handler) -> None:
+        self._events.append(f"unsubscribe:{event}")
+        subscription = (event, handler)
+        if subscription in self.subscriptions:
+            self.subscriptions.remove(subscription)
 
     def shutdown(self) -> None:
         self._events.append("controller")
@@ -43,6 +55,35 @@ def test_application_service_owns_ordered_idempotent_shutdown() -> None:
     assert events == ["tasks", "controller"]
 
 
+def test_application_service_releases_presentation_subscriptions_before_runtime() -> None:
+    events: list[str] = []
+    controller = _FakeController(events)
+    service = ApplicationService(controller)  # type: ignore[arg-type]
+    service._tasks = _FakeTasks(events)  # type: ignore[assignment]
+    handler = lambda _payload: None
+
+    service.subscribe("live_session_updated", handler)
+    service.close()
+
+    assert controller.subscriptions == []
+    assert events == ["unsubscribe:live_session_updated", "tasks", "controller"]
+    with pytest.raises(RuntimeError, match="chiuso"):
+        service.subscribe("history_changed", handler)
+
+
+def test_application_service_explicit_unsubscribe_updates_owned_registry() -> None:
+    events: list[str] = []
+    controller = _FakeController(events)
+    service = ApplicationService(controller)  # type: ignore[arg-type]
+    handler = lambda _payload: None
+
+    service.subscribe("history_changed", handler)
+    service.unsubscribe("history_changed", handler)
+    service.close()
+
+    assert events == ["unsubscribe:history_changed", "tasks", "controller"]
+
+
 def test_presentation_and_composition_root_do_not_teardown_controller_directly() -> None:
     main = (ROOT / "main.py").read_text(encoding="utf-8")
     window = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
@@ -54,3 +95,5 @@ def test_presentation_and_composition_root_do_not_teardown_controller_directly()
     assert "self._application.close()" in window
     assert "self.controller.shutdown()" in application
     assert "self._closed = False" in application
+    assert "self._subscriptions" in application
+    assert "self.controller.unsubscribe(event, handler)" in application
