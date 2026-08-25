@@ -112,13 +112,15 @@ def test_background_work_has_explicit_lifecycle_owner() -> None:
     assert "BackgroundTaskGroup" in application
     assert "self._tasks.start(name, worker)" in application
     assert "def close(self) -> None:" in application
+    assert "self.controller.shutdown()" in application
     assert "BackgroundTaskGroup" in batch
     assert "self._tasks.close()" in batch
     assert "cleanup_thread: Optional[threading.Thread]" in live
     assert "transcriber.join()" not in live
     assert "self._application.close()" in shell
+    assert "self._controller.shutdown()" not in shell
     assert "application.close()" in main
-    assert "controller.shutdown()" in main
+    assert "controller.shutdown()" not in main
 
 
 def test_file_segments_are_owned_by_controller_without_private_journal() -> None:
