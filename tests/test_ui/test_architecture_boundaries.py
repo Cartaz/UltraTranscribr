@@ -76,14 +76,23 @@ def test_meeting_control_waits_are_owned_by_core_not_webchannel_bridge() -> None
 
 def test_audio_discovery_io_is_owned_by_core_service_not_webchannel() -> None:
     service = _read("core/audio_discovery.py")
+    pactl = _read("core/pactl.py")
     controller = _read("core/app_controller.py")
     bridge = _read("ui/bridge.py")
     multi_bridge = _read("ui/multi_session_bridge.py")
     frontend = _read("ui/web/multi_live.js")
 
     assert "class AudioDiscoveryService" in service
+    assert "PactlRunner" in service
+    assert "self._pactl.close()" in service
+    assert "subprocess.run(" not in service
     assert 'name="AudioDiscoveryRefresh"' in service
     assert 'name=f"AudioSourceProbe-' in service
+    assert "class PactlRunner" in pactl
+    assert "subprocess.Popen(" in pactl
+    assert "shell=True" not in pactl
+    assert "process.terminate()" in pactl
+    assert "process.kill()" in pactl
     assert "self._audio_discovery = AudioDiscoveryService(" in controller
     assert "self._audio_discovery.close()" in controller
     assert "list_available_devices" not in bridge
