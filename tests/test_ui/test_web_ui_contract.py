@@ -1,5 +1,6 @@
 """Static contract tests for the embedded dark-neumorphic web UI."""
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -39,19 +40,12 @@ def test_web_ui_files_and_native_stack_are_present() -> None:
 
 
 def test_dark_neumorphism_uses_exact_surface_and_accent_without_gradients() -> None:
-    styles = [
-        (WEB / name).read_text(encoding="utf-8").lower()
-        for name in (
-            "styles.css",
-            "history.css",
-            "models.css",
-            "runtime.css",
-            "multi_live.css",
-            "power_user.css",
-            "phase10.css",
-        )
-    ]
-    css = styles[0]
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    linked_styles = re.findall(r'<link[^>]+rel="stylesheet"[^>]+href="([^"]+)"', html)
+    assert linked_styles
+    styles = [(WEB / name).read_text(encoding="utf-8").lower() for name in linked_styles]
+
+    css = (WEB / "styles.css").read_text(encoding="utf-8").lower()
     assert "--surface: rgb(20, 20, 20)" in css
     assert "--accent: rgb(255, 102, 0)" in css
     assert "box-shadow" in css
