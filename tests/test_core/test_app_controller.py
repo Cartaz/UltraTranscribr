@@ -16,7 +16,9 @@ def controller() -> AppController:
     with patch("core.app_controller.detect_gpu_backend", return_value="sycl"), \
          patch("core.app_controller.WhisperModelManager"), \
          patch("core.app_controller.WhisperBackend"), \
-         patch("core.app_controller.PulseAudioRouter"):
+         patch("core.app_controller.PulseAudioRouter"), \
+         patch("core.app_controller.MeetingManager"), \
+         patch("core.app_controller.FileBatchCoordinator"):
         return AppController(settings=Settings())
 
 
@@ -24,6 +26,10 @@ class TestAppController:
     def test_settings_property(self, controller: AppController) -> None:
         assert controller.settings is not None
         assert isinstance(controller.settings, Settings)
+
+    def test_workflow_services_are_controller_owned(self, controller: AppController) -> None:
+        assert controller.meeting is controller._meeting
+        assert controller.file_batch is controller._file_batch
 
     def test_buffer_property_is_aggregate_live_view(self, controller: AppController) -> None:
         assert controller.buffer is not None
