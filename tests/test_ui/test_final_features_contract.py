@@ -20,17 +20,22 @@ def test_final_features_expose_session_name_and_backend_controls() -> None:
     assert 'name="preload_model"' in text
 
 
-def test_main_window_uses_single_backend_bridge() -> None:
+def test_main_window_uses_single_backend_bridge_and_application_service() -> None:
     text = (_root() / "ui" / "main_window.py").read_text(encoding="utf-8")
     assert "from ui.bridge import BackendBridge, BridgeLogHandler" in text
+    assert "from core.application_service import ApplicationService" in text
     assert "phase10_bridge" not in text
     assert "final_features_bridge" not in text
-    assert "self._bridge = BackendBridge(controller, self)" in text
+    assert "self._bridge = BackendBridge(controller, application, self)" in text
 
 
-def test_single_bridge_contains_final_history_features() -> None:
-    text = (_root() / "ui" / "bridge.py").read_text(encoding="utf-8")
-    assert "SessionNameStore" in text
-    assert "generate_history_postprocess" in text
-    assert "renameHistorySession" in text
-    assert "preload_model" in text
+def test_history_feature_policy_lives_below_bridge() -> None:
+    bridge = (_root() / "ui" / "bridge.py").read_text(encoding="utf-8")
+    application = (_root() / "core" / "application_service.py").read_text(encoding="utf-8")
+    assert "SessionNameStore" not in bridge
+    assert "generate_history_postprocess" not in bridge
+    assert "renameHistorySession" in bridge
+    assert "preload_model_if_requested" in bridge
+    assert "SessionNameStore" in application
+    assert "generate_history_postprocess" in application
+    assert "preload_model_if_requested" in application
