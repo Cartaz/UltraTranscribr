@@ -561,6 +561,7 @@ class AppController:
         deleted = self._history.delete_recovery_audio(recovery_path)
         if deleted:
             self._bus.emit("history_changed", None)
+        return deleted
 
     # ------------------------------------------------------------------
     # Lifecycle and helpers
