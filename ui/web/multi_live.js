@@ -1,138 +1,5 @@
 "use strict";
 
-// Central extension boundary for the local frontend. app.js remains the base
-// presentation module; feature modules register hooks here instead of replacing
-// one another's globals through chained wrapper overrides.
-const ultraBaseUI = {
-  bind,
-  hydrate,
-  event,
-  sessionBusy,
-  liveUI,
-  fileUI,
-  sourceUI,
-  switchView,
-  updateSelectedStreamMeta,
-  startLive,
-  saveSettings,
-  showHistorySession,
-  clearHistorySelection,
-  refreshHistoryList,
-  historyTitle,
-  lockSettings,
-};
-
-const ultraModules = [];
-const ultraRuntime = {bound: false, bootstrap: null};
-
-function ultraRegisterModule(module) {
-  if (!module || typeof module !== "object") return;
-  ultraModules.push(module);
-  if (ultraRuntime.bound && typeof module.bind === "function") module.bind();
-  if (ultraRuntime.bootstrap && typeof module.hydrate === "function") {
-    module.hydrate(ultraRuntime.bootstrap);
-  }
-}
-
-window.UltraUI = Object.freeze({register: ultraRegisterModule});
-
-bind = function() {
-  ultraBaseUI.bind();
-  ultraRuntime.bound = true;
-  ultraModules.forEach(module => module.bind?.());
-};
-
-hydrate = function(bootstrap) {
-  ultraRuntime.bootstrap = bootstrap;
-  let baseBootstrap = bootstrap;
-  ultraModules.forEach(module => {
-    if (typeof module.transformBootstrap === "function") {
-      baseBootstrap = module.transformBootstrap(baseBootstrap) || baseBootstrap;
-    }
-  });
-  ultraBaseUI.hydrate(baseBootstrap);
-  ultraModules.forEach(module => module.hydrate?.(bootstrap));
-};
-
-event = function(name, payload) {
-  const value = json(payload);
-  let consumed = false;
-  ultraModules.forEach(module => {
-    if (module.event?.(name, value, payload) === true) consumed = true;
-  });
-  if (!consumed) ultraBaseUI.event(name, payload);
-};
-
-sessionBusy = function() {
-  return ultraBaseUI.sessionBusy() || ultraModules.some(module => module.isBusy?.() === true);
-};
-
-liveUI = function(statusText) {
-  const handler = ultraModules.find(module => typeof module.liveUI === "function");
-  if (handler) handler.liveUI(statusText);
-  else ultraBaseUI.liveUI(statusText);
-};
-
-fileUI = function(statusText) {
-  ultraBaseUI.fileUI(statusText);
-  ultraModules.forEach(module => module.fileUI?.(statusText));
-};
-
-sourceUI = function() {
-  ultraBaseUI.sourceUI();
-  ultraModules.forEach(module => module.sourceUI?.());
-};
-
-switchView = function(name) {
-  ultraBaseUI.switchView(name);
-  ultraModules.forEach(module => module.view?.(name));
-};
-
-updateSelectedStreamMeta = function() {
-  ultraBaseUI.updateSelectedStreamMeta();
-  ultraModules.forEach(module => module.streamMeta?.());
-};
-
-startLive = function() {
-  const handler = [...ultraModules].reverse().find(module => typeof module.startLive === "function");
-  if (!handler || handler.startLive() !== true) ultraBaseUI.startLive();
-};
-
-saveSettings = function(eventObject) {
-  const handler = [...ultraModules].reverse().find(module => typeof module.saveSettings === "function");
-  if (!handler || handler.saveSettings(eventObject) !== true) ultraBaseUI.saveSettings(eventObject);
-};
-
-showHistorySession = function(session) {
-  ultraBaseUI.showHistorySession(session);
-  ultraModules.forEach(module => module.historySession?.(session));
-};
-
-clearHistorySelection = function() {
-  ultraBaseUI.clearHistorySelection();
-  ultraModules.forEach(module => module.historyClear?.());
-};
-
-refreshHistoryList = function() {
-  const handler = [...ultraModules].reverse().find(module => typeof module.refreshHistoryList === "function");
-  if (!handler || handler.refreshHistoryList() !== true) ultraBaseUI.refreshHistoryList();
-};
-
-historyTitle = function(session) {
-  return ultraModules.reduce(
-    (current, module) => module.historyTitle?.(session, current) ?? current,
-    ultraBaseUI.historyTitle(session),
-  );
-};
-
-lockSettings = function() {
-  ultraBaseUI.lockSettings();
-  ultraModules.forEach(module => module.lockSettings?.());
-};
-
-// ---------------------------------------------------------------------------
-// Live sessions and source availability
-// ---------------------------------------------------------------------------
 state.liveSessions = new Map();
 
 const multiLivePanel = document.querySelector('[data-panel="live"]');
@@ -401,7 +268,7 @@ function probeSelectedAudioSource() {
   call("probeAudioSource", [state.source, selectedInputValue()], result => renderSourceHealth(json(result)));
 }
 
-refreshStreams = function() {
+function multiLiveRefreshStreams() {
   call("listPlaybackStreams", [], result => {
     const response = json(result);
     if (Array.isArray(response)) renderPlaybackStreams(response);
@@ -411,18 +278,18 @@ refreshStreams = function() {
     }
     probeSelectedAudioSource();
   });
-};
+}
 
-refreshDevices = function() {
+function multiLiveRefreshDevices() {
   if (state.source === "application") {
-    refreshStreams();
+    multiLiveRefreshStreams();
     return;
   }
   call("refreshDevices", [state.source], result => {
     devices(state.source, json(result));
     probeSelectedAudioSource();
   });
-};
+}
 
 function refreshAllAudioSources() {
   refreshDevices();
@@ -482,6 +349,14 @@ const liveSessionsModule = {
       $("live-status").textContent = statusText;
     }
     multiLiveSyncAggregate();
+  },
+  refreshStreams() {
+    multiLiveRefreshStreams();
+    return true;
+  },
+  refreshDevices() {
+    multiLiveRefreshDevices();
+    return true;
   },
   startLive() {
     const settings = state.boot?.settings || {};
@@ -597,6 +472,6 @@ const liveSessionsModule = {
   },
 };
 
-ultraRegisterModule(liveSessionsModule);
+UltraUI.register(liveSessionsModule);
 multiLiveRender();
 multiLiveSyncAggregate();
