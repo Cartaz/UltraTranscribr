@@ -50,22 +50,27 @@ def test_application_controller_owns_runtime_services_and_shutdown() -> None:
     assert "self.meeting = controller.meeting" in application
     assert "self.file_batch = controller.file_batch" in application
     assert "application = ApplicationService(controller)" in main
-    assert "BackendBridge(controller, application, self)" in shell
+    assert "BackendBridge(application, self)" in shell
     assert "closePowerUser" not in shell
 
 
 def test_webchannel_bridge_is_transport_only() -> None:
     bridge = _read("ui/bridge.py")
     assert "threading" not in bridge
+    assert "from core.app_controller" not in bridge
+    assert "self._controller" not in bridge
     assert "SessionNameStore" not in bridge
     assert "generate_history_postprocess" not in bridge
     assert "from core.session_recordings" not in bridge
     assert "backend.reconfigure" not in bridge
     assert "start_live_session(" not in bridge
     assert "start_file_transcription(" not in bridge
+    assert ".is_file()" not in bridge
+    assert "AppMeta.LOG_PATH.open" not in bridge
     assert "self._application.start_live(" in bridge
     assert "self._application.start_file(" in bridge
     assert "self._application.apply_settings(" in bridge
+    assert "self._application.read_log_tail(" in bridge
     assert not (ROOT / "ui" / "multi_session_bridge.py").exists()
     assert not (ROOT / "ui" / "phase10_bridge.py").exists()
     assert not (ROOT / "ui" / "final_features_bridge.py").exists()
@@ -132,6 +137,7 @@ def test_audio_subsystem_has_one_managed_pactl_owner() -> None:
     pactl = _read("core/pactl.py")
     controller = _read("core/app_controller.py")
     bridge = _read("ui/bridge.py")
+    application = _read("core/application_service.py")
     frontend = _read("ui/web/multi_live.js")
 
     assert "class AudioDiscoveryService" in service
@@ -159,9 +165,10 @@ def test_audio_subsystem_has_one_managed_pactl_owner() -> None:
     assert "list_available_devices" not in bridge
     assert "evaluate_audio_source_health" not in bridge
     assert "find_source" not in bridge
-    assert "self._controller.audio_discovery_snapshot()" in bridge
-    assert "self._controller.request_audio_discovery(" in bridge
-    assert "self._controller.request_audio_source_probe(" in bridge
+    assert "self._controller" not in bridge
+    assert "self.controller.audio_discovery_snapshot()" in application
+    assert "self.controller.request_audio_discovery(" in application
+    assert "self.controller.request_audio_source_probe(" in application
     assert 'case "audio_devices_changed":' in frontend
     assert 'case "playback_streams_changed":' in frontend
     assert 'case "audio_source_health_changed":' in frontend
@@ -191,3 +198,4 @@ def test_webengine_is_local_only_and_external_links_leave_the_app() -> None:
     assert "LocalContentCanAccessRemoteUrls" in shell
     assert "False," in shell
     assert "def createWindow" in shell
+    assert ".is_file()" not in shell.split("class DropAwareWebView", 1)[1].split("class MainWindow", 1)[0]
