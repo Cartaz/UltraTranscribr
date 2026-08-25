@@ -74,6 +74,30 @@ def test_meeting_control_waits_are_owned_by_core_not_webchannel_bridge() -> None
     assert ".join(" not in bridge
 
 
+def test_audio_discovery_io_is_owned_by_core_service_not_webchannel() -> None:
+    service = _read("core/audio_discovery.py")
+    controller = _read("core/app_controller.py")
+    bridge = _read("ui/bridge.py")
+    multi_bridge = _read("ui/multi_session_bridge.py")
+    frontend = _read("ui/web/multi_live.js")
+
+    assert "class AudioDiscoveryService" in service
+    assert 'name="AudioDiscoveryRefresh"' in service
+    assert 'name=f"AudioSourceProbe-' in service
+    assert "self._audio_discovery = AudioDiscoveryService(" in controller
+    assert "self._audio_discovery.close()" in controller
+    assert "list_available_devices" not in bridge
+    assert "evaluate_audio_source_health" not in multi_bridge
+    assert "find_source" not in multi_bridge
+    assert "list_available_devices" not in multi_bridge
+    assert "self._controller.audio_discovery_snapshot()" in bridge
+    assert "self._controller.request_audio_discovery(" in bridge
+    assert "self._controller.request_audio_source_probe(" in multi_bridge
+    assert 'name === "audio_devices_changed"' in frontend
+    assert 'name === "playback_streams_changed"' in frontend
+    assert 'name === "audio_source_health_changed"' in frontend
+
+
 def test_webengine_is_local_only_and_external_links_leave_the_app() -> None:
     shell = _read("ui/main_window.py")
     assert "class LocalOnlyWebPage(QWebEnginePage)" in shell
