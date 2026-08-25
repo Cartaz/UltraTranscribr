@@ -21,10 +21,15 @@ def test_file_batch_depends_on_narrow_application_contract() -> None:
     assert "FileBatchCoordinator(_FileBatchControllerView(self))" in controller
 
 
-def test_meeting_manager_uses_public_file_lifecycle_state() -> None:
+def test_meeting_manager_depends_on_narrow_application_contract() -> None:
     source = _read("core/meeting_manager.py")
+    controller = _read("core/app_controller.py")
     assert "self._controller._file_busy" not in source
     assert "self._controller.is_file_busy()" in source
+    assert "class MeetingController(Protocol)" in source
+    assert "def __init__(self, controller: MeetingController)" in source
+    assert "class _MeetingControllerView" in controller
+    assert "MeetingManager(_MeetingControllerView(self))" in controller
 
 
 def test_application_controller_owns_workflow_services_and_shutdown() -> None:
