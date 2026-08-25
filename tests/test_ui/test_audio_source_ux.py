@@ -121,7 +121,9 @@ def test_source_probe_rules_live_in_core_discovery_service() -> None:
 
     assert "evaluate_audio_source_health" in service_source
     assert "list_available_devices" in service_source
-    assert "find_source" in service_source
+    assert "PactlRunner" in service_source
+    assert "parse_playback_streams" in service_source
+    assert "find_source" not in service_source
     assert "evaluate_audio_source_health" not in bridge_source
     assert "list_available_devices" not in bridge_source
     assert "find_source" not in bridge_source
