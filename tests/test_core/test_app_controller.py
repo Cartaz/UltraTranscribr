@@ -36,6 +36,7 @@ class TestAppController:
 
     def test_is_file_transcribing_initially_false(self, controller: AppController) -> None:
         assert controller.is_file_transcribing() is False
+        assert controller.is_file_busy() is False
 
     def test_update_settings(self, controller: AppController) -> None:
         controller.update_settings(language="it")
@@ -79,6 +80,36 @@ class TestAppController:
         assert first["id"] == "one"
         assert second["id"] == "two"
         assert controller._live_sessions.create_session.call_count == 2
+
+    def test_recorded_microphone_live_scopes_setting_to_session(
+        self, controller: AppController
+    ) -> None:
+        controller._live_sessions.create_session = MagicMock(return_value={"id": "recorded"})
+
+        controller.start_live_session(
+            audio_source="microphone",
+            sink_name="mic-a",
+            language="it",
+            record_audio=True,
+        )
+
+        session_settings = controller._live_sessions.create_session.call_args.kwargs["settings"]
+        assert session_settings.live_microphone_recording is True
+        assert controller.settings.live_microphone_recording is False
+
+    def test_record_audio_is_ignored_for_non_microphone_live(
+        self, controller: AppController
+    ) -> None:
+        controller._live_sessions.create_session = MagicMock(return_value={"id": "system"})
+
+        controller.start_live_session(
+            audio_source="system",
+            sink_name="monitor-a",
+            record_audio=True,
+        )
+
+        session_settings = controller._live_sessions.create_session.call_args.kwargs["settings"]
+        assert session_settings.live_microphone_recording is False
 
     def test_stop_live_session_is_scoped(self, controller: AppController) -> None:
         controller._live_sessions.stop_session = MagicMock(return_value=True)
