@@ -8,10 +8,13 @@ WEB = ROOT / "ui" / "web"
 
 def test_meeting_module_is_registered_and_ci_checked() -> None:
     source = (WEB / "meeting.js").read_text(encoding="utf-8")
+    html = (WEB / "index.html").read_text(encoding="utf-8")
     settings = (WEB / "settings_cleanup.js").read_text(encoding="utf-8")
     workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
     assert "UltraUI.register(meetingModule)" in source
-    assert 'loadScript("meeting.js", "meeting")' in settings
+    assert 'src="meeting.js"' in html
+    assert 'href="meeting.css"' in html
+    assert "meeting.js" not in settings
     assert "node --check ui/web/meeting.js" in workflow
     assert "Legacy" not in source
 
