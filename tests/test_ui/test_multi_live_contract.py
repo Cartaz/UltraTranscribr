@@ -41,12 +41,15 @@ def test_session_cards_show_independent_runtime_metrics():
     assert "gradient(" not in css
 
 
-def test_live_module_uses_shared_dispatcher_instead_of_wrapper_chain():
+def test_live_module_registers_with_shared_runtime_without_global_overrides():
     script = (WEB / "multi_live.js").read_text(encoding="utf-8")
-    assert "const ultraBaseUI =" in script
+    runtime = (WEB / "ui_runtime.js").read_text(encoding="utf-8")
     assert "const liveSessionsModule =" in script
-    assert "ultraRegisterModule(liveSessionsModule)" in script
+    assert "UltraUI.register(liveSessionsModule)" in script
+    assert "window.UltraUI = Object.freeze" in runtime
     assert "Legacy" not in script
+    assert "refreshStreams = function" not in script
+    assert "refreshDevices = function" not in script
 
 
 def test_webchannel_exposes_session_scoped_operations_and_events():
