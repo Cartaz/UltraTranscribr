@@ -16,7 +16,7 @@ def test_phase10_frontend_modules_are_loaded_and_ci_checked() -> None:
 
 def test_live_microphone_recording_is_opt_in_and_controller_owned() -> None:
     source = (ROOT / "ui" / "web" / "phase10.js").read_text(encoding="utf-8")
-    bridge = (ROOT / "ui" / "phase10_bridge.py").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
     controller = (ROOT / "core" / "app_controller.py").read_text(encoding="utf-8")
     settings = (ROOT / "config" / "settings.py").read_text(encoding="utf-8")
     assert 'id="live-recording" type="checkbox"' in source
@@ -56,7 +56,7 @@ def test_meeting_list_uses_text_content_for_persisted_transcript_data() -> None:
 
 def test_live_recording_can_be_reopened_and_deleted_from_history() -> None:
     source = (ROOT / "ui" / "web" / "phase10_hardening.js").read_text(encoding="utf-8")
-    bridge = (ROOT / "ui" / "phase10_bridge.py").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
     assert "getSessionRecordingInfo" in source
     assert "deleteSessionRecording" in source
     assert "def getSessionRecordingInfo" in bridge
@@ -64,7 +64,8 @@ def test_live_recording_can_be_reopened_and_deleted_from_history() -> None:
     assert "la trascrizione è stata conservata" in source
 
 
-def test_desktop_shell_uses_phase10_bridge() -> None:
+def test_desktop_shell_uses_single_backend_bridge() -> None:
     source = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
-    assert "from ui.phase10_bridge import Phase10BackendBridge" in source
-    assert "self._bridge = Phase10BackendBridge(controller, self)" in source
+    assert "from ui.bridge import BackendBridge, BridgeLogHandler" in source
+    assert "self._bridge = BackendBridge(controller, self)" in source
+    assert "phase10_bridge" not in source
