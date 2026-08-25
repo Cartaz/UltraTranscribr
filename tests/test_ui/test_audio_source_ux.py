@@ -89,6 +89,7 @@ def test_meeting_device_picker_consumes_fresh_discovery_events() -> None:
 
 def test_source_probe_rules_live_in_core_discovery_service() -> None:
     bridge_source = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    application_source = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
     service_source = (ROOT / "core" / "audio_discovery.py").read_text(encoding="utf-8")
 
     assert "evaluate_audio_source_health" in service_source
@@ -99,8 +100,11 @@ def test_source_probe_rules_live_in_core_discovery_service() -> None:
     assert "evaluate_audio_source_health" not in bridge_source
     assert "list_available_devices" not in bridge_source
     assert "find_source" not in bridge_source
-    assert "cached_audio_source_health" in bridge_source
-    assert "request_audio_source_probe" in bridge_source
+    assert "self._application.probe_audio_source(" in bridge_source
+    assert "cached_audio_source_health" not in bridge_source
+    assert "request_audio_source_probe" not in bridge_source
+    assert "cached_audio_source_health" in application_source
+    assert "request_audio_source_probe" in application_source
 
 
 def test_audio_diagnostics_live_below_bridge() -> None:
