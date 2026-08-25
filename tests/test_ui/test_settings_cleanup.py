@@ -44,6 +44,7 @@ def test_each_settings_group_has_a_scoped_reset() -> None:
     html = (WEB / "index.html").read_text(encoding="utf-8")
     script = (WEB / "settings_cleanup.js").read_text(encoding="utf-8")
     bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    application = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
 
     for section in ("recognition", "history", "tuning", "audio", "backend"):
         assert f'data-reset-section="{section}"' in html
@@ -52,7 +53,7 @@ def test_each_settings_group_has_a_scoped_reset() -> None:
     assert "resetSettingsSection" in script
     assert "getSettingsDefaults" in script
     assert "getSettingsDefaults" in bridge
-    assert "asdict(Settings())" in bridge
+    assert "asdict(Settings())" in application
     assert "sessionBusy()" in script
 
 
