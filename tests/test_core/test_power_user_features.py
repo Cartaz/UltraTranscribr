@@ -43,8 +43,42 @@ def test_old_history_record_without_phase9_fields_remains_readable(tmp_path: Pat
 
     assert loaded is not None
     assert loaded["text"] == "vecchia trascrizione"
+    assert loaded["name"] == ""
     assert loaded["segments"] == []
     assert loaded["derived_outputs"] == {}
+
+
+def test_session_name_is_canonical_searchable_history_metadata(tmp_path: Path) -> None:
+    store = TranscriptHistoryStore(tmp_path)
+    session_id = _session(store, "ordinary transcript")
+
+    cleaned = store.set_name(session_id, "  Project   Aurora  ")
+
+    assert cleaned == "Project Aurora"
+    loaded = store.get_session(session_id)
+    assert loaded is not None
+    assert loaded["name"] == "Project Aurora"
+    assert [item["id"] for item in store.search("project aurora")] == [session_id]
+
+
+def test_legacy_session_name_sidecar_migrates_once_into_history(tmp_path: Path) -> None:
+    history_root = tmp_path / "transcripts"
+    store = TranscriptHistoryStore(history_root)
+    session_id = _session(store)
+    legacy = tmp_path / "session-names.json"
+    legacy.write_text(
+        json.dumps({session_id: "Legacy title", "missing-session": "Ignored"}),
+        encoding="utf-8",
+    )
+
+    migrated = store.migrate_legacy_session_names(legacy)
+
+    assert migrated == 1
+    assert not legacy.exists()
+    loaded = store.get_session(session_id)
+    assert loaded is not None
+    assert loaded["name"] == "Legacy title"
+    assert store.migrate_legacy_session_names(legacy) == 0
 
 
 def test_segments_are_persisted_deduplicated_and_exported(tmp_path: Path) -> None:
