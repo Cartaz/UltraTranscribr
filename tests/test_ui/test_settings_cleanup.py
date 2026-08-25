@@ -1,4 +1,4 @@
-"""Phase 6 contracts for settings grouping, resets and window geometry."""
+"""Contracts for settings grouping, resets and window geometry."""
 from pathlib import Path
 
 
@@ -61,7 +61,7 @@ def test_manual_window_geometry_fields_are_removed_from_settings_payload() -> No
 def test_each_settings_group_has_a_scoped_reset() -> None:
     html = (WEB / "index.html").read_text(encoding="utf-8")
     script = (WEB / "settings_cleanup.js").read_text(encoding="utf-8")
-    bridge = (ROOT / "ui" / "multi_session_bridge.py").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "phase10_bridge.py").read_text(encoding="utf-8")
 
     for section in ("recognition", "history", "tuning", "audio", "backend"):
         assert f'data-reset-section="{section}"' in html
