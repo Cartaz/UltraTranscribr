@@ -62,23 +62,19 @@ class Phase10BackendBridge(MultiSessionBackendBridge):
             sink = selection or None
 
         should_record = bool(record_audio and source == AudioSource.MICROPHONE.value)
-        session_settings = self._controller.settings.with_(
-            language=lang,
-            live_microphone_recording=should_record,
-        )
 
         def operation() -> None:
             if self._meeting.is_busy():
                 raise RuntimeError("Termina la riunione prima di avviare una sessione Live")
-            if self._controller._file_busy():
+            if self._controller.is_file_busy():
                 raise RuntimeError("Ferma la trascrizione File prima di avviare Live")
             self._prepare_backend_for_selected_model()
-            self._controller.live_sessions.create_session(
-                settings=session_settings,
-                audio_source=source,
+            self._controller.start_live_session(
                 sink_name=sink,
+                audio_source=source,
                 language=lang,
                 stream_id=stream_id,
+                record_audio=should_record,
             )
 
         self._run_async("start-live-phase10", operation, "live_session_start_error")
