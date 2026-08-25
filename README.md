@@ -29,7 +29,7 @@ Il progetto è pensato principalmente per **CachyOS / Arch Linux** con GPU Intel
 Configurazione di riferimento:
 
 - CachyOS o Arch Linux x86_64.
-- Python 3.11 o superiore.
+- Python 3.12 o superiore.
 - Intel oneAPI Base Toolkit installato in `/opt/intel/oneapi`.
 - Intel Compute Runtime e Level Zero.
 - GPU Intel visibile al runtime Level Zero/SYCL.
@@ -64,7 +64,7 @@ Avvio:
 
 L'installer:
 
-1. individua Python 3.11+;
+1. individua Python 3.12+;
 2. crea `.venv` se necessario;
 3. installa le dipendenze Python da `requirements.txt`, inclusa `sherpa-onnx` per la diarizzazione locale;
 4. carica Intel oneAPI;
@@ -117,7 +117,7 @@ source /opt/intel/oneapi/setvars.sh
 
 Il report verifica:
 
-- Python 3.11+;
+- Python 3.12+;
 - Intel oneAPI;
 - Level Zero loader;
 - Intel Compute Runtime;
@@ -259,7 +259,7 @@ Le vecchie sessioni salvate prima dell'introduzione dei timestamp restano leggib
 
 ### Cronologia, ricerca e recovery
 
-Le trascrizioni vengono persistite progressivamente. La Cronologia supporta ricerca case-insensitive con semantica AND su transcript e metadati utili, inclusa la sorgente/file.
+Le trascrizioni vengono persistite progressivamente. La Cronologia supporta ricerca case-insensitive con semantica AND su transcript e metadati utili, inclusi nome della sessione, sorgente e file.
 
 Se un segmento Live non può essere trascritto dopo i retry previsti, l'audio viene conservato come WAV di recovery e può essere ritrascritto dalla UI.
 
@@ -291,6 +291,7 @@ Dati/storico:        ~/.local/share/ultratranscribr/
 Registrazioni:       ~/.local/share/ultratranscribr/recordings/
 Metadata riunioni:   ~/.local/share/ultratranscribr/meetings/
 Cache/modelli:       ~/.cache/ultratranscribr/
+Log whisper-server:  ~/.cache/ultratranscribr/logs/
 ```
 
 I log applicativi ruotano automaticamente a circa **5 MiB** mantenendo fino a **4 backup**:
@@ -302,10 +303,10 @@ ultratranscribr.log.1
 ultratranscribr.log.4
 ```
 
-Il log del processo `whisper-server` usato durante il runtime è invece nella directory del progetto:
+Il processo `whisper-server` usa invece log runtime nella cache XDG, ad esempio:
 
 ```text
-.venv/whisper-server.log
+~/.cache/ultratranscribr/logs/whisper-server.log
 ```
 
 ## Troubleshooting
@@ -332,7 +333,7 @@ ULTRATRANSCRIBR_FORCE_REBUILD=1 ./install.sh
 Controllare inoltre:
 
 ```text
-.venv/whisper-server.log
+~/.cache/ultratranscribr/logs/whisper-server.log
 ```
 
 ### Audio di sistema non rilevato
@@ -379,27 +380,18 @@ L'ambiente di sviluppo usa la stessa `.venv` dell'applicazione.
 
 ```bash
 .venv/bin/pip install pytest
+.venv/bin/python -m compileall -q main.py config core ui tests
 .venv/bin/python -m pytest -q
 bash -n install.sh
 node --check ui/web/app.js
+node --check ui/web/ui_runtime.js
 node --check ui/web/multi_live.js
 node --check ui/web/settings_cleanup.js
-node --check ui/web/power_user.js
-node --check ui/web/phase10.js
-node --check ui/web/phase10_hardening.js
+node --check ui/web/file_history.js
+node --check ui/web/meeting.js
 ```
 
-La CI GitHub esegue questi controlli ad ogni pull request. I test Phase 10 usano recorder, capture, Whisper e diarizzazione finti/deterministici: la CI non scarica modelli ONNX e non richiede hardware audio reale.
-
-## Packaging Arch
-
-La repository contiene anche un `PKGBUILD` per packaging Arch. Il percorso di installazione locale supportato e documentato per lo sviluppo resta tuttavia:
-
-```bash
-chmod +x install.sh
-./install.sh
-.venv/bin/python main.py
-```
+La CI GitHub esegue questi controlli ad ogni push sui branch supportati e ad ogni pull request. Include inoltre uno smoke test Qt/WebEngine headless che costruisce la shell desktop reale senza richiedere GPU SYCL, dispositivi audio o modelli Whisper.
 
 ## Licenza
 
