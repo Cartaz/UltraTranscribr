@@ -154,6 +154,44 @@ def test_settings_and_model_ui_are_owned_by_settings_module() -> None:
         assert history_global not in live
 
 
+def test_file_presentation_is_owned_by_file_history_module() -> None:
+    app = _read("app.js")
+    file_history = _read("file_history.js")
+
+    for token in (
+        "function startFile",
+        "function updateFileSummary",
+        "function fileUI",
+        "function fileName",
+        '$("file-pick").onclick',
+        '$("file-start").onclick',
+        '$("file-stop").onclick',
+        '$("file-copy").onclick',
+        '$("file-clear").onclick',
+        'case "file_transcriber_status_changed"',
+        'case "file_transcriber_progress"',
+        'case "file_transcriber_new_text"',
+        'case "file_transcriber_full_text"',
+        'case "file_transcriber_completed"',
+        'case "file_transcriber_error"',
+    ):
+        assert token not in app
+
+    for token in (
+        "fileHistoryFileName",
+        "fileHistorySetFileProgress",
+        "fileHistorySetFileText",
+        "fileHistoryUpdateFileSummary",
+        "fileHistoryFileUI",
+        '$("file-stop").onclick = () => call("stopFile")',
+        '$("file-copy").onclick = () => copyValue(state.fileText)',
+        'case "file_transcriber_progress"',
+        'case "file_transcriber_full_text"',
+        'case "file_transcriber_completed"',
+    ):
+        assert token in file_history
+
+
 def test_backend_and_history_final_features_live_in_domain_modules() -> None:
     settings = _read("settings_cleanup.js")
     history = _read("file_history.js")
