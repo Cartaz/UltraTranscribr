@@ -51,8 +51,8 @@ def collect_environment_checks(project_root: Path | None = None) -> list[Environ
 
     checks = [
         EnvironmentCheck(
-            "Python 3.11+",
-            sys.version_info >= (3, 11),
+            "Python 3.12+",
+            sys.version_info >= (3, 12),
             sys.version.split()[0],
         ),
         EnvironmentCheck(
