@@ -48,6 +48,7 @@ class TranscriptionSession:
     transcriber: Optional[TranscriberThread] = None
     route: Optional[StreamRouteLease] = None
     startup_thread: Optional[threading.Thread] = None
+    cleanup_thread: Optional[threading.Thread] = None
     cancel_event: threading.Event = field(default_factory=threading.Event)
     terminal: bool = False
     cleanup_started: bool = False
@@ -78,6 +79,10 @@ class TranscriptionSession:
 class LiveSessionManager:
     """Own multiple Live pipelines while sharing one WhisperBackend."""
 
+    _STARTUP_JOIN_TIMEOUT_S = 3.0
+    _TRANSCRIBER_JOIN_TIMEOUT_S = 3.0
+    _CLEANUP_JOIN_TIMEOUT_S = 5.0
+
     def __init__(
         self,
         *,
@@ -95,6 +100,7 @@ class LiveSessionManager:
         self._bus = EventBus()
         self._lock = threading.RLock()
         self._sessions: dict[str, TranscriptionSession] = {}
+        self._closed = False
 
     def create_session(
         self,
@@ -105,6 +111,9 @@ class LiveSessionManager:
         language: Optional[str] = None,
         stream_id: Optional[int] = None,
     ) -> dict[str, Any]:
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("gestore Live chiuso")
         source = audio_source
         lang = language or settings.language
         session_settings = settings.with_(language=lang)
@@ -138,6 +147,9 @@ class LiveSessionManager:
             buffer=BufferManager(warn_threshold=session_settings.buffer_warn_threshold),
         )
         with self._lock:
+            if self._closed:
+                session.buffer.close()
+                raise RuntimeError("gestore Live chiuso")
             self._sessions[session_id] = session
         self._emit("live_session_created", session.snapshot())
 
@@ -234,16 +246,30 @@ class LiveSessionManager:
         return True
 
     def shutdown(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
         self.stop_all(drain=False)
         with self._lock:
             sessions = list(self._sessions.values())
+        current = threading.current_thread()
         for session in sessions:
             startup = session.startup_thread
-            if startup and startup.is_alive() and startup is not threading.current_thread():
-                startup.join(timeout=3.0)
+            if startup and startup.is_alive() and startup is not current:
+                startup.join(timeout=self._STARTUP_JOIN_TIMEOUT_S)
+                if startup.is_alive():
+                    logger.warning("Startup Live %s ancora attivo dopo shutdown bounded", session.id)
             transcriber = session.transcriber
-            if transcriber and transcriber.is_alive() and transcriber is not threading.current_thread():
-                transcriber.join(timeout=1.0)
+            if transcriber and transcriber.is_alive() and transcriber is not current:
+                transcriber.join(timeout=self._TRANSCRIBER_JOIN_TIMEOUT_S)
+                if transcriber.is_alive():
+                    logger.warning("Transcriber Live %s ancora attivo dopo shutdown bounded", session.id)
+            cleanup = session.cleanup_thread
+            if cleanup and cleanup.is_alive() and cleanup is not current:
+                cleanup.join(timeout=self._CLEANUP_JOIN_TIMEOUT_S)
+                if cleanup.is_alive():
+                    logger.warning("Cleanup Live %s ancora attivo dopo shutdown bounded", session.id)
             if not transcriber or not transcriber.is_alive():
                 session.buffer.close()
 
@@ -294,7 +320,7 @@ class LiveSessionManager:
                 event_sink=callback,
             )
             with self._lock:
-                if session.cancel_event.is_set() or session.terminal:
+                if session.cancel_event.is_set() or session.terminal or self._closed:
                     if route:
                         route.close()
                         session.route = None
@@ -438,14 +464,23 @@ class LiveSessionManager:
 
         def cleanup() -> None:
             if transcriber and transcriber.is_alive() and transcriber is not threading.current_thread():
-                transcriber.join()
+                transcriber.join(timeout=self._CLEANUP_JOIN_TIMEOUT_S)
+                if transcriber.is_alive():
+                    logger.warning(
+                        "Buffer Live %s non chiuso: transcriber ancora attivo",
+                        session.id,
+                    )
+                    return
             session.buffer.close()
 
-        threading.Thread(
+        thread = threading.Thread(
             target=cleanup,
             daemon=True,
             name=f"LiveSessionCleanup-{session.id}",
-        ).start()
+        )
+        with self._lock:
+            session.cleanup_thread = thread
+        thread.start()
 
     def _require_session(self, session_id: str) -> TranscriptionSession:
         with self._lock:

@@ -17,6 +17,8 @@ def test_file_batch_depends_on_narrow_application_contract() -> None:
     assert "getattr(self._controller" not in source
     assert "from core.app_controller import AppController" not in source
     assert "class FileBatchController(Protocol)" in source
+    assert "def unsubscribe(self, event: str, handler) -> None: ..." in source
+    assert "self._controller.unsubscribe(event, handler)" in source
     assert "class _FileBatchControllerView" in controller
     assert "FileBatchCoordinator(_FileBatchControllerView(self))" in controller
 
@@ -40,8 +42,9 @@ def test_application_controller_owns_runtime_services_and_shutdown() -> None:
     main = _read("main.py")
     assert "self._meeting = MeetingManager(_MeetingControllerView(self))" in controller
     assert "self._file_batch = FileBatchCoordinator(_FileBatchControllerView(self))" in controller
-    assert "self._meeting.shutdown()" in controller
-    assert "self._file_batch.close()" in controller
+    assert "self._meeting.shutdown" in controller
+    assert "self._file_batch.close" in controller
+    assert "self._shutdown_started" in controller
     assert "MeetingManager(" not in bridge
     assert "FileBatchCoordinator(" not in bridge
     assert "self.meeting = controller.meeting" in application
@@ -84,6 +87,9 @@ def test_meeting_control_waits_are_owned_by_core_not_webchannel_bridge() -> None
     assert 'name=f"MeetingFinalize-' in meeting
     assert 'name=f"MeetingCancel-' in meeting
     assert "runtime.capture.join(timeout=8.0)" in meeting
+    assert "self._shutdown_event.set()" in meeting
+    assert "recovery.join(timeout=self._RECOVERY_JOIN_TIMEOUT_S)" in meeting
+    assert "runtime.stop_event.is_set() or self._shutdown_event.is_set()" in meeting
     assert "runtime.capture.join(" not in bridge
     assert "runtime.control_thread.join(" not in bridge
     assert "transcriber.join(" not in bridge
@@ -93,7 +99,9 @@ def test_background_work_has_explicit_lifecycle_owner() -> None:
     bridge = _read("ui/bridge.py")
     application = _read("core/application_service.py")
     batch = _read("core/file_batch.py")
+    live = _read("core/live_sessions.py")
     shell = _read("ui/main_window.py")
+    main = _read("main.py")
     assert "threading.Thread(" not in bridge
     assert "threading.Thread(" not in application
     assert "BackgroundTaskGroup" in application
@@ -101,7 +109,20 @@ def test_background_work_has_explicit_lifecycle_owner() -> None:
     assert "def close(self) -> None:" in application
     assert "BackgroundTaskGroup" in batch
     assert "self._tasks.close()" in batch
+    assert "cleanup_thread: Optional[threading.Thread]" in live
+    assert "transcriber.join()" not in live
     assert "self._application.close()" in shell
+    assert "application.close()" in main
+    assert "controller.shutdown()" in main
+
+
+def test_file_segments_are_owned_by_controller_without_private_journal() -> None:
+    controller = _read("core/app_controller.py")
+    main = _read("main.py")
+    assert not (ROOT / "core" / "file_segment_journal.py").exists()
+    assert "FileSegmentJournal" not in main
+    assert '"file_transcriber_segments", self._append_file_history_segments' in controller
+    assert "def _append_file_history_segments" in controller
 
 
 def test_audio_subsystem_has_one_managed_pactl_owner() -> None:
@@ -131,10 +152,9 @@ def test_audio_subsystem_has_one_managed_pactl_owner() -> None:
     assert "PulseAudioRouter(pactl_runner=self._pactl)" in controller
     assert "pactl_runner=self._pactl" in controller
     assert "stream_provider=self.list_playback_streams" not in controller
-    assert "self._audio_router.close()" in controller
-    assert "self._audio_discovery.close()" in controller
-    assert "self._pactl.close()" in controller
-    assert controller.index("self._live_sessions.shutdown()") < controller.index("self._pactl.close()")
+    assert "self._audio_router.close" in controller
+    assert "self._audio_discovery.close" in controller
+    assert "self._pactl.close" in controller
 
     assert "list_available_devices" not in bridge
     assert "evaluate_audio_source_health" not in bridge
