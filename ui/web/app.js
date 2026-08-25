@@ -153,8 +153,7 @@ function devices(source, items) {
   select.replaceChildren(new Option("Rilevamento automatico", ""));
   const flag = source === "system" ? "is_monitor" : "is_mic";
   (items || []).filter(device => !!device[flag]).forEach(device => {
-    const option = new Option(device.name + (device.hostapi_name ? ` · ${device.hostapi_name}` : ""), device.name);
-    select.append(option);
+    select.append(new Option(device.name + (device.hostapi_name ? ` · ${device.hostapi_name}` : ""), device.name));
   });
   if ([...select.options].some(option => option.value === current)) select.value = current;
   updateLiveSummary();
@@ -221,7 +220,7 @@ function refreshStreams() {
   call("listPlaybackStreams", [], result => {
     const response = json(result);
     renderPlaybackStreams(Array.isArray(response) ? response : response?.streams || []);
-    if (!Array.isArray(response) && response?.ok === false) showError(response.error, "stream");
+    if (!Array.isArray(response) && response?.ok === false) showError(response.error);
   });
 }
 
@@ -344,7 +343,11 @@ function handleRouteStatus(value) {
 
 function event(name, payload) {
   const value = json(payload);
-  if (uiModules.some(module => module.event?.(name, value, payload) === true)) return;
+  let consumed = false;
+  uiModules.forEach(module => {
+    if (module.event?.(name, value, payload) === true) consumed = true;
+  });
+  if (consumed) return;
   switch (name) {
     case "backend_status_changed": setBackendStatus(value); break;
     case "process_started": state.live = true; state.draining = false; updateLiveSummary(value); globalStatus("In uso · Live", "active"); liveUI("In esecuzione"); break;
