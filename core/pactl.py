@@ -1,7 +1,7 @@
 """Managed ``pactl`` command execution with deterministic shutdown.
 
 The application talks to PipeWire/PulseAudio through short-lived ``pactl``
-processes.  This module owns those child processes explicitly so shutdown can
+processes. This module owns those child processes explicitly so shutdown can
 terminate every in-flight command instead of relying on daemon-thread teardown.
 """
 from __future__ import annotations
@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 import subprocess
 import threading
-import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -26,7 +25,7 @@ class PactlRunner:
     def run(self, args: list[str], *, timeout: float = 10.0) -> Optional[str]:
         """Return stdout on success, otherwise ``None``.
 
-        No shell is involved.  Timeout and shutdown both terminate the process,
+        No shell is involved. Timeout and shutdown both terminate the process,
         wait for a bounded grace period, then escalate to ``kill`` if needed.
         """
         with self._lock:
@@ -84,21 +83,23 @@ class PactlRunner:
 
     @staticmethod
     def _stop_process(process: subprocess.Popen[str]) -> None:
+        """Stop and reap one child without competing with ``communicate()``."""
         if process.poll() is not None:
             return
         try:
             process.terminate()
         except ProcessLookupError:
             return
-        deadline = time.monotonic() + 0.25
-        while process.poll() is None and time.monotonic() < deadline:
-            time.sleep(0.01)
-        if process.poll() is None:
-            try:
-                process.kill()
-            except ProcessLookupError:
-                return
         try:
-            process.communicate(timeout=0.25)
+            process.wait(timeout=0.25)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            process.kill()
+        except ProcessLookupError:
+            return
+        try:
+            process.wait(timeout=0.25)
         except subprocess.TimeoutExpired:
             logger.warning("Impossibile reap rapido di pactl pid=%s", process.pid)
