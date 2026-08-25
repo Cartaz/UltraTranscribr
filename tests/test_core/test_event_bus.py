@@ -1,6 +1,8 @@
 # tests/test_core/test_event_bus.py
 """Test per l'EventBus dell'applicazione unificata."""
 
+import threading
+
 from core.event_bus import EventBus
 
 
@@ -49,6 +51,17 @@ class TestEventBus:
         """Emit senza handler non deve sollevare eccezioni."""
         bus = EventBus()
         bus.emit("no_handlers", None)
+
+    def test_emit_runs_handlers_in_emitter_thread(self) -> None:
+        """Il bus è sincrono: l'handler gira nel thread dell'emittente."""
+        bus = EventBus()
+        emitter_thread = threading.get_ident()
+        handler_threads: list[int] = []
+        bus.subscribe("sync_contract", lambda _: handler_threads.append(threading.get_ident()))
+
+        bus.emit("sync_contract")
+
+        assert handler_threads == [emitter_thread]
 
     def test_error_isolation(self) -> None:
         """Un handler che solleva eccezione non deve bloccare gli altri."""
