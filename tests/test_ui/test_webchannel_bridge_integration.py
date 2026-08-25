@@ -234,7 +234,7 @@ def _bridge(monkeypatch):
     module = _load_bridge(monkeypatch)
     controller = _FakeController()
     application = ApplicationService(controller)
-    bridge = module.BackendBridge(controller, application)
+    bridge = module.BackendBridge(application)
     return bridge, controller, application
 
 
