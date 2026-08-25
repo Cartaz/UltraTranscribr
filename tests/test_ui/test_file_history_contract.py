@@ -8,10 +8,13 @@ WEB = ROOT / "ui" / "web"
 
 def test_file_history_module_exists_registers_and_is_checked() -> None:
     source = (WEB / "file_history.js").read_text(encoding="utf-8")
+    html = (WEB / "index.html").read_text(encoding="utf-8")
     settings = (WEB / "settings_cleanup.js").read_text(encoding="utf-8")
     workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
     assert "UltraUI.register(fileHistoryModule)" in source
-    assert 'loadScript("file_history.js", "file-history")' in settings
+    assert 'src="file_history.js"' in html
+    assert 'href="file_history.css"' in html
+    assert "file_history.js" not in settings
     assert "node --check ui/web/file_history.js" in workflow
     assert "Legacy" not in source
 
