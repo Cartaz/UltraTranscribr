@@ -10,7 +10,7 @@ from PySide6.QtCore import QUrl, Slot
 from PySide6.QtWidgets import QFileDialog
 
 from config.settings import AudioSource, Settings
-from core.sink_finder import debug_dump
+from core.audio_diagnostics import build_audio_diagnostics
 from core.transcript_postprocess import process_text, profile_choices
 from ui.bridge import BackendBridge
 
@@ -434,45 +434,7 @@ class MultiSessionBackendBridge(BackendBridge):
     @Slot()
     def runAudioDiagnostics(self) -> None:
         def operation() -> None:
-            report = debug_dump()
-            report += "\n\n=== playback streams ==="
-            try:
-                streams = self._controller.list_playback_streams()
-            except Exception as exc:
-                report += f"\n  Errore: {exc}"
-            else:
-                if not streams:
-                    report += "\n  nessuno stream attivo"
-                for stream in streams:
-                    report += (
-                        f"\n  [#{stream.get('id')}] "
-                        f"{stream.get('display_name') or 'stream'}"
-                        f"\n      pid={stream.get('process_id') or '-'} "
-                        f"binary={stream.get('process_binary') or '-'} "
-                        f"sink={stream.get('sink_name') or '-'} "
-                        f"state={stream.get('state') or '-'}"
-                    )
-
-            report += "\n\n=== UltraTranscribr live routing ==="
-            sessions = self._controller.list_live_sessions(include_text=False)
-            if not sessions:
-                report += "\n  nessuna sessione Live"
-            for session in sessions:
-                if session.get("source") == AudioSource.APPLICATION.value:
-                    routing = "restored" if session.get("terminal") else "isolated"
-                else:
-                    routing = "direct"
-                report += (
-                    f"\n  [{session.get('id')}] source={session.get('source')} "
-                    f"status={session.get('status')} routing={routing}"
-                    f"\n      input={session.get('source_path') or '-'} "
-                    f"capture={session.get('sink') or '-'} "
-                    f"buffer={session.get('buffer_level', 0)}% "
-                    f"queue_wait={session.get('queue_wait_ms', 0)}ms"
-                )
-            meeting = self._meeting.snapshot()
-            report += "\n\n=== meeting ==="
-            report += f"\n  {meeting if meeting else 'nessuna riunione runtime'}"
+            report = build_audio_diagnostics(self._controller)
             self._emit_event("audio_diagnostics", report)
 
         self._run_async(
