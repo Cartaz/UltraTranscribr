@@ -19,6 +19,7 @@ jobs:
       - run: bash -n install.sh
       - run: python -m compileall -q main.py config core ui tests
       - run: node --check ui/web/app.js
+      - run: node --check ui/web/ui_runtime.js
       - run: node --check ui/web/multi_live.js
       - run: node --check ui/web/settings_cleanup.js
       - run: node --check ui/web/file_history.js
