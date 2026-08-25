@@ -19,7 +19,6 @@ from core.audio_diagnostics import build_audio_diagnostics
 from core.background_tasks import BackgroundTaskGroup
 from core.event_bus import EventBus
 from core.history_postprocess import generate_history_postprocess
-from core.session_names import SessionNameStore
 from core.session_recordings import delete_recording, recording_info
 from core.transcript_postprocess import profile_choices
 
@@ -44,7 +43,7 @@ class ApplicationService:
         self.controller = controller
         self.file_batch = controller.file_batch
         self.meeting = controller.meeting
-        self._session_names = SessionNameStore()
+        self.controller.history.migrate_legacy_session_names()
         self._bus = EventBus()
         self._tasks = BackgroundTaskGroup("Application", join_timeout=10.0)
 
@@ -379,32 +378,23 @@ class ApplicationService:
         )
 
     def list_history(self, limit: int) -> list[dict[str, Any]]:
-        return self._session_names.apply_many(self.controller.list_history(limit))
+        return self.controller.list_history(limit)
 
     def search_history(self, query: str, limit: int) -> list[dict[str, Any]]:
         self.controller.prune_history()
-        base = self.controller.history.search(query, limit)
-        by_id = {str(item.get("id")): item for item in base}
-        name_ids = self._session_names.matching_ids(query)
-        if name_ids and len(by_id) < limit:
-            for item in self.controller.history.list_recent(500):
-                session_id = str(item.get("id") or "")
-                if session_id in name_ids and session_id not in by_id:
-                    by_id[session_id] = item
-                    if len(by_id) >= limit:
-                        break
-        return self._session_names.apply_many(list(by_id.values())[:limit])
+        return self.controller.history.search(query, limit)
 
     def get_history_session(self, session_id: str) -> dict[str, Any] | None:
         session = self.controller.get_history_session(session_id)
         if session and session.get("kind") == "meeting":
-            session = self.meeting.get(session_id) or session
-        return self._session_names.apply(session)
+            meeting = self.meeting.get(session_id)
+            if meeting is not None:
+                meeting["name"] = str(session.get("name") or "")
+                session = meeting
+        return session
 
     def rename_history_session(self, session_id: str, name: str) -> str:
-        if not self.controller.get_history_session(session_id):
-            raise KeyError("sessione non trovata")
-        cleaned = self._session_names.set(session_id, name)
+        cleaned = self.controller.history.set_name(session_id, name)
         self._bus.emit("history_changed", session_id)
         return cleaned
 
@@ -449,7 +439,6 @@ class ApplicationService:
             (self.meeting.store.root / f"{session_id}.json").unlink(missing_ok=True)
         elif session and session.get("kind") == "live" and session.get("source") == "microphone":
             delete_recording(session_id)
-        self._session_names.delete(session_id)
         self._bus.emit("history_changed", session_id)
         return True
 
