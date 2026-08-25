@@ -173,7 +173,6 @@ function meetingRenderRuntime(runtime) {
     if ($("meeting-duration")) $("meeting-duration").textContent = "00:00:00";
   }
   lockSettings();
-  renderModels(state.models);
   if ($("file-start")) $("file-start").disabled = active || state.live || state.file;
   if ($("file-pick")) $("file-pick").disabled = active || state.live;
   if ($("live-start")) {
