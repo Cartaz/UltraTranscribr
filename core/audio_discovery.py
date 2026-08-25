@@ -1,7 +1,7 @@
 """Non-blocking audio source discovery and health snapshots.
 
 All hardware/process probing lives here so presentation code can request work
-without ever running sounddevice or pactl on the Qt GUI thread.  Results are
+without ever running sounddevice or pactl on the Qt GUI thread. Results are
 cached under a lock and published through the application event sink.
 """
 from __future__ import annotations
@@ -128,7 +128,10 @@ class AudioDiscoveryService:
                 continue
             worker.join(timeout=0.25)
             if worker.is_alive():
-                logger.warning("Worker discovery audio ancora attivo allo shutdown: %s", worker.name)
+                logger.warning(
+                    "Worker discovery audio ancora attivo allo shutdown: %s",
+                    worker.name,
+                )
 
     def _refresh_worker(self) -> None:
         try:
@@ -181,20 +184,21 @@ class AudioDiscoveryService:
             settings = self._settings_provider()
             devices: list[dict[str, Any]] = []
             streams: list[dict[str, Any]] = []
-            resolved: Optional[str] = selected_input or None
+            automatic_source: Optional[str] = None
 
             if source == AudioSource.APPLICATION.value:
                 streams = self._refresh_streams()
             else:
                 devices = self._refresh_devices()
-                if not resolved:
-                    resolved = self._source_resolver(settings, source)
+                if not selected_input:
+                    automatic_source = self._source_resolver(settings, source)
 
             result = self._health_evaluator(
-                source,
-                selected_input=resolved,
+                source=source,
+                selection=selected_input,
                 devices=devices,
                 streams=streams,
+                automatic_source=automatic_source,
             )
             payload = {
                 **dict(result),
@@ -227,7 +231,9 @@ class AudioDiscoveryService:
 
     @staticmethod
     def _health_key(source: str, selected_input: str) -> tuple[str, str]:
-        normalized = source if source in AudioSource.choices() else AudioSource.SYSTEM.value
+        normalized = (
+            source if source in AudioSource.choices() else AudioSource.SYSTEM.value
+        )
         return normalized, str(selected_input or "").strip()
 
     def _emit(self, event: str, payload: Any) -> None:
