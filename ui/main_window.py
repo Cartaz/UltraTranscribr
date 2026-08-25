@@ -61,14 +61,7 @@ class DropAwareWebView(QWebEngineView):
         mime = event.mimeData()
         if mime is None or not mime.hasUrls():
             return []
-        paths: list[str] = []
-        for url in mime.urls():
-            if not url.isLocalFile():
-                continue
-            path = Path(url.toLocalFile())
-            if path.is_file():
-                paths.append(str(path))
-        return paths
+        return [url.toLocalFile() for url in mime.urls() if url.isLocalFile()]
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if self._local_files(event):
@@ -118,7 +111,7 @@ class MainWindow(QMainWindow):
             max(UIConstraints.MIN_WINDOW_HEIGHT, settings.window_height),
         )
 
-        self._bridge = BackendBridge(controller, application, self)
+        self._bridge = BackendBridge(application, self)
         self._bridge.eventReceived.connect(self._observe_backend_event)
 
         self._log_handler = BridgeLogHandler(self._bridge)
