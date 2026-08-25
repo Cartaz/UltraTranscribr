@@ -56,8 +56,7 @@ def test_webchannel_bridge_is_transport_only() -> None:
     assert "threading" not in bridge
     assert "SessionNameStore" not in bridge
     assert "generate_history_postprocess" not in bridge
-    assert "delete_recording" not in bridge
-    assert "recording_info" not in bridge
+    assert "from core.session_recordings" not in bridge
     assert "backend.reconfigure" not in bridge
     assert "start_live_session(" not in bridge
     assert "start_file_transcription(" not in bridge
@@ -148,7 +147,7 @@ def test_history_postprocess_and_recordings_live_below_bridge() -> None:
     core = _read("core/history_postprocess.py")
     assert "generate_history_postprocess" not in bridge
     assert "SessionNameStore" not in bridge
-    assert "delete_recording" not in bridge
+    assert "from core.session_recordings" not in bridge
     assert "generate_history_postprocess" in application
     assert "SessionNameStore" in application
     assert "delete_recording" in application
