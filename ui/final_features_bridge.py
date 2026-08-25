@@ -93,8 +93,7 @@ class FinalFeaturesBackendBridge(Phase10BackendBridge):
         )
         if backend_changed and (
             self._controller.active_live_count() > 0
-            or self._controller.is_file_transcribing()
-            or self._controller._file_busy()
+            or self._controller.is_file_busy()
         ):
             return json.dumps(
                 {"ok": False, "error": "Ferma le trascrizioni attive prima di modificare il backend"},
