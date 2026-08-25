@@ -464,7 +464,6 @@ const meetingModule = {
     }
     if (name === "meeting_completed") {
       meetingRefreshList();
-      refreshHistory();
       meetingLoad(String(value));
       notice("Riunione pronta per la revisione");
       return true;
@@ -478,10 +477,7 @@ const meetingModule = {
       if (meetingCurrent?.id === String(value)) meetingLoad(String(value));
       return true;
     }
-    if (name === "microphone_recording_saved") {
-      if (historyIsVisible()) refreshHistory();
-      return true;
-    }
+    if (name === "microphone_recording_saved") return false;
     if (name === "meeting_model_progress") {
       $("meeting-model-note").textContent = `Download ${value?.model || "modello"}: ${Number(value?.percent) || 0}%`;
       return true;
