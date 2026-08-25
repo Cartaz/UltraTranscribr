@@ -12,6 +12,7 @@ def test_web_ui_files_and_native_stack_are_present() -> None:
         ROOT / "ui" / "bridge.py",
         ROOT / "ui" / "main_window.py",
         ROOT / "ui" / "tray_icon.py",
+        ROOT / "core" / "application_service.py",
         WEB / "index.html",
         WEB / "styles.css",
         WEB / "history.css",
@@ -31,6 +32,7 @@ def test_web_ui_files_and_native_stack_are_present() -> None:
     assert "QWebEngineView" in main_window
     assert "QWebChannel" in main_window
     assert "BackendBridge" in main_window
+    assert "ApplicationService" in main_window
     assert not (ROOT / "ui" / "phase10_bridge.py").exists()
     assert not (ROOT / "ui" / "multi_session_bridge.py").exists()
     assert not (ROOT / "ui" / "final_features_bridge.py").exists()
@@ -50,25 +52,31 @@ def test_dark_neumorphism_uses_exact_surface_and_accent_without_gradients() -> N
         assert "gradient(" not in stylesheet
 
 
-def test_frontend_is_wired_to_real_backend_operations() -> None:
+def test_frontend_is_wired_to_transport_api_and_application_workflows() -> None:
     bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    application = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
     script = (WEB / "app.js").read_text(encoding="utf-8")
     multi_script = (WEB / "multi_live.js").read_text(encoding="utf-8")
     phase10_script = (WEB / "phase10.js").read_text(encoding="utf-8")
 
+    for operation in (
+        "stopAllLive",
+        "drainAllLive",
+        "startLiveWithRecording",
+        "startMeeting",
+        "editMeetingSegment",
+        "startFile",
+        "applySettings",
+    ):
+        assert operation in bridge
     for operation in (
         "start_file_transcription",
         "stop_file_transcription",
         "update_settings",
         "start_live_session",
         "stop_live_session",
-        "stopAllLive",
-        "drainAllLive",
-        "startLiveWithRecording",
-        "startMeeting",
-        "editMeetingSegment",
     ):
-        assert operation in bridge
+        assert operation in application
 
     for event in ("file_transcriber_progress", "file_transcriber_full_text"):
         assert event in bridge
