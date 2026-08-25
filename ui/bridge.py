@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QFileDialog
 from config.constants import AppMeta
 from config.settings import AudioSource, ModelSize
 from core.app_controller import AppController
-from core.sink_finder import debug_dump, list_available_devices
+from core.sink_finder import debug_dump
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,10 @@ class BackendBridge(QObject):
         "model_download_progress",
         "model_status_changed",
         "playback_stream_status_changed",
+        "audio_devices_changed",
+        "playback_streams_changed",
+        "audio_source_health_changed",
+        "audio_discovery_error",
     )
 
     def __init__(self, controller: AppController, parent: QObject | None = None) -> None:
@@ -99,16 +103,8 @@ class BackendBridge(QObject):
     @Slot(result=str)
     def getBootstrap(self) -> str:
         settings = asdict(self._controller.settings)
-        try:
-            devices = list_available_devices()
-        except Exception as exc:
-            logger.warning("Enumerazione dispositivi fallita: %s", exc)
-            devices = []
-        try:
-            playback_streams = self._controller.list_playback_streams()
-        except Exception as exc:
-            logger.warning("Enumerazione stream playback fallita: %s", exc)
-            playback_streams = []
+        discovery = self._controller.audio_discovery_snapshot()
+        self._controller.request_audio_discovery()
         payload = {
             "app": {
                 "name": AppMeta.NAME,
@@ -119,8 +115,8 @@ class BackendBridge(QObject):
             "modelChoices": ModelSize.choices(),
             "models": self._controller.list_models(),
             "audioSources": AudioSource.choices(),
-            "devices": devices,
-            "playbackStreams": playback_streams,
+            "devices": discovery["devices"],
+            "playbackStreams": discovery["streams"],
             "runtime": {
                 "liveRunning": self._controller.is_running(),
                 "liveDraining": self._controller.is_draining(),
@@ -141,26 +137,17 @@ class BackendBridge(QObject):
         )
         if source == AudioSource.APPLICATION.value:
             return "[]"
-        try:
-            devices = list_available_devices()
-        except Exception as exc:
-            logger.warning("Enumerazione dispositivi fallita: %s", exc)
-            devices = []
+        self._controller.request_audio_discovery(devices=True, streams=False)
+        devices = self._controller.audio_discovery_snapshot()["devices"]
         key = "is_monitor" if source == AudioSource.SYSTEM.value else "is_mic"
         filtered = [device for device in devices if bool(device.get(key))]
         return json.dumps(filtered, ensure_ascii=False, default=str)
 
     @Slot(result=str)
     def listPlaybackStreams(self) -> str:
-        try:
-            streams = self._controller.list_playback_streams()
-            return json.dumps(streams, ensure_ascii=False, default=str)
-        except Exception as exc:
-            logger.warning("Enumerazione stream playback fallita: %s", exc)
-            return json.dumps(
-                {"ok": False, "error": str(exc), "streams": []},
-                ensure_ascii=False,
-            )
+        self._controller.request_audio_discovery(devices=False, streams=True)
+        streams = self._controller.audio_discovery_snapshot()["streams"]
+        return json.dumps(streams, ensure_ascii=False, default=str)
 
     def _prepare_backend_for_selected_model(self) -> None:
         with self._backend_reload_lock:
