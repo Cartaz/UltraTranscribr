@@ -73,12 +73,15 @@ class MeetingRuntime:
     diarization_progress: int = 0
     transcriber: Optional[FileTranscriberThread] = None
     processing_thread: Optional[threading.Thread] = None
+    control_thread: Optional[threading.Thread] = None
     stop_event: threading.Event = field(default_factory=threading.Event)
     error: str = ""
 
 
 class MeetingManager:
     """Own at most one active Meeting while keeping review data persistent."""
+
+    _TERMINAL_STATUSES = {"completed", "error", "cancelled", "interrupted"}
 
     def __init__(self, controller: MeetingController) -> None:
         self._controller = controller
@@ -101,7 +104,7 @@ class MeetingManager:
     def is_busy(self) -> bool:
         with self._lock:
             runtime = self._runtime
-            return bool(runtime and runtime.status not in {"completed", "error", "cancelled", "interrupted"})
+            return bool(runtime and runtime.status not in self._TERMINAL_STATUSES)
 
     def snapshot(self) -> Optional[dict[str, Any]]:
         with self._lock:
@@ -164,57 +167,119 @@ class MeetingManager:
         return self._snapshot(runtime)
 
     def finish(self) -> dict[str, Any]:
+        """Request finalization without blocking the caller on audio shutdown."""
         runtime = self._require_runtime("recording")
-        runtime.capture.stop()
-        if runtime.capture.is_alive() and runtime.capture is not threading.current_thread():
-            runtime.capture.join(timeout=8.0)
-        if runtime.capture.is_alive():
-            raise RuntimeError("Il microfono non si è arrestato in tempo; la registrazione resta aperta")
-        info = self._finalize_recording(runtime)
-        if info is None:
-            self._fail(runtime, "Registrazione riunione vuota")
-            return self._snapshot(runtime)
-        runtime.status = "transcribing"
-        runtime.progress = 0
-        self.store.set_status(runtime.id, runtime.status)
-        self._emit("meeting_recording_saved", {"session_id": runtime.id, **info.to_dict()})
-        self._emit("meeting_updated", self._snapshot(runtime))
-        worker = threading.Thread(
-            target=self._process,
-            args=(runtime, info),
-            daemon=True,
-            name=f"MeetingProcessing-{runtime.id}",
-        )
-        runtime.processing_thread = worker
-        worker.start()
-        return self._snapshot(runtime)
+        with self._lock:
+            control = runtime.control_thread
+            if control is not None and control.is_alive():
+                return self._snapshot(runtime)
+            runtime.status = "finishing"
+            runtime.error = ""
+            self.store.set_status(runtime.id, runtime.status)
+            control = threading.Thread(
+                target=self._finish_recording,
+                args=(runtime,),
+                daemon=True,
+                name=f"MeetingFinalize-{runtime.id}",
+            )
+            runtime.control_thread = control
+            snapshot = self._snapshot(runtime)
+        self._emit("meeting_updated", snapshot)
+        control.start()
+        return snapshot
+
+    def _finish_recording(self, runtime: MeetingRuntime) -> None:
+        try:
+            runtime.capture.stop()
+            if runtime.capture.is_alive() and runtime.capture is not threading.current_thread():
+                runtime.capture.join(timeout=8.0)
+            if runtime.capture.is_alive():
+                message = "Il microfono non si è arrestato in tempo; la registrazione resta aperta"
+                runtime.status = "recording"
+                runtime.error = message
+                self.store.set_status(runtime.id, runtime.status)
+                self._emit("meeting_error", {"session_id": runtime.id, "error": message})
+                self._emit("meeting_updated", self._snapshot(runtime))
+                return
+            info = self._finalize_recording(runtime)
+            if info is None:
+                self._fail(runtime, "Registrazione riunione vuota")
+                return
+            runtime.status = "transcribing"
+            runtime.progress = 0
+            self.store.set_status(runtime.id, runtime.status)
+            self._emit("meeting_recording_saved", {"session_id": runtime.id, **info.to_dict()})
+            self._emit("meeting_updated", self._snapshot(runtime))
+            worker = threading.Thread(
+                target=self._process,
+                args=(runtime, info),
+                daemon=True,
+                name=f"MeetingProcessing-{runtime.id}",
+            )
+            runtime.processing_thread = worker
+            worker.start()
+        except Exception as exc:
+            logger.exception("Finalizzazione registrazione Meeting fallita")
+            self._fail(runtime, str(exc))
+        finally:
+            with self._lock:
+                if runtime.control_thread is threading.current_thread():
+                    runtime.control_thread = None
 
     def cancel(self) -> None:
+        """Request cancellation without blocking the caller on worker joins."""
         with self._lock:
             runtime = self._runtime
-        if runtime is None or runtime.status in {"completed", "error", "cancelled", "interrupted"}:
-            return
-        runtime.stop_event.set()
-        runtime.capture.stop()
-        if runtime.capture.is_alive() and runtime.capture is not threading.current_thread():
-            runtime.capture.join(timeout=5.0)
-        transcriber = runtime.transcriber
-        if transcriber is not None:
-            transcriber.stop()
-            if transcriber.is_alive():
-                self._controller.backend.abort_active_request()
-            if transcriber.is_alive() and transcriber is not threading.current_thread():
-                transcriber.join(timeout=5.0)
-        if runtime.status == "recording" and not runtime.capture.is_alive():
-            try:
-                self._finalize_recording(runtime)
-            except Exception:
-                logger.exception("Finalizzazione registrazione riunione annullata fallita")
-                runtime.recorder.abandon()
-        runtime.status = "cancelled"
-        self.store.set_status(runtime.id, runtime.status, terminal=True)
-        self._emit("meeting_updated", self._snapshot(runtime))
-        self._emit("history_changed", runtime.id)
+            if runtime is None or runtime.status in self._TERMINAL_STATUSES:
+                return
+            control = runtime.control_thread
+            if control is not None and control.is_alive():
+                return
+            previous_status = runtime.status
+            runtime.stop_event.set()
+            runtime.status = "cancelling"
+            runtime.error = ""
+            self.store.set_status(runtime.id, runtime.status)
+            control = threading.Thread(
+                target=self._cancel_runtime,
+                args=(runtime, previous_status),
+                daemon=True,
+                name=f"MeetingCancel-{runtime.id}",
+            )
+            runtime.control_thread = control
+            snapshot = self._snapshot(runtime)
+        self._emit("meeting_updated", snapshot)
+        control.start()
+
+    def _cancel_runtime(self, runtime: MeetingRuntime, previous_status: str) -> None:
+        try:
+            runtime.capture.stop()
+            if runtime.capture.is_alive() and runtime.capture is not threading.current_thread():
+                runtime.capture.join(timeout=5.0)
+            transcriber = runtime.transcriber
+            if transcriber is not None:
+                transcriber.stop()
+                if transcriber.is_alive():
+                    self._controller.backend.abort_active_request()
+                if transcriber.is_alive() and transcriber is not threading.current_thread():
+                    transcriber.join(timeout=5.0)
+            if previous_status == "recording" and not runtime.capture.is_alive():
+                try:
+                    self._finalize_recording(runtime)
+                except Exception:
+                    logger.exception("Finalizzazione registrazione riunione annullata fallita")
+                    runtime.recorder.abandon()
+            runtime.status = "cancelled"
+            self.store.set_status(runtime.id, runtime.status, terminal=True)
+            self._emit("meeting_updated", self._snapshot(runtime))
+            self._emit("history_changed", runtime.id)
+        except Exception as exc:
+            logger.exception("Annullamento Meeting fallito")
+            self._fail(runtime, str(exc))
+        finally:
+            with self._lock:
+                if runtime.control_thread is threading.current_thread():
+                    runtime.control_thread = None
 
     def get(self, session_id: str) -> Optional[dict[str, Any]]:
         return self.store.get(session_id)
@@ -249,6 +314,9 @@ class MeetingManager:
         if runtime is None:
             return
         runtime.stop_event.set()
+        control = runtime.control_thread
+        if control and control.is_alive() and control is not threading.current_thread():
+            control.join(timeout=10.0)
         runtime.capture.stop()
         if runtime.capture.is_alive() and runtime.capture is not threading.current_thread():
             runtime.capture.join(timeout=5.0)
@@ -259,7 +327,7 @@ class MeetingManager:
                 self._controller.backend.abort_active_request()
             if transcriber.is_alive() and transcriber is not threading.current_thread():
                 transcriber.join(timeout=5.0)
-        if runtime.status == "recording":
+        if runtime.status in {"recording", "finishing"}:
             try:
                 if runtime.capture.is_alive():
                     runtime.recorder.abandon()
@@ -383,7 +451,7 @@ class MeetingManager:
         self._emit("meeting_updated", self._snapshot(runtime))
 
     def _fail(self, runtime: MeetingRuntime, error: str) -> None:
-        if runtime.status == "recording":
+        if runtime.status in {"recording", "finishing"}:
             runtime.capture.stop()
             try:
                 if runtime.capture is not threading.current_thread() and runtime.capture.is_alive():
