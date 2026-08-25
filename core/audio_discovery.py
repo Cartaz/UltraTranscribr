@@ -1,9 +1,8 @@
 """Non-blocking audio source discovery and health snapshots.
 
 Hardware/process probing lives here so presentation code never runs
-``sounddevice`` or ``pactl`` on the Qt GUI thread.  Discovery owns its pactl
-runner, cached state and workers, which makes shutdown cancellation local and
-deterministic instead of depending on daemon-thread process teardown.
+``sounddevice`` or ``pactl`` on the Qt GUI thread. Discovery caches results,
+owns its workers and uses the application-managed pactl runner.
 """
 from __future__ import annotations
 
@@ -20,7 +19,6 @@ from core.sink_finder import find_microphone, list_available_devices
 logger = logging.getLogger(__name__)
 
 DeviceProvider = Callable[[], list[dict[str, Any]]]
-StreamProvider = Callable[[], list[dict[str, Any]]]
 SettingsProvider = Callable[[], Settings]
 EventSink = Callable[[str, Any], None]
 HealthEvaluator = Callable[..., dict[str, Any]]
@@ -33,22 +31,17 @@ class AudioDiscoveryService:
         self,
         *,
         settings_provider: SettingsProvider,
-        stream_provider: Optional[StreamProvider] = None,
         event_sink: EventSink,
         device_provider: DeviceProvider = list_available_devices,
         health_evaluator: HealthEvaluator = evaluate_audio_source_health,
         pactl_runner: Optional[PactlRunner] = None,
     ) -> None:
         self._settings_provider = settings_provider
-        # ``stream_provider`` is accepted for source compatibility with the
-        # controller while discovery migrates away from router-owned I/O. It is
-        # deliberately not used: this service must own the subprocesses it may
-        # need to cancel during shutdown.
-        del stream_provider
         self._event_sink = event_sink
         self._device_provider = device_provider
         self._health_evaluator = health_evaluator
         self._pactl = pactl_runner or PactlRunner()
+        self._owns_pactl = pactl_runner is None
         self._lock = threading.RLock()
         self._devices: list[dict[str, Any]] = []
         self._streams: list[dict[str, Any]] = []
@@ -121,7 +114,7 @@ class AudioDiscoveryService:
         worker.start()
 
     def close(self) -> None:
-        """Reject new work, terminate owned pactl children, then join workers."""
+        """Reject new work, interrupt probes, then join owned workers."""
         with self._lock:
             if self._closed:
                 return
@@ -131,7 +124,10 @@ class AudioDiscoveryService:
                 for worker in [self._refresh_thread, *self._probe_threads.values()]
                 if worker is not None and worker.is_alive()
             ]
-        self._pactl.close()
+        if self._owns_pactl:
+            self._pactl.close()
+        else:
+            self._pactl.cancel_all()
         for worker in workers:
             if worker is threading.current_thread():
                 continue
