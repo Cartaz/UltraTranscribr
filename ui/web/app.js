@@ -10,7 +10,6 @@ const state = {
   live: false,
   draining: false,
   file: false,
-  liveText: "",
   fileText: "",
   historyText: "",
   historySelected: null,
@@ -20,7 +19,6 @@ const state = {
   backendState: "standby",
   streams: [],
   selectedStreamId: null,
-  routeStatus: "idle",
 };
 
 const uiModules = [];
@@ -256,22 +254,6 @@ function sourceUI() {
   uiModules.forEach(module => module.sourceUI?.());
 }
 
-function setLegacyBuffer(value) {
-  const level = Math.max(0, Math.min(100, Number(value) || 0));
-  $("buffer-fill").style.width = `${level}%`;
-  $("buffer-progress").setAttribute("aria-valuenow", String(level));
-  $("buffer-value").textContent = `${Math.round(level)}%`;
-}
-
-function setLegacyLiveText(value, full = false) {
-  const addition = String(value || "");
-  state.liveText = full ? addition : state.liveText + (state.liveText ? " " : "") + addition;
-  const box = $("live-transcript");
-  box.textContent = state.liveText || "Il testo trascritto apparirà qui.";
-  box.classList.toggle("placeholder", !state.liveText);
-  box.scrollTop = box.scrollHeight;
-}
-
 function hydrate(bootstrap) {
   uiRuntime.bootstrap = bootstrap;
   const moduleBootstrap = bootstrap;
@@ -289,7 +271,6 @@ function hydrate(bootstrap) {
   devices(state.source === "application" ? "system" : state.source, bootstrap.devices);
   renderPlaybackStreams(state.streams);
   sourceUI();
-  setLegacyBuffer(bootstrap.runtime.bufferLevel);
   updateLiveSummary();
   liveUI(state.draining ? "Completamento buffer" : state.live ? "In esecuzione" : "Idle");
   setBackendStatus(bootstrap.runtime.backendRunning ? "ready" : "standby");
@@ -322,25 +303,6 @@ function friendlyError(value) {
 
 function showError(value) { notice(friendlyError(value), true); }
 
-function handleRouteStatus(value) {
-  if (!value || typeof value !== "object") return;
-  const status = String(value.status || "");
-  state.routeStatus = status;
-  if (value.stream) {
-    const index = state.streams.findIndex(stream => Number(stream.id) === Number(value.stream.id));
-    if (index >= 0) state.streams[index] = value.stream;
-    updateLiveSummary({source: "application", stream: value.stream});
-    $("live-stream-meta").textContent = streamMeta(value.stream);
-  }
-  if (status === "isolating") liveUI("Isolamento stream");
-  else if (status === "playing") liveUI("In esecuzione · stream attivo");
-  else if (status === "paused") liveUI("In esecuzione · stream in pausa");
-  else if (status === "disconnected") { liveUI("Stream disconnesso"); notice("Lo stream applicazione è scomparso. UltraTranscribr resta in ascolto e proverà a riconnetterlo se ricompare senza ambiguità.", true); }
-  else if (status === "ambiguous") { liveUI("Stream da riselezionare"); notice("Sono comparsi più stream compatibili: per sicurezza UltraTranscribr non ne ha scelto uno automaticamente. Ferma la sessione e seleziona lo stream corretto.", true); }
-  else if (status === "reconnected") { liveUI("In esecuzione · riconnesso"); notice("Stream applicazione riconnesso e nuovamente isolato."); }
-  else if (status === "restored") state.routeStatus = "idle";
-}
-
 function event(name, payload) {
   const value = json(payload);
   let consumed = false;
@@ -350,15 +312,6 @@ function event(name, payload) {
   if (consumed) return;
   switch (name) {
     case "backend_status_changed": setBackendStatus(value); break;
-    case "process_started": state.live = true; state.draining = false; updateLiveSummary(value); globalStatus("In uso · Live", "active"); liveUI("In esecuzione"); break;
-    case "capture_stopped": state.live = false; state.draining = true; liveUI("Completamento buffer"); break;
-    case "process_stopped": state.live = false; state.draining = false; state.routeStatus = "idle"; setLegacyBuffer(0); liveUI("Fermata"); restoreBackendStatus(); break;
-    case "transcriber_drained": state.live = false; state.draining = false; setLegacyBuffer(0); liveUI("Completata"); restoreBackendStatus(); break;
-    case "transcriber_status_changed": liveUI(label(value)); break;
-    case "transcriber_buffer_level": setLegacyBuffer(value); break;
-    case "transcriber_new_text": setLegacyLiveText(value); break;
-    case "transcriber_error": state.live = false; state.draining = false; liveUI("Errore"); showError(value); break;
-    case "playback_stream_status_changed": handleRouteStatus(value); break;
     case "config_changed":
       if (state.boot && value && typeof value === "object") {
         state.boot.settings = {...state.boot.settings, ...value};
@@ -408,10 +361,6 @@ function bind() {
   $("live-stream").onchange = updateSelectedStreamMeta;
   $("stream-refresh").onclick = refreshStreams;
   $("live-start").onclick = startLive;
-  $("live-stop").onclick = () => call("stopLive");
-  $("live-drain").onclick = () => call("stopListening");
-  $("live-copy").onclick = () => copyValue(state.liveText);
-  $("live-clear").onclick = () => setLegacyLiveText("", true);
   $("log-refresh").onclick = () => call("readLogTail", [300], result => { $("log-output").textContent = result || "Nessun log persistente disponibile."; });
   $("log-copy").onclick = () => copyValue($("log-output").textContent);
   $("diagnostics-run").onclick = () => { $("diagnostics-output").textContent = "Diagnostica in corso…"; call("runAudioDiagnostics"); };
