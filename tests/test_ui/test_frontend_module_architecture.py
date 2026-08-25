@@ -117,6 +117,43 @@ def test_app_is_the_single_explicit_frontend_composition_root() -> None:
             assert f"{global_name} = function" not in source
 
 
+def test_settings_and_model_ui_are_owned_by_settings_module() -> None:
+    app = _read("app.js")
+    live = _read("multi_live.js")
+    settings = _read("settings_cleanup.js")
+    meeting = _read("meeting.js")
+
+    for token in (
+        "function saveSettings",
+        "function renderModels",
+        "function refreshModels",
+        "function requestDownloadModel",
+        "function requestDeleteModel",
+        "function updateModelProgress",
+        '$("settings-form").onsubmit',
+        '$("models-refresh").onclick',
+    ):
+        assert token not in app
+
+    for token in (
+        "settingsPopulateModelChoices",
+        "settingsRenderModels",
+        "settingsRefreshModels",
+        "settingsRequestDownloadModel",
+        "settingsRequestDeleteModel",
+        "settingsUpdateModelProgress",
+        '$("settings-form").onsubmit = settingsSave',
+        '$("models-refresh").onclick = settingsRefreshModels',
+        '$("settings-save").disabled = disabled',
+    ):
+        assert token in settings
+
+    assert "renderModels(" not in live
+    assert "renderModels(" not in meeting
+    for history_global in ("historyIsVisible(", "refreshHistory(", "refreshRecovery("):
+        assert history_global not in live
+
+
 def test_backend_and_history_final_features_live_in_domain_modules() -> None:
     settings = _read("settings_cleanup.js")
     history = _read("file_history.js")
