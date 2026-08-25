@@ -1,8 +1,9 @@
 """Non-blocking audio source discovery and health snapshots.
 
-All hardware/process probing lives here so presentation code can request work
-without ever running sounddevice or pactl on the Qt GUI thread. Results are
-cached under a lock and published through the application event sink.
+Hardware/process probing lives here so presentation code never runs
+``sounddevice`` or ``pactl`` on the Qt GUI thread.  Discovery owns its pactl
+runner, cached state and workers, which makes shutdown cancellation local and
+deterministic instead of depending on daemon-thread process teardown.
 """
 from __future__ import annotations
 
@@ -11,8 +12,10 @@ import threading
 from typing import Any, Callable, Optional
 
 from config.settings import AudioSource, Settings
+from core.audio_routing import parse_playback_streams, parse_sink_names
 from core.audio_source_health import evaluate_audio_source_health
-from core.sink_finder import find_source, list_available_devices
+from core.pactl import PactlRunner
+from core.sink_finder import find_microphone, list_available_devices
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +23,6 @@ DeviceProvider = Callable[[], list[dict[str, Any]]]
 StreamProvider = Callable[[], list[dict[str, Any]]]
 SettingsProvider = Callable[[], Settings]
 EventSink = Callable[[str, Any], None]
-SourceResolver = Callable[[Settings, Optional[str]], Optional[str]]
 HealthEvaluator = Callable[..., dict[str, Any]]
 
 
@@ -31,18 +33,22 @@ class AudioDiscoveryService:
         self,
         *,
         settings_provider: SettingsProvider,
-        stream_provider: StreamProvider,
+        stream_provider: Optional[StreamProvider] = None,
         event_sink: EventSink,
         device_provider: DeviceProvider = list_available_devices,
-        source_resolver: SourceResolver = find_source,
         health_evaluator: HealthEvaluator = evaluate_audio_source_health,
+        pactl_runner: Optional[PactlRunner] = None,
     ) -> None:
         self._settings_provider = settings_provider
-        self._stream_provider = stream_provider
+        # ``stream_provider`` is accepted for source compatibility with the
+        # controller while discovery migrates away from router-owned I/O. It is
+        # deliberately not used: this service must own the subprocesses it may
+        # need to cancel during shutdown.
+        del stream_provider
         self._event_sink = event_sink
         self._device_provider = device_provider
-        self._source_resolver = source_resolver
         self._health_evaluator = health_evaluator
+        self._pactl = pactl_runner or PactlRunner()
         self._lock = threading.RLock()
         self._devices: list[dict[str, Any]] = []
         self._streams: list[dict[str, Any]] = []
@@ -115,18 +121,21 @@ class AudioDiscoveryService:
         worker.start()
 
     def close(self) -> None:
-        """Stop accepting work and perform bounded joins on owned workers."""
+        """Reject new work, terminate owned pactl children, then join workers."""
         with self._lock:
+            if self._closed:
+                return
             self._closed = True
             workers = [
                 worker
                 for worker in [self._refresh_thread, *self._probe_threads.values()]
                 if worker is not None and worker.is_alive()
             ]
+        self._pactl.close()
         for worker in workers:
             if worker is threading.current_thread():
                 continue
-            worker.join(timeout=0.25)
+            worker.join(timeout=0.75)
             if worker.is_alive():
                 logger.warning(
                     "Worker discovery audio ancora attivo allo shutdown: %s",
@@ -150,6 +159,8 @@ class AudioDiscoveryService:
                 if want_streams:
                     self._refresh_streams()
                 with self._lock:
+                    if self._closed:
+                        return
                     if not self._refresh_pending_devices and not self._refresh_pending_streams:
                         return
         except Exception as exc:
@@ -161,6 +172,9 @@ class AudioDiscoveryService:
                     self._refresh_thread = None
 
     def _refresh_devices(self) -> list[dict[str, Any]]:
+        with self._lock:
+            if self._closed:
+                return []
         devices = [dict(item) for item in self._device_provider()]
         with self._lock:
             if self._closed:
@@ -170,7 +184,17 @@ class AudioDiscoveryService:
         return devices
 
     def _refresh_streams(self) -> list[dict[str, Any]]:
-        streams = [dict(item) for item in self._stream_provider()]
+        with self._lock:
+            if self._closed:
+                return []
+        sink_output = self._pactl.run(["list", "short", "sinks"])
+        sink_names = parse_sink_names(sink_output or "")
+        stream_output = self._pactl.run(["list", "sink-inputs"])
+        streams = (
+            [stream.to_dict() for stream in parse_playback_streams(stream_output, sink_names)]
+            if stream_output is not None
+            else []
+        )
         with self._lock:
             if self._closed:
                 return streams
@@ -190,8 +214,11 @@ class AudioDiscoveryService:
                 streams = self._refresh_streams()
             else:
                 devices = self._refresh_devices()
+                with self._lock:
+                    if self._closed:
+                        return
                 if not selected_input:
-                    automatic_source = self._source_resolver(settings, source)
+                    automatic_source = self._resolve_automatic_source(settings, source)
 
             result = self._health_evaluator(
                 source=source,
@@ -228,6 +255,26 @@ class AudioDiscoveryService:
                 current = self._probe_threads.get(key)
                 if current is threading.current_thread():
                     self._probe_threads.pop(key, None)
+
+    def _resolve_automatic_source(self, settings: Settings, source: str) -> Optional[str]:
+        if source == AudioSource.MICROPHONE.value:
+            return find_microphone(settings)
+        if source != AudioSource.SYSTEM.value:
+            return None
+
+        sink_name = self._pactl.run(["get-default-sink"])
+        if not sink_name:
+            info = self._pactl.run(["info"])
+            if info:
+                for line in info.splitlines():
+                    key, sep, value = line.partition(":")
+                    if sep and key.strip().casefold() == "default sink":
+                        sink_name = value.strip()
+                        break
+        if not sink_name:
+            return None
+        first = sink_name.splitlines()[0].strip()
+        return f"{first}.monitor" if first else None
 
     @staticmethod
     def _health_key(source: str, selected_input: str) -> tuple[str, str]:
