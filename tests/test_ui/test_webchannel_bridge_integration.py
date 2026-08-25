@@ -132,15 +132,12 @@ class _FakeController:
         self.subscriptions = {}
         self.started = []
         self.updated = []
-
-    def subscribe(self, event, handler) -> None:
-        self.subscriptions.setdefault(event, []).append(handler)
-
-    def list_models(self):
-        return [{"model": "medium", "installed": True}]
-
-    def list_playback_streams(self):
-        return [
+        self.discovery_requests = []
+        self.probe_requests = []
+        self.discovery_devices = [
+            {"name": "monitor", "is_monitor": True, "is_mic": False}
+        ]
+        self.discovery_streams = [
             {
                 "id": 42,
                 "display_name": "Browser — Video",
@@ -150,6 +147,46 @@ class _FakeController:
                 "sink_name": "sink.main",
             }
         ]
+
+    def subscribe(self, event, handler) -> None:
+        self.subscriptions.setdefault(event, []).append(handler)
+
+    def list_models(self):
+        return [{"model": "medium", "installed": True}]
+
+    def list_playback_streams(self):
+        return list(self.discovery_streams)
+
+    def audio_discovery_snapshot(self):
+        return {
+            "devices": list(self.discovery_devices),
+            "streams": list(self.discovery_streams),
+        }
+
+    def request_audio_discovery(self, *, devices=True, streams=True):
+        self.discovery_requests.append((devices, streams))
+
+    def cached_audio_source_health(self, source, selected_input=""):
+        if source == "application" and selected_input == "42":
+            return {
+                "source": source,
+                "selected_input": selected_input,
+                "status": "playing",
+                "label": "In riproduzione",
+                "detail": "Browser — Video",
+                "stream": self.discovery_streams[0],
+                "streams": 1,
+            }
+        return {
+            "source": source,
+            "selected_input": selected_input,
+            "status": "disconnected",
+            "label": "Verifica in corso",
+            "detail": "Controllo della sorgente audio in background.",
+        }
+
+    def request_audio_source_probe(self, source, selected_input=""):
+        self.probe_requests.append((source, selected_input))
 
     def list_live_sessions(self, include_text=False):
         payload = {
@@ -185,13 +222,8 @@ class _FakeController:
 
 
 def test_bootstrap_contains_real_multi_session_runtime(monkeypatch) -> None:
-    bridge_module, multi_module = _load_bridges(monkeypatch)
+    _, multi_module = _load_bridges(monkeypatch)
     controller = _FakeController()
-    monkeypatch.setattr(
-        bridge_module,
-        "list_available_devices",
-        lambda: [{"name": "monitor", "is_monitor": True, "is_mic": False}],
-    )
 
     bridge = multi_module.MultiSessionBackendBridge(controller)
     payload = json.loads(bridge.getBootstrap())
@@ -204,6 +236,7 @@ def test_bootstrap_contains_real_multi_session_runtime(monkeypatch) -> None:
     assert payload["runtime"]["liveRunning"] is True
     assert payload["runtime"]["bufferLevel"] == 17
     assert payload["runtime"]["meetingBusy"] is False
+    assert controller.discovery_requests[-1] == (True, True)
 
 
 def test_bridge_forwards_session_event_as_json(monkeypatch) -> None:
@@ -221,7 +254,7 @@ def test_bridge_forwards_session_event_as_json(monkeypatch) -> None:
     ]
 
 
-def test_probe_application_source_returns_playing_stream(monkeypatch) -> None:
+def test_probe_application_source_returns_cache_and_schedules_refresh(monkeypatch) -> None:
     _, multi_module = _load_bridges(monkeypatch)
     controller = _FakeController()
     bridge = multi_module.MultiSessionBackendBridge(controller)
@@ -230,6 +263,7 @@ def test_probe_application_source_returns_playing_stream(monkeypatch) -> None:
 
     assert response["status"] == "playing"
     assert response["stream"]["id"] == 42
+    assert controller.probe_requests == [("application", "42")]
 
 
 def test_start_live_application_converts_selection_to_stream_id(monkeypatch) -> None:
