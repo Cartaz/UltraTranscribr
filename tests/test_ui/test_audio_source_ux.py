@@ -1,4 +1,4 @@
-"""Phase 5 contracts for source refresh, health and diagnostics."""
+"""Contracts for source refresh, health and diagnostics."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -112,7 +112,7 @@ def test_meeting_device_picker_consumes_fresh_discovery_events() -> None:
 
 
 def test_source_probe_rules_live_in_core_discovery_service() -> None:
-    bridge_source = (ROOT / "ui" / "multi_session_bridge.py").read_text(
+    bridge_source = (ROOT / "ui" / "phase10_bridge.py").read_text(
         encoding="utf-8"
     )
     service_source = (ROOT / "core" / "audio_discovery.py").read_text(
@@ -132,7 +132,7 @@ def test_source_probe_rules_live_in_core_discovery_service() -> None:
 
 
 def test_audio_diagnostics_live_in_core_and_bridge_only_delegates() -> None:
-    bridge_source = (ROOT / "ui" / "multi_session_bridge.py").read_text(
+    bridge_source = (ROOT / "ui" / "phase10_bridge.py").read_text(
         encoding="utf-8"
     )
     diagnostics_source = (ROOT / "core" / "audio_diagnostics.py").read_text(
