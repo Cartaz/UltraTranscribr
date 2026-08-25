@@ -14,7 +14,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from config.constants import SYCLDefaults
+from config.constants import AppMeta, SYCLDefaults
 from config.settings import Settings
 from core.whisper_gpu_detect import find_whisper_server, verify_sycl_binary
 
@@ -52,12 +52,8 @@ class WhisperBackend:
         self._log_file_handle: Optional[Any] = None
         self._api_endpoint = _ENDPOINTS[0]
         self._server_vad_enabled = False
-        # In single-instance mode this remains the historical FIFO scheduling
-        # boundary. In pool mode every backend has its own lock.
         self._io_lock = threading.RLock()
         self._lifecycle_lock = threading.RLock()
-        # Only the primary backend owns the auxiliary pool. Auxiliary
-        # WhisperBackend objects are always configured with backend_instances=1.
         self._aux_backends: list[WhisperBackend] = []
         self._pool_queue: Optional[queue.Queue[WhisperBackend]] = None
         self._pool_stopping = False
@@ -155,8 +151,6 @@ class WhisperBackend:
             self._cleanup_aux_backends()
 
     def abort_active_request(self) -> None:
-        # Stopping every pool member guarantees an in-flight request on any
-        # selected server cannot outlive an explicit abort.
         with self._lifecycle_lock:
             self._pool_stopping = True
             self._cleanup_process()
@@ -174,8 +168,6 @@ class WhisperBackend:
         on_queue_wait: Optional[Callable[[float], None]] = None,
     ) -> str | dict:
         del vad
-        # Preserve the old single-server call path exactly when the experiment
-        # is disabled. This keeps compatibility and avoids queue overhead.
         if not self._aux_backends:
             return self._transcribe_single(
                 audio_data,
@@ -221,9 +213,6 @@ class WhisperBackend:
                 on_queue_wait=None,
             )
         finally:
-            # Queue a stable worker reference rather than a mutable list index.
-            # During shutdown the old queue can outlive self._aux_backends for a
-            # moment; returning this reference can never become an IndexError.
             pool.put(backend)
 
     def _transcribe_single(
@@ -370,18 +359,39 @@ class WhisperBackend:
                 p.terminate()
                 p.wait(timeout=3.0)
             except subprocess.TimeoutExpired:
-                p.kill()
+                logger.warning(
+                    "whisper-server%s non terminato entro 3s; invio kill",
+                    self._instance_label,
+                )
                 try:
+                    p.kill()
                     p.wait(timeout=2.0)
                 except subprocess.TimeoutExpired:
-                    pass
-            except OSError:
-                pass
+                    logger.error(
+                        "whisper-server%s non reaped entro 2s dopo kill",
+                        self._instance_label,
+                    )
+                except OSError as exc:
+                    logger.warning(
+                        "Kill/reap whisper-server%s fallito: %s",
+                        self._instance_label,
+                        exc,
+                    )
+            except OSError as exc:
+                logger.warning(
+                    "Terminate/reap whisper-server%s fallito: %s",
+                    self._instance_label,
+                    exc,
+                )
         if self._log_file_handle and not self._log_file_handle.closed:
             try:
                 self._log_file_handle.close()
-            except OSError:
-                pass
+            except OSError as exc:
+                logger.warning(
+                    "Chiusura log whisper-server%s fallita: %s",
+                    self._instance_label,
+                    exc,
+                )
         self._log_file_handle = None
         self._server_vad_enabled = False
 
@@ -491,10 +501,9 @@ class WhisperBackend:
 
     def _server_log_path(self) -> Path:
         name = f"whisper-server{self._instance_label}.log"
-        path = self._project_root / ".venv" / name
-        if not path.parent.exists():
-            path = self._project_root / name
-        return path
+        log_dir = AppMeta.CACHE_DIR / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        return log_dir / name
 
     def _read_log_tail(self, chars: int = 2500) -> str:
         path = self._server_log_path()
