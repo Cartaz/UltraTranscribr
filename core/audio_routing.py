@@ -1,15 +1,9 @@
 """Per-stream playback discovery and reversible PulseAudio/PipeWire routing.
 
-The current application owns a single live capture session, but this module is
-written around a route lease so the controller does not need to know how a
-selected playback stream is isolated.  A lease moves exactly one sink-input to
-a dedicated null sink, exposes that sink's monitor source for capture, watches
-for a replacement stream when the selected sink-input disappears, and restores
-all streams it moved when the lease closes.
-
-A small cache record allows the next application start to clean up a null sink
-left behind by an unclean shutdown and, when possible, move a still-running
-sink-input back to its original output before unloading the stale module.
+A route lease moves one selected sink-input to a dedicated null sink, exposes
+its monitor for capture, watches for replacement streams, and restores every
+stream it moved when the lease closes.  All pactl commands flow through the
+managed runner supplied by the application layer.
 """
 from __future__ import annotations
 
@@ -18,7 +12,6 @@ import json
 import logging
 import os
 import re
-import subprocess
 import tempfile
 import threading
 import uuid
@@ -27,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from config.constants import AppMeta
+from core.pactl import PactlRunner
 
 logger = logging.getLogger(__name__)
 
@@ -34,38 +28,6 @@ _ROUTE_PREFIX = "ultratranscribr_capture_"
 _ROUTE_STATE_PATH = AppMeta.CACHE_DIR / "audio_routes.json"
 _PROPERTY_RE = re.compile(r"^\s*([A-Za-z0-9_.-]+)\s*=\s*(.+?)\s*$")
 _MODULE_SINK_RE = re.compile(r"(?:^|\s)sink_name=([^\s]+)")
-
-
-def _run_pactl(args: list[str], *, timeout: float = 10.0) -> Optional[str]:
-    """Run pactl and return stdout, or ``None`` when the command fails."""
-    try:
-        result = subprocess.run(
-            ["pactl", *args],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        logger.debug("pactl non disponibile (%s): %s", " ".join(args), exc)
-        return None
-    if result.returncode != 0:
-        logger.debug(
-            "pactl %s fallito (%d): %s",
-            " ".join(args),
-            result.returncode,
-            result.stderr.strip(),
-        )
-        return None
-    return result.stdout.strip()
-
-
-def _require_pactl(args: list[str]) -> str:
-    output = _run_pactl(args)
-    if output is None:
-        raise RuntimeError(
-            "Comando PipeWire/PulseAudio fallito: pactl " + " ".join(args)
-        )
-    return output
 
 
 def _unquote_property(value: str) -> str:
@@ -241,17 +203,37 @@ def _route_sink_from_module(name: str, args: str) -> Optional[str]:
 
 
 class PulseAudioRouter:
-    """Discovery and routing façade around pactl."""
+    """Routing façade using one application-owned managed pactl runner."""
 
-    def __init__(self, state_path: Path = _ROUTE_STATE_PATH) -> None:
+    def __init__(
+        self,
+        state_path: Path = _ROUTE_STATE_PATH,
+        *,
+        pactl_runner: Optional[PactlRunner] = None,
+    ) -> None:
         self._state_path = Path(state_path)
         self._lock = threading.RLock()
         self._leases: dict[str, StreamRouteLease] = {}
+        self._pactl = pactl_runner or PactlRunner()
+        self._owns_pactl = pactl_runner is None
+
+    def close(self) -> None:
+        """Close any remaining leases and, when local, the command runner."""
+        with self._lock:
+            leases = list(self._leases.values())
+        self._pactl.cancel_all()
+        for lease in leases:
+            try:
+                lease.close()
+            except Exception:
+                logger.exception("Cleanup route %s fallito", lease.sink_name)
+        if self._owns_pactl:
+            self._pactl.close()
 
     def list_streams(self) -> list[PlaybackStream]:
-        sink_output = _run_pactl(["list", "short", "sinks"])
+        sink_output = self._pactl.run(["list", "short", "sinks"])
         sink_names = parse_sink_names(sink_output or "")
-        stream_output = _run_pactl(["list", "sink-inputs"])
+        stream_output = self._pactl.run(["list", "sink-inputs"])
         if stream_output is None:
             return []
         return parse_playback_streams(stream_output, sink_names)
@@ -272,7 +254,7 @@ class PulseAudioRouter:
     ) -> "StreamRouteLease":
         selected = self.get_stream(stream_id)
         sink_name = f"{_ROUTE_PREFIX}{os.getpid()}_{uuid.uuid4().hex[:8]}"
-        module_output = _require_pactl(
+        module_output = self._require_pactl(
             [
                 "load-module",
                 "module-null-sink",
@@ -289,7 +271,7 @@ class PulseAudioRouter:
         try:
             self._move_stream(selected.id, sink_name)
         except Exception:
-            _run_pactl(["unload-module", str(module_id)])
+            self._pactl.run(["unload-module", str(module_id)])
             raise
 
         lease = StreamRouteLease(
@@ -308,13 +290,13 @@ class PulseAudioRouter:
 
     def cleanup_stale_routes(self) -> int:
         """Restore stale routed streams and unload old UltraTranscribr sinks."""
-        modules_output = _run_pactl(["list", "short", "modules"])
+        modules_output = self._pactl.run(["list", "short", "modules"])
         if modules_output is None:
             return 0
 
         saved_routes = self._read_state()
         streams = {stream.id: stream for stream in self.list_streams()}
-        default_sink = _run_pactl(["get-default-sink"]) or ""
+        default_sink = self._pactl.run(["get-default-sink"]) or ""
 
         for route in saved_routes:
             route_sink = str(route.get("sink_name") or "")
@@ -331,7 +313,7 @@ class PulseAudioRouter:
                     continue
                 target = str(original or default_sink).strip()
                 if target:
-                    _run_pactl(["move-sink-input", str(stream_id), target])
+                    self._pactl.run(["move-sink-input", str(stream_id), target])
 
         unloaded = 0
         failed_sinks: set[str] = set()
@@ -339,14 +321,15 @@ class PulseAudioRouter:
             sink_name = _route_sink_from_module(name, args)
             if not sink_name:
                 continue
-            if _run_pactl(["unload-module", str(module_id)]) is None:
+            if self._pactl.run(["unload-module", str(module_id)]) is None:
                 failed_sinks.add(sink_name)
             else:
                 unloaded += 1
 
         if failed_sinks:
             remaining = [
-                route for route in saved_routes
+                route
+                for route in saved_routes
                 if str(route.get("sink_name") or "") in failed_sinks
             ]
             self._write_state(remaining)
@@ -356,18 +339,26 @@ class PulseAudioRouter:
             logger.info("Ripuliti %d sink virtuali UltraTranscribr obsoleti", unloaded)
         return unloaded
 
+    def _require_pactl(self, args: list[str]) -> str:
+        output = self._pactl.run(args)
+        if output is None:
+            raise RuntimeError(
+                "Comando PipeWire/PulseAudio fallito: pactl " + " ".join(args)
+            )
+        return output
+
     def _move_stream(self, stream_id: int, sink: str) -> None:
-        _require_pactl(["move-sink-input", str(int(stream_id)), str(sink)])
+        self._require_pactl(["move-sink-input", str(int(stream_id)), str(sink)])
 
     def _release_route(self, lease: "StreamRouteLease") -> None:
         streams = {stream.id: stream for stream in self.list_streams()}
-        default_sink = (_run_pactl(["get-default-sink"]) or "").strip()
+        default_sink = (self._pactl.run(["get-default-sink"]) or "").strip()
         for stream_id, original_sink in lease.original_sinks.items():
             stream = streams.get(stream_id)
             if stream is None or stream.sink_name != lease.sink_name:
                 continue
             target = str(original_sink or default_sink).strip()
-            if target and _run_pactl(
+            if target and self._pactl.run(
                 ["move-sink-input", str(stream_id), target]
             ) is None:
                 logger.warning(
@@ -375,7 +366,7 @@ class PulseAudioRouter:
                     stream_id,
                     target,
                 )
-        if _run_pactl(["unload-module", str(lease.module_id)]) is None:
+        if self._pactl.run(["unload-module", str(lease.module_id)]) is None:
             logger.warning("Impossibile scaricare il null sink %s", lease.sink_name)
         with self._lock:
             self._leases.pop(lease.sink_name, None)
