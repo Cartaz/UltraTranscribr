@@ -17,11 +17,11 @@ die() { printf 'ERRORE: %s\n' "$*" >&2; exit 1; }
 
 find_python() {
   local candidate
-  for candidate in python3.13 python3.12 python3.11 python3; do
+  for candidate in python3.13 python3.12 python3; do
     command -v "$candidate" >/dev/null 2>&1 || continue
     if "$candidate" - <<'PY' >/dev/null 2>&1
 import sys
-raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
+raise SystemExit(0 if sys.version_info >= (3, 12) else 1)
 PY
     then
       printf '%s\n' "$candidate"
@@ -212,7 +212,7 @@ main() {
   echo "=== UltraTranscribr / Intel SYCL ==="
 
   local py
-  py="$(find_python)" || die "Python 3.11+ non trovato"
+  py="$(find_python)" || die "Python 3.12+ non trovato"
   [[ -f "$ONEAPI/setvars.sh" ]] || die "Intel oneAPI non trovato in $ONEAPI"
   command -v git >/dev/null || die "git non trovato"
   command -v cmake >/dev/null || die "cmake non trovato"
