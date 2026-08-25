@@ -119,6 +119,17 @@ def test_audio_subsystem_has_one_managed_pactl_owner() -> None:
     assert 'name === "audio_source_health_changed"' in frontend
 
 
+def test_final_bridge_delegates_history_postprocess_to_core() -> None:
+    final_bridge = _read("ui/final_features_bridge.py")
+    core = _read("core/history_postprocess.py")
+    assert "generate_history_postprocess" in final_bridge
+    assert "process_text(" not in final_bridge
+    assert "save_derived_output(" not in final_bridge
+    assert "process_text(" in core
+    assert "save_derived_output(" in core
+    assert 'EventBus().emit("history_changed", session_id)' in core
+
+
 def test_webengine_is_local_only_and_external_links_leave_the_app() -> None:
     shell = _read("ui/main_window.py")
     assert "class LocalOnlyWebPage(QWebEnginePage)" in shell
