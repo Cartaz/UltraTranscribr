@@ -480,7 +480,28 @@ hydrate = function(bootstrap) {
 
 const sourceUxLegacyEvent = event;
 event = function(name, payload) {
+  const value = json(payload);
   sourceUxLegacyEvent(name, payload);
+  if (name === "audio_devices_changed") {
+    if (state.source !== "application" && Array.isArray(value)) {
+      devices(state.source, value);
+    }
+    return;
+  }
+  if (name === "playback_streams_changed") {
+    if (Array.isArray(value)) renderPlaybackStreams(value);
+    return;
+  }
+  if (name === "audio_source_health_changed") {
+    const sameSource = value?.source === state.source;
+    const sameSelection = String(value?.selected_input || "") === String(selectedInputValue() || "");
+    if (sameSource && sameSelection) renderSourceHealth(value);
+    return;
+  }
+  if (name === "audio_discovery_error") {
+    showError(value, "audio");
+    return;
+  }
   if (name === "live_session_route_status" || name === "live_session_updated" || name === "live_session_removed") {
     probeSelectedAudioSource();
   }
