@@ -12,7 +12,6 @@ from PySide6.QtWidgets import QFileDialog
 
 from config.constants import AppMeta
 from config.settings import AudioSource, ModelSize
-from core.app_controller import AppController
 from core.application_service import ApplicationService
 
 logger = logging.getLogger(__name__)
@@ -91,17 +90,15 @@ class BackendBridge(QObject):
 
     def __init__(
         self,
-        controller: AppController,
         application: ApplicationService,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
-        self._controller = controller
         self._application = application
         self._subscriptions: list[tuple[str, Callable[[Any], None]]] = []
         for event in self._EVENTS:
             handler = self._make_event_handler(event)
-            self._controller.subscribe(event, handler)
+            self._application.subscribe(event, handler)
             self._subscriptions.append((event, handler))
         QTimer.singleShot(0, self._application.preload_model_if_requested)
 
@@ -135,7 +132,7 @@ class BackendBridge(QObject):
             "version": AppMeta.VERSION,
             "description": AppMeta.DESCRIPTION,
         }
-        payload["logTail"] = self._read_log_tail(160)
+        payload["logTail"] = self._application.read_log_tail(160)
         return json.dumps(payload, ensure_ascii=False, default=str)
 
     @Slot(result=str)
@@ -146,42 +143,27 @@ class BackendBridge(QObject):
 
     @Slot(str, result=str)
     def refreshDevices(self, audio_source: str) -> str:
-        source = (
-            audio_source
-            if audio_source in AudioSource.choices()
-            else self._controller.settings.audio_source
-        )
-        if source == AudioSource.APPLICATION.value:
-            return "[]"
-        self._controller.request_audio_discovery(devices=True, streams=False)
-        devices = self._controller.audio_discovery_snapshot()["devices"]
-        key = "is_monitor" if source == AudioSource.SYSTEM.value else "is_mic"
         return json.dumps(
-            [device for device in devices if bool(device.get(key))],
+            self._application.refresh_devices(audio_source),
             ensure_ascii=False,
             default=str,
         )
 
     @Slot(result=str)
     def listPlaybackStreams(self) -> str:
-        self._controller.request_audio_discovery(devices=False, streams=True)
         return json.dumps(
-            self._controller.audio_discovery_snapshot()["streams"],
+            self._application.list_playback_streams(),
             ensure_ascii=False,
             default=str,
         )
 
     @Slot(str, str, result=str)
     def probeAudioSource(self, audio_source: str, selected_input: str) -> str:
-        source = (
-            audio_source
-            if audio_source in AudioSource.choices()
-            else self._controller.settings.audio_source
+        return json.dumps(
+            self._application.probe_audio_source(audio_source, selected_input),
+            ensure_ascii=False,
+            default=str,
         )
-        selection = str(selected_input or "").strip()
-        status = self._controller.cached_audio_source_health(source, selection)
-        self._controller.request_audio_source_probe(source, selection)
-        return json.dumps(status, ensure_ascii=False, default=str)
 
     def _start_live(
         self,
@@ -190,13 +172,14 @@ class BackendBridge(QObject):
         language: str,
         record_audio: bool,
     ) -> None:
+        settings = self._application.settings
         source = (
             audio_source
             if audio_source in AudioSource.choices()
-            else self._controller.settings.audio_source
+            else settings.audio_source
         )
         selection = str(selected_input or "").strip()
-        language = str(language or "").strip() or self._controller.settings.language
+        language = str(language or "").strip() or settings.language
         sink_name: str | None = None
         stream_id: int | None = None
         if source == AudioSource.APPLICATION.value:
@@ -283,38 +266,34 @@ class BackendBridge(QObject):
     @Slot(result=str)
     def finishMeeting(self) -> str:
         try:
-            return self._ok(meeting=self._application.meeting.finish())
+            return self._ok(meeting=self._application.finish_meeting())
         except Exception as exc:
             return self._error(exc)
 
     @Slot(result=str)
     def cancelMeeting(self) -> str:
         try:
-            self._application.meeting.cancel()
-            return self._ok(meeting=self._application.meeting.snapshot())
+            return self._ok(meeting=self._application.cancel_meeting())
         except Exception as exc:
             return self._error(exc)
 
     @Slot(str, result=str)
     def getMeetingSession(self, session_id: str) -> str:
         return json.dumps(
-            self._application.meeting.get(session_id),
+            self._application.get_meeting(session_id),
             ensure_ascii=False,
             default=str,
         )
 
     @Slot(str, result=str)
     def getMeetingAudioUrl(self, session_id: str) -> str:
-        meeting = self._application.meeting.get(session_id)
-        path = str((meeting or {}).get("meeting", {}).get("recording", {}).get("path") or "")
-        if not path or not Path(path).is_file():
-            return ""
-        return QUrl.fromLocalFile(path).toString()
+        path = self._application.meeting_audio_path(session_id)
+        return QUrl.fromLocalFile(path).toString() if path else ""
 
     @Slot(str, str, str, result=str)
     def setMeetingSpeakerName(self, session_id: str, speaker_id: str, name: str) -> str:
         try:
-            meeting = self._application.meeting.set_speaker_name(
+            meeting = self._application.set_meeting_speaker_name(
                 session_id, speaker_id, name
             )
             return self._ok(meeting=meeting)
@@ -324,7 +303,9 @@ class BackendBridge(QObject):
     @Slot(str, int, str, result=str)
     def editMeetingSegment(self, session_id: str, index: int, text: str) -> str:
         try:
-            meeting = self._application.meeting.edit_segment(session_id, index, text)
+            meeting = self._application.edit_meeting_segment(
+                session_id, index, text
+            )
             return self._ok(meeting=meeting)
         except Exception as exc:
             return self._error(exc)
@@ -333,7 +314,7 @@ class BackendBridge(QObject):
     def deleteMeetingAudio(self, session_id: str) -> str:
         try:
             return self._ok(
-                deleted=self._application.meeting.delete_audio(session_id)
+                deleted=self._application.delete_meeting_audio(session_id)
             )
         except Exception as exc:
             return self._error(exc)
@@ -365,19 +346,16 @@ class BackendBridge(QObject):
         song_mode: bool,
         isolate_vocals: bool,
     ) -> None:
-        path = Path(file_path).expanduser()
-        if not path.is_file():
-            self._emit_event("file_transcriber_error", "Seleziona un file esistente")
-            return
-        language = language.strip() or self._controller.settings.language
+        settings = self._application.settings
+        language = language.strip() or settings.language
         model_size = (
             model_size
             if model_size in ModelSize.choices()
-            else self._controller.settings.model_size
+            else settings.model_size
         )
         try:
             self._application.start_file(
-                str(path),
+                file_path,
                 language=language,
                 model_size=model_size,
                 song_mode=bool(song_mode),
@@ -404,10 +382,11 @@ class BackendBridge(QObject):
             if not isinstance(decoded, list):
                 raise ValueError("elenco file non valido")
             paths = [str(path) for path in decoded if str(path).strip()]
+            settings = self._application.settings
             jobs = self._application.enqueue_files(
                 paths,
-                language=language.strip() or self._controller.settings.language,
-                model_size=model_size.strip() or self._controller.settings.model_size,
+                language=language.strip() or settings.language,
+                model_size=model_size.strip() or settings.model_size,
                 song_mode=bool(song_mode),
                 isolate_vocals=bool(isolate_vocals),
             )
@@ -418,28 +397,26 @@ class BackendBridge(QObject):
     @Slot(result=str)
     def listFileQueue(self) -> str:
         return json.dumps(
-            self._application.file_batch.list_jobs(), ensure_ascii=False, default=str
+            self._application.list_file_queue(), ensure_ascii=False, default=str
         )
 
     @Slot(result=str)
     def cancelFileQueue(self) -> str:
-        return self._ok(
-            jobs=self._application.file_batch.cancel(clear_pending=True)
-        )
+        return self._ok(jobs=self._application.cancel_file_queue())
 
     @Slot(result=str)
     def clearFinishedFileQueue(self) -> str:
-        return self._ok(jobs=self._application.file_batch.clear_finished())
+        return self._ok(jobs=self._application.clear_finished_file_queue())
 
     def emitDroppedFiles(self, paths: list[str]) -> None:
-        existing = [str(Path(path)) for path in paths if Path(path).is_file()]
+        existing = self._application.existing_files(paths)
         if existing:
             self._emit_event("file_drop_received", existing)
 
     @Slot(result=str)
     def listModels(self) -> str:
         return json.dumps(
-            self._controller.list_models(), ensure_ascii=False, default=str
+            self._application.list_models(), ensure_ascii=False, default=str
         )
 
     @Slot(str, result=str)
@@ -514,7 +491,7 @@ class BackendBridge(QObject):
         profile: str = "raw",
     ) -> str:
         try:
-            session = self._controller.get_history_session(session_id)
+            session = self._application.get_history_session(session_id)
             if not session:
                 raise KeyError("sessione non trovata")
             fmt = str(format_name or "txt").strip().lower().lstrip(".")
@@ -574,14 +551,13 @@ class BackendBridge(QObject):
     @Slot(result=str)
     def listRecoveryAudio(self) -> str:
         return json.dumps(
-            self._controller.list_recovery_audio(), ensure_ascii=False, default=str
+            self._application.list_recovery_audio(), ensure_ascii=False, default=str
         )
 
     @Slot(str, result=str)
     def startRecovery(self, recovery_path: str) -> str:
         try:
-            self._application.require_meeting_idle("recuperare audio")
-            self._controller.start_recovery_transcription(recovery_path)
+            self._application.start_recovery(recovery_path)
             return self._ok()
         except Exception as exc:
             return self._error(exc)
@@ -589,9 +565,7 @@ class BackendBridge(QObject):
     @Slot(str, result=str)
     def deleteRecovery(self, recovery_path: str) -> str:
         try:
-            return self._ok(
-                deleted=self._controller.delete_recovery_audio(recovery_path)
-            )
+            return self._ok(deleted=self._application.delete_recovery(recovery_path))
         except Exception as exc:
             return self._error(exc)
 
@@ -601,9 +575,8 @@ class BackendBridge(QObject):
             payload = json.loads(payload_json)
             if not isinstance(payload, dict):
                 raise ValueError("payload impostazioni non valido")
-            allowed = set(self._controller.settings.__dataclass_fields__)
-            overrides = {key: value for key, value in payload.items() if key in allowed}
-            before = self._controller.settings
+            overrides = self._application.filter_settings_overrides(payload)
+            before = self._application.settings
             current = self._application.apply_settings(overrides)
             if (
                 current.window_width != before.window_width
@@ -623,7 +596,9 @@ class BackendBridge(QObject):
 
     @Slot(int, result=str)
     def readLogTail(self, line_count: int = 200) -> str:
-        return self._read_log_tail(max(20, min(int(line_count), 1000)))
+        return self._application.read_log_tail(
+            max(20, min(int(line_count), 1000))
+        )
 
     def push_log_record(self, record: logging.LogRecord) -> None:
         try:
@@ -631,17 +606,6 @@ class BackendBridge(QObject):
         except Exception:
             message = str(record.msg)
         self.logReceived.emit(record.levelname, record.name, message)
-
-    @staticmethod
-    def _read_log_tail(line_count: int) -> str:
-        try:
-            with AppMeta.LOG_PATH.open(
-                "r", encoding="utf-8", errors="replace"
-            ) as handle:
-                lines = handle.readlines()
-            return "".join(lines[-line_count:])
-        except OSError:
-            return ""
 
 
 class BridgeLogHandler(logging.Handler):
