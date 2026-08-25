@@ -154,12 +154,7 @@ class MainWindow(QMainWindow):
             self._geometry_save_timer.start(350)
 
     def _shutdown_runtime(self) -> None:
-        try:
-            self._bridge.closePowerUser()
-        except Exception:
-            logger.exception("Cleanup coordinatori UI fallito durante shutdown")
-        finally:
-            self._controller.shutdown()
+        self._controller.shutdown()
 
     def _persist_window_geometry(self) -> None:
         width = max(UIConstraints.MIN_WINDOW_WIDTH, int(self.width()))
