@@ -6,12 +6,35 @@ import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Optional, Protocol
 
+from config.settings import Settings
 from core.event_bus import EventBus
 
-if TYPE_CHECKING:
-    from core.app_controller import AppController
+
+class FileBatchController(Protocol):
+    """Small application contract required by FileBatchCoordinator."""
+
+    @property
+    def settings(self) -> Settings: ...
+
+    def subscribe(self, event: str, handler) -> None: ...
+
+    def active_live_count(self) -> int: ...
+
+    def is_file_transcribing(self) -> bool: ...
+
+    def start_file_transcription(
+        self,
+        file_path: str,
+        language: Optional[str] = None,
+        model_size: Optional[str] = None,
+        song_mode: bool = False,
+        isolate_vocals_flag: bool = False,
+        history_source: str = "file",
+    ) -> None: ...
+
+    def stop_file_transcription(self) -> None: ...
 
 
 @dataclass
@@ -31,12 +54,12 @@ class FileBatchJob:
 
 
 class FileBatchCoordinator:
-    """Own a FIFO queue while reusing AppController's public File lifecycle."""
+    """Own a FIFO queue while reusing the public File lifecycle."""
 
     _WORKER_EXIT_TIMEOUT_S = 10.0
     _WORKER_EXIT_POLL_S = 0.05
 
-    def __init__(self, controller: "AppController") -> None:
+    def __init__(self, controller: FileBatchController) -> None:
         self._controller = controller
         self._bus = EventBus()
         self._lock = threading.RLock()
@@ -116,7 +139,8 @@ class FileBatchCoordinator:
     def clear_finished(self) -> list[dict[str, Any]]:
         with self._lock:
             self._jobs = [
-                job for job in self._jobs
+                job
+                for job in self._jobs
                 if job.status in {"queued", "starting", "running"}
             ]
         self._emit_changed()
