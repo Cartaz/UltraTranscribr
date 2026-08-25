@@ -174,20 +174,26 @@ def test_audio_subsystem_has_one_managed_pactl_owner() -> None:
     assert 'case "audio_source_health_changed":' in frontend
 
 
-def test_history_postprocess_and_recordings_live_below_bridge() -> None:
+def test_history_metadata_and_postprocess_have_canonical_core_owners() -> None:
     bridge = _read("ui/bridge.py")
     application = _read("core/application_service.py")
-    core = _read("core/history_postprocess.py")
+    history = _read("core/transcript_history.py")
+    postprocess = _read("core/history_postprocess.py")
     assert "generate_history_postprocess" not in bridge
     assert "SessionNameStore" not in bridge
     assert "from core.session_recordings" not in bridge
     assert "generate_history_postprocess" in application
-    assert "SessionNameStore" in application
+    assert "SessionNameStore" not in application
+    assert not (ROOT / "core" / "session_names.py").exists()
+    assert "name: str = \"\"" in history
+    assert "def set_name(" in history
+    assert "def migrate_legacy_session_names(" in history
+    assert "self.controller.history.set_name(" in application
     assert "delete_recording" in application
     assert "process_text(" not in application
     assert "save_derived_output(" not in application
-    assert "process_text(" in core
-    assert "save_derived_output(" in core
+    assert "process_text(" in postprocess
+    assert "save_derived_output(" in postprocess
 
 
 def test_webengine_is_local_only_and_external_links_leave_the_app() -> None:
