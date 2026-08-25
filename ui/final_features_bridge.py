@@ -6,6 +6,7 @@ import logging
 
 from PySide6.QtCore import QTimer, Slot
 
+from core.history_postprocess import generate_history_postprocess
 from core.session_names import SessionNameStore
 from ui.phase10_bridge import Phase10BackendBridge
 
@@ -111,6 +112,18 @@ class FinalFeaturesBackendBridge(Phase10BackendBridge):
                 logger.exception("Riconfigurazione backend fallita")
                 return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
         return raw
+
+    @Slot(str, str, result=str)
+    def generatePostprocess(self, session_id: str, profile: str) -> str:
+        try:
+            result = generate_history_postprocess(
+                self._controller,
+                session_id,
+                profile,
+            )
+            return json.dumps({"ok": True, **result}, ensure_ascii=False)
+        except Exception as exc:
+            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
 
     @Slot(str, str, result=str)
     def renameHistorySession(self, session_id: str, name: str) -> str:
