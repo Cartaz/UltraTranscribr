@@ -64,6 +64,16 @@ def test_phase10_live_bridge_uses_public_controller_api_only() -> None:
     assert "self._controller.is_file_busy()" in source
 
 
+def test_meeting_control_waits_are_owned_by_core_not_webchannel_bridge() -> None:
+    meeting = _read("core/meeting_manager.py")
+    bridge = _read("ui/multi_session_bridge.py")
+    assert "control_thread: Optional[threading.Thread]" in meeting
+    assert 'name=f"MeetingFinalize-' in meeting
+    assert 'name=f"MeetingCancel-' in meeting
+    assert "runtime.capture.join(timeout=8.0)" in meeting
+    assert ".join(" not in bridge
+
+
 def test_webengine_is_local_only_and_external_links_leave_the_app() -> None:
     shell = _read("ui/main_window.py")
     assert "class LocalOnlyWebPage(QWebEnginePage)" in shell
