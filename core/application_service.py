@@ -8,13 +8,13 @@ invokes this service.
 from __future__ import annotations
 
 import logging
-import threading
 from dataclasses import asdict
 from typing import Any, Callable
 
 from config.settings import AudioSource, ModelSize, Settings
 from core.app_controller import AppController
 from core.audio_diagnostics import build_audio_diagnostics
+from core.background_tasks import BackgroundTaskGroup
 from core.event_bus import EventBus
 from core.history_postprocess import generate_history_postprocess
 from core.session_names import SessionNameStore
@@ -44,6 +44,11 @@ class ApplicationService:
         self.meeting = controller.meeting
         self._session_names = SessionNameStore()
         self._bus = EventBus()
+        self._tasks = BackgroundTaskGroup("Application", join_timeout=10.0)
+
+    def close(self) -> None:
+        """Stop accepting background work and wait boundedly for owned tasks."""
+        self._tasks.close()
 
     def submit(
         self,
@@ -60,11 +65,7 @@ class ApplicationService:
                 logger.exception("Operazione applicativa '%s' fallita", name)
                 self._bus.emit(error_event, str(exc))
 
-        threading.Thread(
-            target=worker,
-            daemon=True,
-            name=f"Application-{name}",
-        ).start()
+        self._tasks.start(name, worker)
 
     def preload_model_if_requested(self) -> None:
         settings = self.controller.settings

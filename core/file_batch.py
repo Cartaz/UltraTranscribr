@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional, Protocol
 
 from config.settings import Settings
+from core.background_tasks import BackgroundTaskGroup
 from core.event_bus import EventBus
 
 
@@ -63,6 +64,7 @@ class FileBatchCoordinator:
         self._controller = controller
         self._bus = EventBus()
         self._lock = threading.RLock()
+        self._tasks = BackgroundTaskGroup("FileBatch", join_timeout=10.0)
         self._jobs: list[FileBatchJob] = []
         self._active_id: Optional[str] = None
         self._closed = False
@@ -129,9 +131,6 @@ class FileBatchCoordinator:
                 for job in self._jobs:
                     if job.status == "queued":
                         job.status = "cancelled"
-        # This public lifecycle method is idempotent and invalidates an
-        # in-flight File startup generation as well as stopping a live worker.
-        # The coordinator therefore does not need to inspect controller threads.
         self._controller.stop_file_transcription()
         self._emit_changed()
         return self.list_jobs()
@@ -148,16 +147,21 @@ class FileBatchCoordinator:
 
     def close(self) -> None:
         with self._lock:
+            if self._closed:
+                return
             self._closed = True
         for event, handler in self._subscriptions:
             self._bus.unsubscribe(event, handler)
+        self._tasks.close()
 
     def _maybe_start_next_async(self) -> None:
-        threading.Thread(
-            target=self._maybe_start_next,
-            daemon=True,
-            name="FileBatchCoordinator",
-        ).start()
+        with self._lock:
+            if self._closed:
+                return
+        try:
+            self._tasks.start("Start", self._maybe_start_next)
+        except RuntimeError:
+            return
 
     def _maybe_start_next(self) -> None:
         with self._lock:
@@ -220,9 +224,6 @@ class FileBatchCoordinator:
     def _on_status(self, payload: Any) -> None:
         if str(payload) != "stopped":
             return
-        # "Ferma" cancella solo il job corrente; i pending restano in FIFO.
-        # If the stopped File work was external (e.g. Recovery), any pending
-        # batch begins after that worker has actually exited.
         if self._finish_active("cancelled") or self._has_pending():
             self._advance_after_worker()
 
@@ -248,16 +249,21 @@ class FileBatchCoordinator:
         def advance() -> None:
             deadline = time.monotonic() + self._WORKER_EXIT_TIMEOUT_S
             while self._controller.is_file_transcribing():
+                with self._lock:
+                    if self._closed:
+                        return
                 if time.monotonic() >= deadline:
                     return
                 time.sleep(self._WORKER_EXIT_POLL_S)
             self._maybe_start_next()
 
-        threading.Thread(
-            target=advance,
-            daemon=True,
-            name="FileBatchAdvance",
-        ).start()
+        with self._lock:
+            if self._closed:
+                return
+        try:
+            self._tasks.start("Advance", advance)
+        except RuntimeError:
+            return
 
     def _find(self, job_id: Optional[str]) -> Optional[FileBatchJob]:
         if not job_id:

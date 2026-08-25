@@ -89,13 +89,19 @@ def test_meeting_control_waits_are_owned_by_core_not_webchannel_bridge() -> None
     assert "transcriber.join(" not in bridge
 
 
-def test_background_work_is_owned_below_webchannel() -> None:
+def test_background_work_has_explicit_lifecycle_owner() -> None:
     bridge = _read("ui/bridge.py")
     application = _read("core/application_service.py")
+    batch = _read("core/file_batch.py")
+    shell = _read("ui/main_window.py")
     assert "threading.Thread(" not in bridge
-    assert "threading.Thread(" in application
-    assert 'name=f"Application-{name}"' in application
-    assert "self._bus.emit(error_event" in application
+    assert "threading.Thread(" not in application
+    assert "BackgroundTaskGroup" in application
+    assert "self._tasks.start(name, worker)" in application
+    assert "def close(self) -> None:" in application
+    assert "BackgroundTaskGroup" in batch
+    assert "self._tasks.close()" in batch
+    assert "self._application.close()" in shell
 
 
 def test_audio_subsystem_has_one_managed_pactl_owner() -> None:

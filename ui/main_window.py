@@ -44,8 +44,6 @@ class LocalOnlyWebPage(QWebEnginePage):
         return False
 
     def createWindow(self, _window_type):
-        # Route target=_blank through this page so acceptNavigationRequest keeps
-        # the same local-only policy instead of spawning an unmanaged WebEngine.
         return self
 
 
@@ -101,6 +99,7 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self._controller = controller
+        self._application = application
         self._tray_icon = None
         self._closing = False
         self._geometry_tracking_ready = False
@@ -196,6 +195,7 @@ class MainWindow(QMainWindow):
             self._geometry_save_timer.start(350)
 
     def _shutdown_runtime(self) -> None:
+        self._application.close()
         self._controller.shutdown()
 
     def _persist_window_geometry(self) -> None:
