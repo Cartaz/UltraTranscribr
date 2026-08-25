@@ -23,6 +23,24 @@ const state = {
   routeStatus: "idle",
 };
 
+const uiModules = [];
+const uiRuntime = {bound: false, bootstrap: null};
+
+function registerUIModule(module) {
+  if (!module || typeof module !== "object") return;
+  uiModules.push(module);
+  if (uiRuntime.bound && typeof module.bind === "function") module.bind();
+  if (uiRuntime.bootstrap && typeof module.hydrate === "function") {
+    module.hydrate(uiRuntime.bootstrap);
+  }
+}
+
+function lastUIHandler(name) {
+  return [...uiModules].reverse().find(module => typeof module[name] === "function") || null;
+}
+
+window.UltraUI = Object.freeze({register: registerUIModule});
+
 const views = {
   live: "TRASCRIZIONE LIVE",
   file: "TRASCRIZIONE FILE",
@@ -79,6 +97,7 @@ function switchView(name) {
   $("eyebrow").textContent = views[name];
   if (name === "history") refreshHistory();
   if (name === "settings") refreshModels();
+  uiModules.forEach(module => module.view?.(name));
 }
 
 function setOrb(id, on) { $(id).classList.toggle("active", !!on); }
@@ -127,10 +146,21 @@ function text(kind, value, full = false) {
   box.scrollTop = box.scrollHeight;
 }
 
-function sessionBusy() { return state.live || state.draining || state.file; }
-function lockSettings() { $("settings-save").disabled = sessionBusy() || !!state.modelBusy; }
+function sessionBusy() {
+  return state.live || state.draining || state.file || uiModules.some(module => module.isBusy?.() === true);
+}
+
+function lockSettings() {
+  $("settings-save").disabled = sessionBusy() || !!state.modelBusy;
+  uiModules.forEach(module => module.lockSettings?.());
+}
 
 function liveUI(status) {
+  const handler = uiModules.find(module => typeof module.liveUI === "function");
+  if (handler) {
+    handler.liveUI(status);
+    return;
+  }
   $("live-status").textContent = status;
   const busy = state.live || state.draining;
   const missingStream = state.source === "application" && !$("live-stream").value;
@@ -149,6 +179,7 @@ function fileUI(status) {
   setOrb("file-orb", state.file);
   lockSettings();
   renderModels(state.models);
+  uiModules.forEach(module => module.fileUI?.(status));
 }
 
 function options(select, values, current) {
@@ -214,6 +245,7 @@ function updateSelectedStreamMeta() {
   $("live-stream-meta").textContent = streamMeta(stream);
   updateLiveSummary();
   liveUI($("live-status").textContent || "Idle");
+  uiModules.forEach(module => module.streamMeta?.());
 }
 
 function renderPlaybackStreams(items) {
@@ -244,6 +276,8 @@ function renderPlaybackStreams(items) {
 }
 
 function refreshStreams() {
+  const handler = lastUIHandler("refreshStreams");
+  if (handler && handler.refreshStreams() === true) return;
   call("listPlaybackStreams", [], result => {
     const response = json(result);
     if (Array.isArray(response)) {
@@ -256,6 +290,8 @@ function refreshStreams() {
 }
 
 function refreshDevices() {
+  const handler = lastUIHandler("refreshDevices");
+  if (handler && handler.refreshDevices() === true) return;
   if (state.source === "application") {
     refreshStreams();
     return;
@@ -302,9 +338,18 @@ function sourceUI() {
   $("live-stream-field").hidden = state.source !== "application";
   updateLiveSummary();
   liveUI($("live-status").textContent || "Idle");
+  uiModules.forEach(module => module.sourceUI?.());
 }
 
 function hydrate(bootstrap) {
+  uiRuntime.bootstrap = bootstrap;
+  const moduleBootstrap = bootstrap;
+  uiModules.forEach(module => {
+    if (typeof module.transformBootstrap === "function") {
+      bootstrap = module.transformBootstrap(bootstrap) || bootstrap;
+    }
+  });
+
   state.boot = bootstrap;
   state.models = Array.isArray(bootstrap.models) ? bootstrap.models : [];
   state.streams = Array.isArray(bootstrap.playbackStreams) ? bootstrap.playbackStreams : [];
@@ -348,6 +393,8 @@ function hydrate(bootstrap) {
   fileUI(state.file ? "In esecuzione" : "Idle");
   setBackendStatus(bootstrap.runtime.backendRunning ? "ready" : "standby");
   $("log-output").textContent = bootstrap.logTail || "Nessun log persistente disponibile.";
+
+  uiModules.forEach(module => module.hydrate?.(moduleBootstrap));
 }
 
 function appendLog(level, name, message) {
@@ -426,6 +473,12 @@ function handleRouteStatus(value) {
 
 function event(name, payload) {
   const value = json(payload);
+  let consumed = false;
+  uiModules.forEach(module => {
+    if (module.event?.(name, value, payload) === true) consumed = true;
+  });
+  if (consumed) return;
+
   switch (name) {
     case "backend_status_changed": setBackendStatus(value); break;
     case "process_started":
@@ -569,6 +622,8 @@ async function copyValue(value) {
 }
 
 function startLive() {
+  const handler = lastUIHandler("startLive");
+  if (handler && handler.startLive() === true) return;
   const settings = state.boot?.settings || {};
   const input = selectedInputValue();
   if (state.source === "application" && !input) {
@@ -590,6 +645,8 @@ function startFile() {
 }
 
 function saveSettings(eventObject) {
+  const handler = lastUIHandler("saveSettings");
+  if (handler && handler.saveSettings(eventObject) === true) return;
   eventObject.preventDefault();
   const payload = {};
   for (const element of eventObject.currentTarget.elements) {
@@ -628,13 +685,17 @@ function historyIsVisible() {
 }
 
 function historyTitle(session) {
+  let title;
   if (session.kind === "file") {
     const name = fileName(session.source_path) || "Trascrizione file";
-    return session.source === "recovery" ? `Recovery · ${name}` : name;
-  }
-  if (session.source === "microphone") return "Trascrizione microfono";
-  if (session.source === "application") return session.source_path ? `Applicazione · ${session.source_path}` : "Trascrizione applicazione";
-  return "Trascrizione audio di sistema";
+    title = session.source === "recovery" ? `Recovery · ${name}` : name;
+  } else if (session.source === "microphone") title = "Trascrizione microfono";
+  else if (session.source === "application") title = session.source_path ? `Applicazione · ${session.source_path}` : "Trascrizione applicazione";
+  else title = "Trascrizione audio di sistema";
+  return uiModules.reduce(
+    (current, module) => module.historyTitle?.(session, current) ?? current,
+    title,
+  );
 }
 
 function renderHistory(items) {
@@ -675,6 +736,7 @@ function clearHistorySelection() {
   $("history-transcript").textContent = "Il contenuto della sessione selezionata apparirà qui.";
   $("history-transcript").classList.add("placeholder");
   all(".history-item").forEach(item => item.classList.remove("active"));
+  uiModules.forEach(module => module.historyClear?.());
 }
 
 function showHistorySession(session) {
@@ -696,6 +758,7 @@ function showHistorySession(session) {
   transcript.textContent = state.historyText || "Nessun testo salvato per questa sessione.";
   transcript.classList.toggle("placeholder", !state.historyText);
   all(".history-item").forEach(item => item.classList.toggle("active", item.dataset.sessionId === session.id));
+  uiModules.forEach(module => module.historySession?.(session));
 }
 
 function loadHistorySession(sessionId) {
@@ -733,7 +796,11 @@ function deleteSelectedHistory() {
   });
 }
 
-function refreshHistoryList() { call("listHistory", [80], result => renderHistory(json(result))); }
+function refreshHistoryList() {
+  const handler = lastUIHandler("refreshHistoryList");
+  if (handler && handler.refreshHistoryList() === true) return;
+  call("listHistory", [80], result => renderHistory(json(result)));
+}
 
 function formatBytes(value) {
   const bytes = Number(value) || 0;
@@ -997,6 +1064,9 @@ function bind() {
     $("diagnostics-output").textContent = "Diagnostica in corso…";
     call("runAudioDiagnostics");
   };
+
+  uiRuntime.bound = true;
+  uiModules.forEach(module => module.bind?.());
 }
 
 function init() {
