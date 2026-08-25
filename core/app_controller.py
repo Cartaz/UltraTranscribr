@@ -10,8 +10,10 @@ from config.settings import AudioSource, Settings
 from core.audio_routing import PulseAudioRouter
 from core.event_bus import EventBus
 from core.exceptions import GPUNotAvailableError, SinkNotFoundError
+from core.file_batch import FileBatchCoordinator
 from core.file_transcriber import FileTranscriberThread
 from core.live_sessions import LiveSessionManager
+from core.meeting_manager import MeetingManager
 from core.models import StatusEnum
 from core.sink_finder import find_source
 from core.transcript_history import TranscriptHistoryStore
@@ -32,6 +34,39 @@ class _AggregateLiveBufferView:
     def buffer_level(self) -> int:
         snapshots = self._sessions.list_sessions()
         return max((int(item.get("buffer_level", 0)) for item in snapshots), default=0)
+
+
+class _MeetingControllerView:
+    """Narrow application facade consumed by MeetingManager."""
+
+    def __init__(self, controller: "AppController") -> None:
+        self._controller = controller
+
+    @property
+    def settings(self) -> Settings:
+        return self._controller.settings
+
+    @property
+    def history(self) -> TranscriptHistoryStore:
+        return self._controller.history
+
+    @property
+    def backend(self) -> WhisperBackend:
+        return self._controller.backend
+
+    def active_live_count(self) -> int:
+        return self._controller.active_live_count()
+
+    def is_file_busy(self) -> bool:
+        return self._controller.is_file_busy()
+
+    def ensure_backend_started(
+        self,
+        *,
+        vad: Optional[bool] = None,
+        settings: Optional[Settings] = None,
+    ) -> None:
+        self._controller.ensure_backend_started(vad=vad, settings=settings)
 
 
 class AppController:
@@ -72,6 +107,8 @@ class AppController:
             sink_resolver=self._resolve_sink,
         )
         self._buffer_view = _AggregateLiveBufferView(self._live_sessions)
+        self._meeting = MeetingManager(_MeetingControllerView(self))
+        self._file_batch = FileBatchCoordinator(self)
         self._subscribe_history_events()
 
     @property
@@ -93,6 +130,14 @@ class AppController:
     @property
     def live_sessions(self) -> LiveSessionManager:
         return self._live_sessions
+
+    @property
+    def meeting(self) -> MeetingManager:
+        return self._meeting
+
+    @property
+    def file_batch(self) -> FileBatchCoordinator:
+        return self._file_batch
 
     def _next_generation(self) -> int:
         with self._lock:
@@ -516,7 +561,6 @@ class AppController:
         deleted = self._history.delete_recovery_audio(recovery_path)
         if deleted:
             self._bus.emit("history_changed", None)
-        return deleted
 
     # ------------------------------------------------------------------
     # Lifecycle and helpers
@@ -525,6 +569,8 @@ class AppController:
         self._bus.subscribe(event, handler)
 
     def shutdown(self) -> None:
+        self._file_batch.close()
+        self._meeting.shutdown()
         self.stop_file_transcription()
         self._live_sessions.shutdown()
         self.stop_backend()
