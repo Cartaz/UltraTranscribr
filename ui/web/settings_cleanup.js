@@ -1,6 +1,6 @@
 "use strict";
 
-const phase6SettingSections = {
+const settingSections = {
   recognition: ["model_size", "language", "audio_source", "vad_filter"],
   history: ["history_retention_days", "meeting_audio_retention_days"],
   tuning: ["beam_size", "vad_min_silence_ms", "buffer_warn_threshold"],
@@ -8,25 +8,36 @@ const phase6SettingSections = {
   backend: ["server_port", "gpu_layers", "compute_type", "backend_instances", "preload_model"],
 };
 
-let phase6SettingsDefaults = null;
+let settingsDefaults = null;
 
-function phase6SettingElement(name) {
+function settingsEnsureUI() {
+  const backendCard = [...document.querySelectorAll('[data-settings-pane="advanced"] .card')]
+    .find(card => card.querySelector('input[name="server_port"]'));
+  if (backendCard && !document.querySelector('[name="backend_instances"]')) {
+    const fields = backendCard.querySelector('.fields');
+    fields?.insertAdjacentHTML('beforeend', `
+      <div><label for="s-instances">Istanze backend</label><input id="s-instances" name="backend_instances" type="number" min="1" max="4"></div>
+      <div><label class="toggle-row compact-toggle" for="s-preload"><span><strong>Preload all'avvio</strong><small>Carica il modello installato all'apertura.</small></span><input id="s-preload" name="preload_model" type="checkbox"><i></i></label></div>`);
+  }
+}
+
+function settingElement(name) {
   return document.querySelector(`#settings-form [name="${name}"]`);
 }
 
-function phase6WriteSetting(name, value) {
-  const element = phase6SettingElement(name);
+function writeSetting(name, value) {
+  const element = settingElement(name);
   if (!element) return;
   if (element.type === "checkbox") element.checked = !!value;
   else element.value = value == null ? "" : String(value);
 }
 
-function phase6HydrateSettings(settings) {
+function hydrateSettings(settings) {
   if (!settings || typeof settings !== "object") return;
-  Object.entries(settings).forEach(([name, value]) => phase6WriteSetting(name, value));
+  Object.entries(settings).forEach(([name, value]) => writeSetting(name, value));
 }
 
-function phase6SwitchSettingsTab(name) {
+function switchSettingsTab(name) {
   const target = name === "advanced" ? "advanced" : "normal";
   all("[data-settings-tab]").forEach(button => {
     const active = button.dataset.settingsTab === target;
@@ -39,7 +50,7 @@ function phase6SwitchSettingsTab(name) {
   });
 }
 
-function phase6ApplySettings(payload, successMessage) {
+function applySettingsPayload(payload, successMessage) {
   call("applySettings", [JSON.stringify(payload)], result => {
     const response = json(result);
     if (!response?.ok) {
@@ -47,7 +58,7 @@ function phase6ApplySettings(payload, successMessage) {
       return;
     }
     state.boot.settings = response.settings;
-    phase6HydrateSettings(response.settings);
+    hydrateSettings(response.settings);
     state.source = normalizeSource(response.settings.audio_source);
     sourceUI();
     refreshDevices();
@@ -56,9 +67,9 @@ function phase6ApplySettings(payload, successMessage) {
   });
 }
 
-function phase6LoadDefaults(callback) {
-  if (phase6SettingsDefaults) {
-    callback(phase6SettingsDefaults);
+function loadSettingsDefaults(callback) {
+  if (settingsDefaults) {
+    callback(settingsDefaults);
     return;
   }
   call("getSettingsDefaults", [], result => {
@@ -67,7 +78,7 @@ function phase6LoadDefaults(callback) {
       showError("Impossibile leggere i valori predefiniti", "settings");
       return;
     }
-    phase6SettingsDefaults = defaults;
+    settingsDefaults = defaults;
     callback(defaults);
   });
 }
@@ -77,55 +88,54 @@ function resetSettingsSection(sectionName) {
     notice("Ferma le operazioni attive prima di ripristinare questa sezione", true);
     return;
   }
-  const keys = phase6SettingSections[sectionName];
+  const keys = settingSections[sectionName];
   if (!keys) return;
-  phase6LoadDefaults(defaults => {
+  loadSettingsDefaults(defaults => {
     const payload = {};
     keys.forEach(key => { payload[key] = defaults[key]; });
-    phase6ApplySettings(payload, "Sezione ripristinata ai valori predefiniti");
+    applySettingsPayload(payload, "Sezione ripristinata ai valori predefiniti");
   });
 }
 
-const phase6LegacyLockSettings = lockSettings;
-lockSettings = function() {
-  phase6LegacyLockSettings();
-  const disabled = sessionBusy() || !!state.modelBusy;
-  all(".settings-reset").forEach(button => { button.disabled = disabled; });
+const settingsModule = {
+  bind() {
+    settingsEnsureUI();
+    all("[data-settings-tab]").forEach(button => {
+      button.onclick = () => switchSettingsTab(button.dataset.settingsTab);
+    });
+    all("[data-reset-section]").forEach(button => {
+      button.onclick = () => resetSettingsSection(button.dataset.resetSection);
+    });
+  },
+  hydrate(bootstrap) {
+    settingsEnsureUI();
+    hydrateSettings(bootstrap.settings || {});
+    switchSettingsTab("normal");
+    lockSettings();
+  },
+  lockSettings() {
+    const disabled = sessionBusy() || !!state.modelBusy;
+    all(".settings-reset").forEach(button => { button.disabled = disabled; });
+  },
+  saveSettings(eventObject) {
+    eventObject.preventDefault();
+    const payload = {};
+    for (const element of eventObject.currentTarget.elements) {
+      if (!element.name || element.disabled) continue;
+      if (element.name === "window_width" || element.name === "window_height") continue;
+      if (element.type === "checkbox") payload[element.name] = element.checked;
+      else if (element.type === "number") payload[element.name] = Number(element.value);
+      else payload[element.name] = element.value === "" && element.name === "sink_name" ? null : element.value;
+    }
+    applySettingsPayload(payload, "Impostazioni salvate");
+    return true;
+  },
 };
 
-saveSettings = function(eventObject) {
-  eventObject.preventDefault();
-  const payload = {};
-  for (const element of eventObject.currentTarget.elements) {
-    if (!element.name || element.disabled) continue;
-    if (element.name === "window_width" || element.name === "window_height") continue;
-    if (element.type === "checkbox") payload[element.name] = element.checked;
-    else if (element.type === "number") payload[element.name] = Number(element.value);
-    else payload[element.name] = element.value === "" && element.name === "sink_name" ? null : element.value;
-  }
-  phase6ApplySettings(payload, "Impostazioni salvate");
-};
+UltraUI.register(settingsModule);
+settingsEnsureUI();
 
-const phase6LegacyHydrate = hydrate;
-hydrate = function(bootstrap) {
-  phase6LegacyHydrate(bootstrap);
-  phase6HydrateSettings(bootstrap.settings || {});
-  phase6SwitchSettingsTab("normal");
-  lockSettings();
-};
-
-const phase6LegacyBind = bind;
-bind = function() {
-  phase6LegacyBind();
-  all("[data-settings-tab]").forEach(button => {
-    button.onclick = () => phase6SwitchSettingsTab(button.dataset.settingsTab);
-  });
-  all("[data-reset-section]").forEach(button => {
-    button.onclick = () => resetSettingsSection(button.dataset.resetSection);
-  });
-};
-
-function phase6InjectStyle(href, marker) {
+function loadStyle(href, marker) {
   if (document.querySelector(`link[data-ultra-module="${marker}"]`)) return;
   const style = document.createElement("link");
   style.rel = "stylesheet";
@@ -134,22 +144,18 @@ function phase6InjectStyle(href, marker) {
   document.head.append(style);
 }
 
-function phase6InjectScript(src, marker) {
+function loadScript(src, marker) {
   if (document.querySelector(`script[data-ultra-module="${marker}"]`)) return;
   const script = document.createElement("script");
   script.src = src;
-  // Dynamically inserted scripts are async by default. Disable async so the
-  // wrapper chain is deterministic: power_user -> phase10 -> hardening -> final.
   script.async = false;
   script.dataset.ultraModule = marker;
   document.head.append(script);
 }
 
-(function loadExtensionModules() {
-  phase6InjectStyle("power_user.css", "power");
-  phase6InjectScript("power_user.js", "power");
-  phase6InjectStyle("phase10.css", "phase10");
-  phase6InjectScript("phase10.js", "phase10");
-  phase6InjectScript("phase10_hardening.js", "phase10-hardening");
-  phase6InjectScript("final_features.js", "final-features");
+(function loadDomainModules() {
+  loadStyle("power_user.css", "file-history");
+  loadStyle("phase10.css", "meeting");
+  loadScript("file_history.js", "file-history");
+  loadScript("meeting.js", "meeting");
 })();
