@@ -125,7 +125,11 @@ class _FakeController:
         self.settings = Settings(language="it", audio_source="system")
         self.backend = SimpleNamespace(is_running=False, reconfigure=lambda _settings: None)
         self.buffer = SimpleNamespace(buffer_level=17)
-        self.history = SimpleNamespace(search=lambda *_args: [], list_recent=lambda *_args: [])
+        self.history = SimpleNamespace(
+            search=lambda *_args: [],
+            list_recent=lambda *_args: [],
+            migrate_legacy_session_names=lambda: 0,
+        )
         self.file_batch = SimpleNamespace(list_jobs=lambda: [])
         self.meeting = SimpleNamespace(
             snapshot=lambda: None,
