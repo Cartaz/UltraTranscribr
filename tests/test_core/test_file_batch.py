@@ -17,6 +17,10 @@ class FakeController:
     def subscribe(self, event, handler) -> None:
         self._handlers[event] = handler
 
+    def unsubscribe(self, event, handler) -> None:
+        if self._handlers.get(event) is handler:
+            self._handlers.pop(event, None)
+
     def active_live_count(self) -> int:
         return 0
 
@@ -60,6 +64,7 @@ def test_batch_starts_fifo_and_advances_after_completion(monkeypatch, tmp_path: 
     assert controller.started[1][0] == str(second)
     assert batch.list_jobs()[1]["status"] == "running"
     batch.close()
+    assert controller._handlers == {}
 
 
 def test_batch_rejects_missing_file(tmp_path: Path) -> None:
