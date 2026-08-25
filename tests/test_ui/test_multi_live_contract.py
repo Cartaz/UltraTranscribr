@@ -43,10 +43,11 @@ def test_session_cards_show_independent_runtime_metrics():
 
 def test_live_module_registers_with_shared_runtime_without_global_overrides():
     script = (WEB / "multi_live.js").read_text(encoding="utf-8")
-    runtime = (WEB / "ui_runtime.js").read_text(encoding="utf-8")
+    app = (WEB / "app.js").read_text(encoding="utf-8")
     assert "const liveSessionsModule =" in script
     assert "UltraUI.register(liveSessionsModule)" in script
-    assert "window.UltraUI = Object.freeze" in runtime
+    assert "window.UltraUI = Object.freeze" in app
+    assert "function registerUIModule" in app
     assert "Legacy" not in script
     assert "refreshStreams = function" not in script
     assert "refreshDevices = function" not in script
