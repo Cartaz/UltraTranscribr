@@ -10,19 +10,30 @@ def _read(name: str) -> str:
     return (WEB / name).read_text(encoding="utf-8")
 
 
-def test_domain_modules_are_loaded_without_milestone_chain() -> None:
+def test_domain_modules_are_loaded_without_hidden_feature_dependencies() -> None:
     html = _read("index.html")
     settings = _read("settings_cleanup.js")
     workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
 
-    assert 'src="app.js"' in html
-    assert 'src="ui_runtime.js"' not in html
-    assert 'src="multi_live.js"' in html
+    for asset in (
+        'href="file_history.css"',
+        'href="meeting.css"',
+        'src="app.js"',
+        'src="multi_live.js"',
+        'src="settings_cleanup.js"',
+        'src="file_history.js"',
+        'src="meeting.js"',
+    ):
+        assert asset in html
+
     assert html.index('src="app.js"') < html.index('src="multi_live.js"')
-    assert 'loadStyle("file_history.css", "file-history")' in settings
-    assert 'loadStyle("meeting.css", "meeting")' in settings
-    assert 'loadScript("file_history.js", "file-history")' in settings
-    assert 'loadScript("meeting.js", "meeting")' in settings
+    assert html.index('src="multi_live.js"') < html.index('src="settings_cleanup.js"')
+    assert html.index('src="settings_cleanup.js"') < html.index('src="file_history.js"')
+    assert html.index('src="file_history.js"') < html.index('src="meeting.js"')
+
+    for hidden_loader in ("loadStyle(", "loadScript(", "file_history.js", "meeting.js"):
+        assert hidden_loader not in settings
+
     assert (WEB / "file_history.css").is_file()
     assert (WEB / "meeting.css").is_file()
     assert "phase10_hardening.js" not in settings
