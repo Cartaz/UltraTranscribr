@@ -18,32 +18,14 @@ def test_settings_are_split_into_normal_and_advanced_panes() -> None:
     assert 'data-settings-pane="normal"' in html
     assert 'data-settings-pane="advanced"' in html
 
-    normal = _between(
-        html,
-        'data-settings-pane="normal"',
-        'data-settings-pane="advanced"',
-    )
+    normal = _between(html, 'data-settings-pane="normal"', 'data-settings-pane="advanced"')
     for field in ("model_size", "language", "audio_source", "vad_filter"):
         assert f'name="{field}"' in normal
-    for field in (
-        "beam_size",
-        "chunk_ms",
-        "sink_name",
-        "server_port",
-        "gpu_layers",
-        "compute_type",
-    ):
+    for field in ("beam_size", "chunk_ms", "sink_name", "server_port", "gpu_layers", "compute_type"):
         assert f'name="{field}"' not in normal
 
     advanced = html.split('data-settings-pane="advanced"', 1)[1]
-    for field in (
-        "beam_size",
-        "chunk_ms",
-        "sink_name",
-        "server_port",
-        "gpu_layers",
-        "compute_type",
-    ):
+    for field in ("beam_size", "chunk_ms", "sink_name", "server_port", "gpu_layers", "compute_type"):
         assert f'name="{field}"' in advanced
 
 
@@ -61,7 +43,7 @@ def test_manual_window_geometry_fields_are_removed_from_settings_payload() -> No
 def test_each_settings_group_has_a_scoped_reset() -> None:
     html = (WEB / "index.html").read_text(encoding="utf-8")
     script = (WEB / "settings_cleanup.js").read_text(encoding="utf-8")
-    bridge = (ROOT / "ui" / "phase10_bridge.py").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
 
     for section in ("recognition", "history", "tuning", "audio", "backend"):
         assert f'data-reset-section="{section}"' in html
@@ -90,9 +72,7 @@ def test_window_geometry_is_persisted_automatically_with_debounce() -> None:
 def test_settings_cleanup_assets_preserve_dark_neumorphism_and_are_checked() -> None:
     html = (WEB / "index.html").read_text(encoding="utf-8")
     css = (WEB / "settings.css").read_text(encoding="utf-8").lower()
-    workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text(
-        encoding="utf-8"
-    )
+    workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
 
     assert 'href="settings.css"' in html
     assert 'src="settings_cleanup.js"' in html
