@@ -26,14 +26,6 @@ class BackendBridge(QObject):
 
     _EVENTS = (
         "backend_status_changed",
-        "process_started",
-        "process_stopped",
-        "capture_stopped",
-        "transcriber_status_changed",
-        "transcriber_buffer_level",
-        "transcriber_new_text",
-        "transcriber_error",
-        "transcriber_drained",
         "file_transcriber_status_changed",
         "file_transcriber_progress",
         "file_transcriber_new_text",
@@ -50,7 +42,6 @@ class BackendBridge(QObject):
         "model_download_started",
         "model_download_progress",
         "model_status_changed",
-        "playback_stream_status_changed",
         "audio_devices_changed",
         "playback_streams_changed",
         "audio_source_health_changed",
