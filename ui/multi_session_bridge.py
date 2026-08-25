@@ -10,8 +10,7 @@ from PySide6.QtCore import QUrl, Slot
 from PySide6.QtWidgets import QFileDialog
 
 from config.settings import AudioSource, Settings
-from core.audio_source_health import evaluate_audio_source_health
-from core.sink_finder import debug_dump, find_source, list_available_devices
+from core.sink_finder import debug_dump
 from core.transcript_postprocess import process_text, profile_choices
 from ui.bridge import BackendBridge
 
@@ -87,34 +86,8 @@ class MultiSessionBackendBridge(BackendBridge):
             else self._controller.settings.audio_source
         )
         selection = str(selected_input or "").strip()
-        try:
-            devices = []
-            streams = []
-            automatic = None
-            if source == AudioSource.APPLICATION.value:
-                streams = self._controller.list_playback_streams()
-            else:
-                devices = list_available_devices()
-                if not selection:
-                    automatic = find_source(
-                        self._controller.settings,
-                        audio_source=source,
-                    )
-            status = evaluate_audio_source_health(
-                source=source,
-                selection=selection,
-                devices=devices,
-                streams=streams,
-                automatic_source=automatic,
-            )
-        except Exception as exc:
-            logger.warning("Probe sorgente audio fallito: %s", exc)
-            status = {
-                "source": source,
-                "status": "disconnected",
-                "label": "Non disponibile",
-                "detail": str(exc),
-            }
+        status = self._controller.cached_audio_source_health(source, selection)
+        self._controller.request_audio_source_probe(source, selection)
         return json.dumps(status, ensure_ascii=False, default=str)
 
     def _start_live_impl(
