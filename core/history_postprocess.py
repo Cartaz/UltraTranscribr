@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Optional, Protocol
 
+from core.event_bus import EventBus
 from core.transcript_postprocess import process_text
 
 
@@ -18,8 +19,6 @@ class HistoryPostprocessSource(Protocol):
 
     def get_history_session(self, session_id: str) -> Optional[dict[str, Any]]: ...
 
-    def notify_history_changed(self, session_id: str) -> None: ...
-
 
 def generate_history_postprocess(
     source: HistoryPostprocessSource,
@@ -33,5 +32,5 @@ def generate_history_postprocess(
 
     derived = process_text(str(session.get("text") or ""), profile)
     source.history.save_derived_output(session_id, profile, derived)
-    source.notify_history_changed(session_id)
+    EventBus().emit("history_changed", session_id)
     return {"profile": profile, "text": derived}
