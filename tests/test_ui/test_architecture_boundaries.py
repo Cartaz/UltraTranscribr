@@ -34,7 +34,7 @@ def test_meeting_manager_depends_on_narrow_application_contract() -> None:
 
 def test_application_controller_owns_workflow_services_and_shutdown() -> None:
     controller = _read("core/app_controller.py")
-    bridge = _read("ui/phase10_bridge.py")
+    bridge = _read("ui/bridge.py")
     shell = _read("ui/main_window.py")
     assert "self._meeting = MeetingManager(_MeetingControllerView(self))" in controller
     assert "self._file_batch = FileBatchCoordinator(_FileBatchControllerView(self))" in controller
@@ -47,8 +47,8 @@ def test_application_controller_owns_workflow_services_and_shutdown() -> None:
     assert "closePowerUser" not in shell
 
 
-def test_concrete_bridge_uses_public_controller_api_only() -> None:
-    source = _read("ui/phase10_bridge.py")
+def test_single_bridge_uses_public_controller_api_only() -> None:
+    source = _read("ui/bridge.py")
     assert "self._controller._file_busy" not in source
     assert "self._controller._startup_thread" not in source
     assert "getattr(self._controller" not in source
@@ -56,11 +56,13 @@ def test_concrete_bridge_uses_public_controller_api_only() -> None:
     assert "self._controller.start_live_session(" in source
     assert "self._controller.is_file_busy()" in source
     assert not (ROOT / "ui" / "multi_session_bridge.py").exists()
+    assert not (ROOT / "ui" / "phase10_bridge.py").exists()
+    assert not (ROOT / "ui" / "final_features_bridge.py").exists()
 
 
 def test_meeting_control_waits_are_owned_by_core_not_webchannel_bridge() -> None:
     meeting = _read("core/meeting_manager.py")
-    bridge = _read("ui/phase10_bridge.py")
+    bridge = _read("ui/bridge.py")
     assert "control_thread: Optional[threading.Thread]" in meeting
     assert 'name=f"MeetingFinalize-' in meeting
     assert 'name=f"MeetingCancel-' in meeting
@@ -74,8 +76,7 @@ def test_audio_subsystem_has_one_managed_pactl_owner() -> None:
     sink_finder = _read("core/sink_finder.py")
     pactl = _read("core/pactl.py")
     controller = _read("core/app_controller.py")
-    base_bridge = _read("ui/bridge.py")
-    bridge = _read("ui/phase10_bridge.py")
+    bridge = _read("ui/bridge.py")
     frontend = _read("ui/web/multi_live.js")
 
     assert "class AudioDiscoveryService" in service
@@ -101,20 +102,19 @@ def test_audio_subsystem_has_one_managed_pactl_owner() -> None:
     assert "self._pactl.close()" in controller
     assert controller.index("self._live_sessions.shutdown()") < controller.index("self._pactl.close()")
 
-    assert "list_available_devices" not in base_bridge
+    assert "list_available_devices" not in bridge
     assert "evaluate_audio_source_health" not in bridge
     assert "find_source" not in bridge
-    assert "list_available_devices" not in bridge
-    assert "self._controller.audio_discovery_snapshot()" in base_bridge
-    assert "self._controller.request_audio_discovery(" in base_bridge
+    assert "self._controller.audio_discovery_snapshot()" in bridge
+    assert "self._controller.request_audio_discovery(" in bridge
     assert "self._controller.request_audio_source_probe(" in bridge
     assert 'name === "audio_devices_changed"' in frontend
     assert 'name === "playback_streams_changed"' in frontend
     assert 'name === "audio_source_health_changed"' in frontend
 
 
-def test_collapsed_bridge_delegates_history_postprocess_to_core() -> None:
-    bridge = _read("ui/phase10_bridge.py")
+def test_single_bridge_delegates_history_postprocess_to_core() -> None:
+    bridge = _read("ui/bridge.py")
     core = _read("core/history_postprocess.py")
     shell = _read("ui/main_window.py")
     assert "generate_history_postprocess" in bridge
@@ -123,9 +123,8 @@ def test_collapsed_bridge_delegates_history_postprocess_to_core() -> None:
     assert "process_text(" in core
     assert "save_derived_output(" in core
     assert 'EventBus().emit("history_changed", session_id)' in core
+    assert "phase10_bridge" not in shell
     assert "final_features_bridge" not in shell
-    assert not (ROOT / "ui" / "final_features_bridge.py").exists()
-    assert not (ROOT / "ui" / "multi_session_bridge.py").exists()
 
 
 def test_webengine_is_local_only_and_external_links_leave_the_app() -> None:
