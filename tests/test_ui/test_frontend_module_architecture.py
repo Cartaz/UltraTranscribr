@@ -28,7 +28,14 @@ def test_domain_modules_are_loaded_without_milestone_chain() -> None:
     assert "node --check ui/web/file_history.js" in workflow
     assert "node --check ui/web/meeting.js" in workflow
 
-    for removed in ("power_user.js", "phase10.js", "phase10_hardening.js", "final_features.js"):
+    for removed in (
+        "power_user.js",
+        "phase10.js",
+        "phase10_hardening.js",
+        "final_features.js",
+        "power_user.css",
+        "phase10.css",
+    ):
         assert not (WEB / removed).exists()
 
 
