@@ -46,20 +46,36 @@ class ApplicationService:
         self.controller.history.migrate_legacy_session_names()
         self._bus = EventBus()
         self._tasks = BackgroundTaskGroup("Application", join_timeout=10.0)
+        self._subscriptions: list[tuple[str, Callable[[Any], None]]] = []
         self._closed = False
 
     def close(self) -> None:
-        """Close application-owned work and the underlying runtime exactly once."""
+        """Close presentation bindings, owned work and runtime exactly once."""
         if self._closed:
             return
         self._closed = True
+        for event, handler in reversed(self._subscriptions):
+            try:
+                self.controller.unsubscribe(event, handler)
+            except Exception:
+                logger.exception("Disiscrizione evento applicativo '%s' fallita", event)
+        self._subscriptions.clear()
         try:
             self._tasks.close()
         finally:
             self.controller.shutdown()
 
     def subscribe(self, event: str, handler: Callable[[Any], None]) -> None:
+        if self._closed:
+            raise RuntimeError("application service chiuso")
         self.controller.subscribe(event, handler)
+        self._subscriptions.append((event, handler))
+
+    def unsubscribe(self, event: str, handler: Callable[[Any], None]) -> None:
+        self.controller.unsubscribe(event, handler)
+        subscription = (event, handler)
+        if subscription in self._subscriptions:
+            self._subscriptions.remove(subscription)
 
     @property
     def settings(self) -> Settings:
