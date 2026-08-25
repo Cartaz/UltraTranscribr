@@ -47,8 +47,9 @@ def test_desktop_shell_delegates_runtime_shutdown_to_controller() -> None:
     assert "self._bridge.stopFile()" not in source
 
 
-def test_bridge_exposes_power_user_operations_without_owning_lifecycle() -> None:
-    source = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+def test_bridge_exposes_power_user_transport_operations() -> None:
+    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    application = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
     for method in (
         "def chooseAudioFiles",
         "def enqueueFileBatch",
@@ -56,9 +57,11 @@ def test_bridge_exposes_power_user_operations_without_owning_lifecycle() -> None
         "def generatePostprocess",
         "def exportHistoryFormat",
     ):
-        assert method in source
-    assert "def closePowerUser" not in source
-    assert 'fmt not in {"txt", "srt", "vtt"}' in source
+        assert method in bridge
+    assert "def closePowerUser" not in bridge
+    assert "fmt not in self._EXPORT_FILTERS" in bridge
+    assert "export_history_format" in application
+    assert "generate_postprocess" in application
 
 
 def test_postprocessing_never_replaces_raw_history_text() -> None:
