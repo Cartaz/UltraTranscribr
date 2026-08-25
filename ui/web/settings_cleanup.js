@@ -21,6 +21,19 @@ function settingsEnsureUI() {
   }
 }
 
+function settingsPopulateModelChoices(values, current) {
+  const select = $("s-model");
+  if (!select) return;
+  select.replaceChildren();
+  (Array.isArray(values) ? values : []).forEach(value => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = modelLabels[value] || value;
+    option.selected = value === current;
+    select.append(option);
+  });
+}
+
 function settingElement(name) {
   return document.querySelector(`#settings-form [name="${name}"]`);
 }
@@ -266,7 +279,7 @@ const settingsModule = {
   },
   hydrate(bootstrap) {
     settingsEnsureUI();
-    options($("s-model"), bootstrap.modelChoices || [], bootstrap.settings?.model_size || "");
+    settingsPopulateModelChoices(bootstrap.modelChoices || [], bootstrap.settings?.model_size || "");
     hydrateSettings(bootstrap.settings || {});
     state.models = Array.isArray(bootstrap.models) ? bootstrap.models : [];
     settingsRenderModels(state.models);
@@ -278,6 +291,7 @@ const settingsModule = {
   },
   lockSettings() {
     const disabled = sessionBusy() || !!state.modelBusy;
+    $("settings-save").disabled = disabled;
     all(".settings-reset").forEach(button => { button.disabled = disabled; });
     settingsRenderModels(state.models);
   },
