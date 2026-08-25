@@ -38,19 +38,18 @@ def test_desktop_shell_captures_local_file_drops() -> None:
     assert "self._bridge.emitDroppedFiles" in source
 
 
-def test_desktop_shell_closes_power_user_coordinator_before_controller_shutdown() -> None:
+def test_desktop_shell_delegates_runtime_shutdown_to_controller() -> None:
     source = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
     assert "def _shutdown_runtime" in source
-    assert source.count("self._bridge.closePowerUser()") == 1
-    assert "finally:\n            self._controller.shutdown()" in source
+    assert "self._bridge.closePowerUser()" not in source
+    assert source.count("self._controller.shutdown()") == 1
     assert "self._bridge.cancelFileQueue()" in source
     assert "self._bridge.stopFile()" not in source
 
 
-def test_bridge_exposes_power_user_operations() -> None:
+def test_bridge_exposes_power_user_operations_without_owning_lifecycle() -> None:
     source = (ROOT / "ui" / "multi_session_bridge.py").read_text(encoding="utf-8")
     for method in (
-        "def closePowerUser",
         "def chooseAudioFiles",
         "def enqueueFileBatch",
         "def searchHistory",
@@ -58,6 +57,7 @@ def test_bridge_exposes_power_user_operations() -> None:
         "def exportHistoryFormat",
     ):
         assert method in source
+    assert "def closePowerUser" not in source
     assert 'fmt not in {"txt", "srt", "vtt"}' in source
 
 
