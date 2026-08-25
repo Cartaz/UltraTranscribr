@@ -136,9 +136,9 @@ def test_audio_subsystem_has_one_managed_pactl_owner() -> None:
     assert "self._controller.audio_discovery_snapshot()" in bridge
     assert "self._controller.request_audio_discovery(" in bridge
     assert "self._controller.request_audio_source_probe(" in bridge
-    assert 'name === "audio_devices_changed"' in frontend
-    assert 'name === "playback_streams_changed"' in frontend
-    assert 'name === "audio_source_health_changed"' in frontend
+    assert 'case "audio_devices_changed":' in frontend
+    assert 'case "playback_streams_changed":' in frontend
+    assert 'case "audio_source_health_changed":' in frontend
 
 
 def test_history_postprocess_and_recordings_live_below_bridge() -> None:
