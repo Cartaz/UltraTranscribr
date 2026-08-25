@@ -123,6 +123,12 @@ class _FakeController:
         self.backend = SimpleNamespace(is_running=False)
         self.buffer = SimpleNamespace(buffer_level=17)
         self.history = SimpleNamespace()
+        self.file_batch = SimpleNamespace(list_jobs=lambda: [])
+        self.meeting = SimpleNamespace(
+            snapshot=lambda: None,
+            is_busy=lambda: False,
+            models=SimpleNamespace(status=lambda: {"ready": False}),
+        )
         self.subscriptions = {}
         self.started = []
         self.updated = []
@@ -245,6 +251,7 @@ def test_start_live_application_converts_selection_to_stream_id(monkeypatch) -> 
             "audio_source": "application",
             "language": "en",
             "stream_id": 42,
+            "record_audio": False,
         }
     ]
 
