@@ -48,7 +48,7 @@ def test_desktop_shell_delegates_runtime_shutdown_to_controller() -> None:
 
 
 def test_bridge_exposes_power_user_operations_without_owning_lifecycle() -> None:
-    source = (ROOT / "ui" / "phase10_bridge.py").read_text(encoding="utf-8")
+    source = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
     for method in (
         "def chooseAudioFiles",
         "def enqueueFileBatch",
@@ -64,7 +64,7 @@ def test_bridge_exposes_power_user_operations_without_owning_lifecycle() -> None
 def test_postprocessing_never_replaces_raw_history_text() -> None:
     history = (ROOT / "core" / "transcript_history.py").read_text(encoding="utf-8")
     postprocess = (ROOT / "core" / "history_postprocess.py").read_text(encoding="utf-8")
-    bridge = (ROOT / "ui" / "phase10_bridge.py").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
     assert "derived_outputs" in history
     assert "save_derived_output" in history
     assert "save_derived_output(session_id, profile, derived)" in postprocess
