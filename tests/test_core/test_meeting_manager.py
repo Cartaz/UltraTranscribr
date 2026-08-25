@@ -1,6 +1,6 @@
 import threading
+import time
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 
@@ -62,6 +62,22 @@ class _FakeCapture:
         self.alive = False
 
 
+class _BlockingCapture(_FakeCapture):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.join_entered = threading.Event()
+        self.release_join = threading.Event()
+
+    def stop(self) -> None:
+        # Model a capture backend that needs time to leave its native read.
+        return
+
+    def join(self, timeout=None) -> None:
+        self.join_entered.set()
+        self.release_join.wait(timeout=timeout or 1.0)
+        self.alive = False
+
+
 class _FakeFileWorker:
     def __init__(self, path, backend, settings, *, language, event_sink, thread_name) -> None:
         del path, backend, settings, language, thread_name
@@ -106,18 +122,32 @@ class _Diarizer:
         return [{"start": 0.0, "end": 0.5, "speaker_id": "SPEAKER_00"}]
 
 
-def _manager(monkeypatch, tmp_path: Path) -> tuple[_Controller, MeetingManager]:
+def _manager(
+    monkeypatch,
+    tmp_path: Path,
+    *,
+    capture_cls=_FakeCapture,
+) -> tuple[_Controller, MeetingManager]:
     recordings = tmp_path / "recordings"
     data = tmp_path / "data"
     monkeypatch.setattr(AppMeta, "RECORDINGS_DIR", recordings)
     monkeypatch.setattr(AppMeta, "DATA_DIR", data)
-    monkeypatch.setattr(meeting_module, "AudioCaptureThread", _FakeCapture)
+    monkeypatch.setattr(meeting_module, "AudioCaptureThread", capture_cls)
     monkeypatch.setattr(meeting_module, "FileTranscriberThread", _FakeFileWorker)
     controller = _Controller(tmp_path)
     manager = MeetingManager(controller)
     manager.models = _Models()
     manager.diarizer = _Diarizer()
     return controller, manager
+
+
+def _wait_until(predicate, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.01)
+    raise AssertionError("condition did not become true before timeout")
 
 
 def test_meeting_start_finish_processes_to_reviewable_session(monkeypatch, tmp_path: Path) -> None:
@@ -127,10 +157,12 @@ def test_meeting_start_finish_processes_to_reviewable_session(monkeypatch, tmp_p
     assert started["status"] == "recording"
 
     finishing = manager.finish()
-    assert finishing["status"] == "transcribing"
+    assert finishing["status"] == "finishing"
     runtime = manager._runtime
-    assert runtime is not None and runtime.processing_thread is not None
-    runtime.processing_thread.join(timeout=2.0)
+    assert runtime is not None
+    _wait_until(lambda: manager.snapshot()["status"] == "completed")
+    if runtime.processing_thread is not None:
+        runtime.processing_thread.join(timeout=2.0)
 
     snapshot = manager.snapshot()
     assert snapshot["status"] == "completed"
@@ -144,6 +176,41 @@ def test_meeting_start_finish_processes_to_reviewable_session(monkeypatch, tmp_p
     assert review[0]["speaker_id"] == "SPEAKER_00"
     assert review[0]["raw_text"] == "Ciao a tutti"
     assert Path(combined["meeting"]["recording"]["path"]).is_file()
+
+
+def test_finish_returns_while_capture_join_is_still_blocked(monkeypatch, tmp_path: Path) -> None:
+    _, manager = _manager(monkeypatch, tmp_path, capture_cls=_BlockingCapture)
+    manager.start(microphone="Test Mic")
+    runtime = manager._runtime
+    assert runtime is not None
+    capture = runtime.capture
+
+    result = manager.finish()
+
+    assert result["status"] == "finishing"
+    assert capture.join_entered.wait(timeout=0.5)
+    assert capture.is_alive()
+    assert manager.snapshot()["status"] == "finishing"
+
+    capture.release_join.set()
+    _wait_until(lambda: manager.snapshot()["status"] == "completed")
+
+
+def test_cancel_returns_while_capture_join_is_still_blocked(monkeypatch, tmp_path: Path) -> None:
+    _, manager = _manager(monkeypatch, tmp_path, capture_cls=_BlockingCapture)
+    manager.start(microphone="Test Mic")
+    runtime = manager._runtime
+    assert runtime is not None
+    capture = runtime.capture
+
+    manager.cancel()
+
+    assert capture.join_entered.wait(timeout=0.5)
+    assert capture.is_alive()
+    assert manager.snapshot()["status"] == "cancelling"
+
+    capture.release_join.set()
+    _wait_until(lambda: manager.snapshot()["status"] == "cancelled")
 
 
 def test_meeting_is_exclusive_with_live_and_file(monkeypatch, tmp_path: Path) -> None:
