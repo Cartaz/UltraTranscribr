@@ -56,8 +56,8 @@ def test_meeting_list_uses_text_content_for_persisted_data() -> None:
 
 def test_meeting_busy_state_extends_shared_session_policy_without_wrapping() -> None:
     source = (WEB / "meeting.js").read_text(encoding="utf-8")
-    dispatcher = (WEB / "multi_live.js").read_text(encoding="utf-8")
+    runtime = (WEB / "ui_runtime.js").read_text(encoding="utf-8")
     assert "isBusy: meetingIsBusy" in source
-    assert "ultraModules.some(module => module.isBusy?.() === true)" in dispatcher
+    assert "uiModules.some(module => module.isBusy?.() === true)" in runtime
     assert "sessionBusy = function" not in source
     assert "Legacy" not in source
