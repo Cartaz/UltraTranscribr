@@ -14,16 +14,20 @@ def test_phase10_frontend_modules_are_loaded_and_ci_checked() -> None:
     assert "node --check ui/web/phase10_hardening.js" in workflow
 
 
-def test_live_microphone_recording_is_opt_in_and_session_scoped() -> None:
+def test_live_microphone_recording_is_opt_in_and_controller_owned() -> None:
     source = (ROOT / "ui" / "web" / "phase10.js").read_text(encoding="utf-8")
     bridge = (ROOT / "ui" / "phase10_bridge.py").read_text(encoding="utf-8")
+    controller = (ROOT / "core" / "app_controller.py").read_text(encoding="utf-8")
     settings = (ROOT / "config" / "settings.py").read_text(encoding="utf-8")
     assert 'id="live-recording" type="checkbox"' in source
     assert 'row.hidden = state.source !== "microphone"' in source
     assert "startLiveWithRecording" in source
     assert "live_microphone_recording: bool = False" in settings
     assert "should_record = bool(record_audio and source == AudioSource.MICROPHONE.value)" in bridge
-    assert "live_microphone_recording=should_record" in bridge
+    assert "self._controller.start_live_session(" in bridge
+    assert "record_audio=should_record" in bridge
+    assert "self._controller.live_sessions.create_session" not in bridge
+    assert "live_microphone_recording=bool(" in controller
 
 
 def test_meeting_tab_always_records_and_supports_review() -> None:
