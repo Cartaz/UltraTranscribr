@@ -154,8 +154,8 @@ function loadScript(src, marker) {
 }
 
 (function loadDomainModules() {
-  loadStyle("power_user.css", "file-history");
-  loadStyle("phase10.css", "meeting");
+  loadStyle("file_history.css", "file-history");
+  loadStyle("meeting.css", "meeting");
   loadScript("file_history.js", "file-history");
   loadScript("meeting.js", "meeting");
 })();
