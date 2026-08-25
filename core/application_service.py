@@ -2,7 +2,7 @@
 
 This module owns coordination rules that must not leak into Qt/WebChannel code:
 workflow exclusivity, background execution, settings/backend transitions, history
-naming and artifact cleanup.  The UI bridge only validates/serializes values and
+naming and artifact cleanup. The UI bridge only validates/serializes values and
 invokes this service.
 """
 from __future__ import annotations
@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import asdict
-from pathlib import Path
 from typing import Any, Callable
 
 from config.settings import AudioSource, ModelSize, Settings
@@ -46,9 +45,6 @@ class ApplicationService:
         self._session_names = SessionNameStore()
         self._bus = EventBus()
 
-    # ------------------------------------------------------------------
-    # Background execution and startup
-    # ------------------------------------------------------------------
     def submit(
         self,
         name: str,
@@ -88,9 +84,6 @@ class ApplicationService:
             "backend_preload_error",
         )
 
-    # ------------------------------------------------------------------
-    # Snapshot and settings
-    # ------------------------------------------------------------------
     def bootstrap_snapshot(self) -> dict[str, Any]:
         discovery = self.controller.audio_discovery_snapshot()
         self.controller.request_audio_discovery()
@@ -146,9 +139,6 @@ class ApplicationService:
             self.controller.backend.reconfigure(current)
         return current
 
-    # ------------------------------------------------------------------
-    # Workflow policy
-    # ------------------------------------------------------------------
     def start_live(
         self,
         *,
@@ -270,9 +260,15 @@ class ApplicationService:
         if self.meeting.is_busy():
             raise RuntimeError(f"Termina la riunione prima di {action}")
 
+    def _require_transcription_idle(self) -> None:
+        if self.controller.active_live_count() > 0 or self.controller.is_file_busy():
+            raise RuntimeError(
+                "Ferma la trascrizione attiva prima di gestire i modelli"
+            )
+
     def download_model(self, model_size: str) -> None:
         self.require_meeting_idle("gestire i modelli")
-        self.controller._require_idle_for_model_operation()
+        self._require_transcription_idle()
         self.submit(
             f"download-model-{model_size}",
             lambda: self.controller.download_model(model_size),
@@ -281,16 +277,13 @@ class ApplicationService:
 
     def delete_model(self, model_size: str) -> None:
         self.require_meeting_idle("gestire i modelli")
-        self.controller._require_idle_for_model_operation()
+        self._require_transcription_idle()
         self.submit(
             f"delete-model-{model_size}",
             lambda: self.controller.delete_model(model_size),
             "model_delete_error",
         )
 
-    # ------------------------------------------------------------------
-    # History, names and recordings
-    # ------------------------------------------------------------------
     def list_history(self, limit: int) -> list[dict[str, Any]]:
         return self._session_names.apply_many(self.controller.list_history(limit))
 
