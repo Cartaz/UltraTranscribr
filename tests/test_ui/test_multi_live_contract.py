@@ -13,10 +13,10 @@ def test_multi_session_assets_are_loaded():
     assert 'src="multi_live.js"' in html
 
 
-def test_live_launcher_remains_available_while_other_sessions_exist():
+def test_live_launcher_remains_available_while_other_live_sessions_exist():
     script = (WEB / "multi_live.js").read_text(encoding="utf-8")
     assert "state.liveSessions = new Map()" in script
-    assert '$("live-start").disabled = !!state.file || missingStream' in script
+    assert "sessionBusy() && !active.length" in script
     assert 'call("stopLiveSession", [session.id])' in script
     assert 'call("drainLiveSession", [session.id])' in script
     assert 'call("removeLiveSession", [session.id])' in script
@@ -41,8 +41,17 @@ def test_session_cards_show_independent_runtime_metrics():
     assert "gradient(" not in css
 
 
+def test_live_module_uses_shared_dispatcher_instead_of_wrapper_chain():
+    script = (WEB / "multi_live.js").read_text(encoding="utf-8")
+    assert "const ultraBaseUI =" in script
+    assert "const liveSessionsModule =" in script
+    assert "ultraRegisterModule(liveSessionsModule)" in script
+    assert "Legacy" not in script
+
+
 def test_webchannel_exposes_session_scoped_operations_and_events():
     bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    application = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
     controller = (ROOT / "core" / "app_controller.py").read_text(encoding="utf-8")
     manager = (ROOT / "core" / "live_sessions.py").read_text(encoding="utf-8")
 
@@ -66,8 +75,8 @@ def test_webchannel_exposes_session_scoped_operations_and_events():
         assert event in bridge
         assert event in manager
     assert "LiveSessionManager" in controller
-    assert "start_live_session" in controller
-    assert "stop_live_session" in controller
+    assert "start_live_session" in application
+    assert "stop_live_session" in application
 
 
 def test_shared_backend_is_serialized_and_reports_queue_wait():
