@@ -134,28 +134,3 @@ const settingsModule = {
 
 UltraUI.register(settingsModule);
 settingsEnsureUI();
-
-function loadStyle(href, marker) {
-  if (document.querySelector(`link[data-ultra-module="${marker}"]`)) return;
-  const style = document.createElement("link");
-  style.rel = "stylesheet";
-  style.href = href;
-  style.dataset.ultraModule = marker;
-  document.head.append(style);
-}
-
-function loadScript(src, marker) {
-  if (document.querySelector(`script[data-ultra-module="${marker}"]`)) return;
-  const script = document.createElement("script");
-  script.src = src;
-  script.async = false;
-  script.dataset.ultraModule = marker;
-  document.head.append(script);
-}
-
-(function loadDomainModules() {
-  loadStyle("file_history.css", "file-history");
-  loadStyle("meeting.css", "meeting");
-  loadScript("file_history.js", "file-history");
-  loadScript("meeting.js", "meeting");
-})();
