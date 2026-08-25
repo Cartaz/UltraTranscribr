@@ -1,12 +1,143 @@
 "use strict";
 
-// Phase 4 augments the existing single-session presentation without replacing
-// the rest of app.js (File, History, Settings, Models and diagnostics).
+// Central extension boundary for the local frontend. app.js remains the base
+// presentation module; feature modules register hooks here instead of replacing
+// one another's globals through Legacy* wrapper chains.
+const ultraBaseUI = {
+  bind,
+  hydrate,
+  event,
+  sessionBusy,
+  liveUI,
+  fileUI,
+  sourceUI,
+  switchView,
+  updateSelectedStreamMeta,
+  startLive,
+  saveSettings,
+  showHistorySession,
+  clearHistorySelection,
+  refreshHistoryList,
+  historyTitle,
+  lockSettings,
+};
+
+const ultraModules = [];
+const ultraRuntime = {bound: false, bootstrap: null};
+
+function ultraRegisterModule(module) {
+  if (!module || typeof module !== "object") return;
+  ultraModules.push(module);
+  if (ultraRuntime.bound && typeof module.bind === "function") module.bind();
+  if (ultraRuntime.bootstrap && typeof module.hydrate === "function") {
+    module.hydrate(ultraRuntime.bootstrap);
+  }
+}
+
+window.UltraUI = Object.freeze({register: ultraRegisterModule});
+
+bind = function() {
+  ultraBaseUI.bind();
+  ultraRuntime.bound = true;
+  ultraModules.forEach(module => module.bind?.());
+};
+
+hydrate = function(bootstrap) {
+  ultraRuntime.bootstrap = bootstrap;
+  let baseBootstrap = bootstrap;
+  ultraModules.forEach(module => {
+    if (typeof module.transformBootstrap === "function") {
+      baseBootstrap = module.transformBootstrap(baseBootstrap) || baseBootstrap;
+    }
+  });
+  ultraBaseUI.hydrate(baseBootstrap);
+  ultraModules.forEach(module => module.hydrate?.(bootstrap));
+};
+
+event = function(name, payload) {
+  const value = json(payload);
+  let consumed = false;
+  ultraModules.forEach(module => {
+    if (module.event?.(name, value, payload) === true) consumed = true;
+  });
+  if (!consumed) ultraBaseUI.event(name, payload);
+};
+
+sessionBusy = function() {
+  return ultraBaseUI.sessionBusy() || ultraModules.some(module => module.isBusy?.() === true);
+};
+
+liveUI = function(statusText) {
+  const handler = ultraModules.find(module => typeof module.liveUI === "function");
+  if (handler) handler.liveUI(statusText);
+  else ultraBaseUI.liveUI(statusText);
+};
+
+fileUI = function(statusText) {
+  ultraBaseUI.fileUI(statusText);
+  ultraModules.forEach(module => module.fileUI?.(statusText));
+};
+
+sourceUI = function() {
+  ultraBaseUI.sourceUI();
+  ultraModules.forEach(module => module.sourceUI?.());
+};
+
+switchView = function(name) {
+  ultraBaseUI.switchView(name);
+  ultraModules.forEach(module => module.view?.(name));
+};
+
+updateSelectedStreamMeta = function() {
+  ultraBaseUI.updateSelectedStreamMeta();
+  ultraModules.forEach(module => module.streamMeta?.());
+};
+
+startLive = function() {
+  const handler = [...ultraModules].reverse().find(module => typeof module.startLive === "function");
+  if (!handler || handler.startLive() !== true) ultraBaseUI.startLive();
+};
+
+saveSettings = function(eventObject) {
+  const handler = [...ultraModules].reverse().find(module => typeof module.saveSettings === "function");
+  if (!handler || handler.saveSettings(eventObject) !== true) ultraBaseUI.saveSettings(eventObject);
+};
+
+showHistorySession = function(session) {
+  ultraBaseUI.showHistorySession(session);
+  ultraModules.forEach(module => module.historySession?.(session));
+};
+
+clearHistorySelection = function() {
+  ultraBaseUI.clearHistorySelection();
+  ultraModules.forEach(module => module.historyClear?.());
+};
+
+refreshHistoryList = function() {
+  const handler = [...ultraModules].reverse().find(module => typeof module.refreshHistoryList === "function");
+  if (!handler || handler.refreshHistoryList() !== true) ultraBaseUI.refreshHistoryList();
+};
+
+historyTitle = function(session) {
+  return ultraModules.reduce(
+    (current, module) => module.historyTitle?.(session, current) ?? current,
+    ultraBaseUI.historyTitle(session),
+  );
+};
+
+lockSettings = function() {
+  ultraBaseUI.lockSettings();
+  ultraModules.forEach(module => module.lockSettings?.());
+};
+
+// ---------------------------------------------------------------------------
+// Live sessions and source availability
+// ---------------------------------------------------------------------------
 state.liveSessions = new Map();
 
 const multiLivePanel = document.querySelector('[data-panel="live"]');
-const multiLiveLegacyTranscript = multiLivePanel?.querySelector('.transcript-card');
-if (multiLiveLegacyTranscript) multiLiveLegacyTranscript.hidden = true;
+const multiLiveTranscript = multiLivePanel?.querySelector('.transcript-card');
+if (multiLiveTranscript) multiLiveTranscript.hidden = true;
 
 if ($("live-start")) $("live-start").textContent = "Aggiungi sessione";
 if ($("live-drain")) $("live-drain").hidden = true;
@@ -33,9 +164,37 @@ multiLiveShell.innerHTML = `
   <div id="live-sessions" class="live-session-list" aria-live="polite"></div>`;
 if (multiLivePanel) multiLivePanel.append(multiLiveShell);
 
-const multiLiveLegacyEvent = event;
-const multiLiveLegacyHydrate = hydrate;
-const multiLiveLegacyBind = bind;
+const sourceUxStyle = document.createElement("style");
+sourceUxStyle.textContent = `
+  .source-health{display:flex;align-items:center;gap:9px;margin:10px 0 0;padding:9px 11px;border-radius:var(--radius-md);background:var(--surface);box-shadow:var(--shadow-inset-small);color:var(--text-secondary);font-size:12px}
+  .source-health strong{color:var(--text-primary);font-size:12px}.source-health small{display:block;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:460px}
+  .source-health.disconnected .orb{background:var(--text-muted);box-shadow:var(--shadow-inset-small)}
+  .source-health.available .orb{background:var(--accent);opacity:.7;box-shadow:0 0 0 1px var(--accent-border),0 0 7px var(--accent-glow-soft)}
+  .source-health.playing .orb{background:var(--accent);box-shadow:0 0 0 1px var(--accent-border),0 0 9px var(--accent-glow)}
+  #source-refresh-all{padding:8px 10px;white-space:nowrap}
+`;
+document.head.append(sourceUxStyle);
+
+const sourceUxInputCard = multiLivePanel?.querySelector(".input-card");
+const sourceUxHead = sourceUxInputCard?.querySelector(".card-head");
+if (sourceUxHead && !$("source-refresh-all")) {
+  const refreshButton = document.createElement("button");
+  refreshButton.id = "source-refresh-all";
+  refreshButton.type = "button";
+  refreshButton.className = "button";
+  refreshButton.textContent = "Aggiorna sorgenti";
+  sourceUxHead.append(refreshButton);
+}
+if (sourceUxInputCard && !$("source-health")) {
+  const health = document.createElement("div");
+  health.id = "source-health";
+  health.className = "source-health disconnected";
+  health.setAttribute("role", "status");
+  health.setAttribute("aria-live", "polite");
+  health.innerHTML = '<span class="orb" aria-hidden="true"></span><div><strong id="source-health-label">Verifica sorgente</strong><small id="source-health-detail">Aggiorna per controllare la disponibilità.</small></div>';
+  const actions = sourceUxInputCard.querySelector(".actions");
+  sourceUxInputCard.insertBefore(health, actions || null);
+}
 
 function multiLiveActiveSessions() {
   return [...state.liveSessions.values()].filter(session => !session.terminal);
@@ -171,16 +330,8 @@ function multiLiveRenderCard(session) {
       () => call("drainLiveSession", [session.id]),
       {selected: !!session.draining, disabled: !active || !!session.draining || !session.capture_running},
     ),
-    multiLiveAction(
-      "Ferma",
-      () => call("stopLiveSession", [session.id]),
-      {disabled: !active},
-    ),
-    multiLiveAction(
-      "Rimuovi",
-      () => call("removeLiveSession", [session.id]),
-      {disabled: active},
-    ),
+    multiLiveAction("Ferma", () => call("stopLiveSession", [session.id]), {disabled: !active}),
+    multiLiveAction("Rimuovi", () => call("removeLiveSession", [session.id]), {disabled: active}),
   );
 
   card.append(head, metrics, bufferRow, transcript, actions);
@@ -213,7 +364,6 @@ function multiLiveSyncAggregate() {
     state.boot.runtime.liveDraining = draining.length > 0;
     state.boot.runtime.liveSessionCount = active.length;
   }
-
   if ($("live-session-count")) {
     $("live-session-count").textContent = `${active.length} ${active.length === 1 ? "sessione attiva" : "sessioni attive"}`;
   }
@@ -223,191 +373,15 @@ function multiLiveSyncAggregate() {
       : "Idle";
   }
   setOrb("live-orb", active.length > 0);
-
   const missingStream = state.source === "application" && !$("live-stream")?.value;
-  if ($("live-start")) $("live-start").disabled = !!state.file || missingStream;
+  if ($("live-start")) $("live-start").disabled = !!state.file || missingStream || sessionBusy() && !active.length;
   if ($("live-stop-all")) $("live-stop-all").disabled = active.length === 0;
   if ($("live-drain-all")) $("live-drain-all").disabled = capturing.length === 0;
   if ($("file-start")) $("file-start").disabled = active.length > 0 || !!state.file;
-
   lockSettings();
   renderModels(state.models);
   if (active.length) globalStatus(`In uso · ${active.length} Live`, "active");
   else if (!state.file) restoreBackendStatus();
-}
-
-// Existing helpers call liveUI frequently. In multi-session mode it only
-// updates the launcher/aggregate state and never disables Start merely because
-// another Live session exists.
-liveUI = function(statusText) {
-  if (!multiLiveActiveSessions().length && statusText && $("live-status")) {
-    $("live-status").textContent = statusText;
-  }
-  multiLiveSyncAggregate();
-};
-
-sessionBusy = function() {
-  return multiLiveActiveSessions().length > 0 || !!state.file;
-};
-
-startLive = function() {
-  const settings = state.boot?.settings || {};
-  const input = selectedInputValue();
-  if (state.file) {
-    notice("Ferma la trascrizione file prima di aggiungere una sessione Live", true);
-    return;
-  }
-  if (state.source === "application" && !input) {
-    notice("Seleziona uno stream applicazione da trascrivere", true);
-    return;
-  }
-  if ($("live-status")) $("live-status").textContent = "Creazione sessione";
-  call("startLive", [state.source, input, settings.language || "auto"]);
-};
-
-function multiLiveHandleRoute(value) {
-  if (!value || typeof value !== "object" || !value.session_id) return;
-  const session = state.liveSessions.get(value.session_id);
-  if (!session) return;
-  session.route_status = String(value.status || session.route_status || "");
-  if (value.stream?.display_name) session.source_path = value.stream.display_name;
-  multiLiveRender();
-  if (value.status === "disconnected") {
-    notice(`Stream disconnesso: ${multiLiveTitle(session)}. Verrà riconnesso solo con una corrispondenza univoca.`, true);
-  } else if (value.status === "ambiguous") {
-    notice(`Routing ambiguo per ${multiLiveTitle(session)}: nessuno stream è stato scelto automaticamente.`, true);
-  } else if (value.status === "reconnected") {
-    notice(`Stream riconnesso: ${multiLiveTitle(session)}.`);
-  }
-}
-
-event = function(name, payload) {
-  const value = json(payload);
-  switch (name) {
-    case "live_session_created":
-    case "live_session_updated":
-      multiLiveUpsert(value);
-      multiLiveRender();
-      multiLiveSyncAggregate();
-      if (name === "live_session_updated" && value?.terminal && historyIsVisible()) refreshHistory();
-      return;
-    case "live_session_buffer_level": {
-      const session = state.liveSessions.get(value?.session_id);
-      if (session) {
-        session.buffer_level = Number(value.level) || 0;
-        multiLiveRender();
-      }
-      return;
-    }
-    case "live_session_queue_wait": {
-      const session = state.liveSessions.get(value?.session_id);
-      if (session) {
-        session.queue_wait_ms = Number(value.wait_ms) || 0;
-        session.queue_peak_ms = Number(value.peak_ms) || 0;
-        session.queue_samples = (Number(session.queue_samples) || 0) + 1;
-        multiLiveRender();
-      }
-      return;
-    }
-    case "live_session_text": {
-      const session = state.liveSessions.get(value?.session_id);
-      if (session) {
-        const addition = String(value.text || "").trim();
-        session.text = (String(session.text || "").trim() + (addition ? ` ${addition}` : "")).trim();
-        multiLiveRender();
-      }
-      return;
-    }
-    case "live_session_route_status":
-      multiLiveHandleRoute(value);
-      return;
-    case "live_session_error":
-      if (value?.session_id && state.liveSessions.has(value.session_id)) {
-        const session = state.liveSessions.get(value.session_id);
-        session.status = "error";
-        session.terminal = true;
-      }
-      multiLiveRender();
-      multiLiveSyncAggregate();
-      showError(value?.error || value, "live");
-      return;
-    case "live_session_removed":
-      if (value?.session_id) state.liveSessions.delete(value.session_id);
-      multiLiveRender();
-      multiLiveSyncAggregate();
-      return;
-    case "live_session_start_error":
-    case "live_session_action_error":
-      showError(value, "live");
-      multiLiveSyncAggregate();
-      return;
-    case "recovery_audio_saved":
-      if (value && typeof value === "object" && value.path) {
-        notice("Audio non trascritto salvato in Recovery", true);
-        if (historyIsVisible()) refreshRecovery();
-        return;
-      }
-      break;
-  }
-  multiLiveLegacyEvent(name, payload);
-};
-
-hydrate = function(bootstrap) {
-  const adjusted = {
-    ...bootstrap,
-    runtime: {
-      ...(bootstrap.runtime || {}),
-      liveRunning: false,
-      liveDraining: false,
-      bufferLevel: 0,
-    },
-  };
-  multiLiveLegacyHydrate(adjusted);
-  state.liveSessions.clear();
-  (bootstrap.liveSessions || []).forEach(multiLiveUpsert);
-  multiLiveRender();
-  multiLiveSyncAggregate();
-};
-
-bind = function() {
-  multiLiveLegacyBind();
-  if ($("live-stop-all")) $("live-stop-all").onclick = () => call("stopAllLive");
-  if ($("live-drain-all")) $("live-drain-all").onclick = () => call("drainAllLive");
-};
-
-// ---------------------------------------------------------------------------
-// Phase 5 — source availability UX and deterministic refresh on Live entry.
-// ---------------------------------------------------------------------------
-const sourceUxStyle = document.createElement("style");
-sourceUxStyle.textContent = `
-  .source-health{display:flex;align-items:center;gap:9px;margin:10px 0 0;padding:9px 11px;border-radius:var(--radius-md);background:var(--surface);box-shadow:var(--shadow-inset-small);color:var(--text-secondary);font-size:12px}
-  .source-health strong{color:var(--text-primary);font-size:12px}.source-health small{display:block;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:460px}
-  .source-health.disconnected .orb{background:var(--text-muted);box-shadow:var(--shadow-inset-small)}
-  .source-health.available .orb{background:var(--accent);opacity:.7;box-shadow:0 0 0 1px var(--accent-border),0 0 7px var(--accent-glow-soft)}
-  .source-health.playing .orb{background:var(--accent);box-shadow:0 0 0 1px var(--accent-border),0 0 9px var(--accent-glow)}
-  #source-refresh-all{padding:8px 10px;white-space:nowrap}
-`;
-document.head.append(sourceUxStyle);
-
-const sourceUxInputCard = multiLivePanel?.querySelector(".input-card");
-const sourceUxHead = sourceUxInputCard?.querySelector(".card-head");
-if (sourceUxHead && !$("source-refresh-all")) {
-  const refreshButton = document.createElement("button");
-  refreshButton.id = "source-refresh-all";
-  refreshButton.type = "button";
-  refreshButton.className = "button";
-  refreshButton.textContent = "Aggiorna sorgenti";
-  sourceUxHead.append(refreshButton);
-}
-if (sourceUxInputCard && !$("source-health")) {
-  const health = document.createElement("div");
-  health.id = "source-health";
-  health.className = "source-health disconnected";
-  health.setAttribute("role", "status");
-  health.setAttribute("aria-live", "polite");
-  health.innerHTML = '<span class="orb" aria-hidden="true"></span><div><strong id="source-health-label">Verifica sorgente</strong><small id="source-health-detail">Aggiorna per controllare la disponibilità.</small></div>';
-  const actions = sourceUxInputCard.querySelector(".actions");
-  sourceUxInputCard.insertBefore(health, actions || null);
 }
 
 function renderSourceHealth(payload) {
@@ -454,70 +428,175 @@ function refreshAllAudioSources() {
   refreshDevices();
 }
 
-const sourceUxLegacySwitchView = switchView;
-switchView = function(name) {
-  sourceUxLegacySwitchView(name);
-  if (name === "live") refreshAllAudioSources();
-};
+function multiLiveHandleRoute(value) {
+  if (!value || typeof value !== "object" || !value.session_id) return;
+  const session = state.liveSessions.get(value.session_id);
+  if (!session) return;
+  session.route_status = String(value.status || session.route_status || "");
+  if (value.stream?.display_name) session.source_path = value.stream.display_name;
+  multiLiveRender();
+  if (value.status === "disconnected") {
+    notice(`Stream disconnesso: ${multiLiveTitle(session)}. Verrà riconnesso solo con una corrispondenza univoca.`, true);
+  } else if (value.status === "ambiguous") {
+    notice(`Routing ambiguo per ${multiLiveTitle(session)}: nessuno stream è stato scelto automaticamente.`, true);
+  } else if (value.status === "reconnected") {
+    notice(`Stream riconnesso: ${multiLiveTitle(session)}.`);
+  }
+}
 
-const sourceUxLegacySourceUI = sourceUI;
-sourceUI = function() {
-  sourceUxLegacySourceUI();
-  if (backend) probeSelectedAudioSource();
-};
-
-const sourceUxLegacyStreamMeta = updateSelectedStreamMeta;
-updateSelectedStreamMeta = function() {
-  sourceUxLegacyStreamMeta();
-  probeSelectedAudioSource();
-};
-
-const sourceUxLegacyHydrate = hydrate;
-hydrate = function(bootstrap) {
-  sourceUxLegacyHydrate(bootstrap);
-  refreshAllAudioSources();
-};
-
-const sourceUxLegacyEvent = event;
-event = function(name, payload) {
-  const value = json(payload);
-  sourceUxLegacyEvent(name, payload);
-  if (name === "audio_devices_changed") {
-    if (state.source !== "application" && Array.isArray(value)) {
-      devices(state.source, value);
+const liveSessionsModule = {
+  transformBootstrap(bootstrap) {
+    return {
+      ...bootstrap,
+      runtime: {
+        ...(bootstrap.runtime || {}),
+        liveRunning: false,
+        liveDraining: false,
+        bufferLevel: 0,
+      },
+    };
+  },
+  hydrate(bootstrap) {
+    state.liveSessions.clear();
+    (bootstrap.liveSessions || []).forEach(multiLiveUpsert);
+    multiLiveRender();
+    multiLiveSyncAggregate();
+    refreshAllAudioSources();
+  },
+  bind() {
+    if ($("live-stop-all")) $("live-stop-all").onclick = () => call("stopAllLive");
+    if ($("live-drain-all")) $("live-drain-all").onclick = () => call("drainAllLive");
+    if ($("source-refresh-all")) $("source-refresh-all").onclick = refreshAllAudioSources;
+    if ($("live-device")) $("live-device").onchange = () => {
+      updateLiveSummary();
+      probeSelectedAudioSource();
+    };
+    if ($("live-stream")) $("live-stream").onchange = updateSelectedStreamMeta;
+    if ($("stream-refresh")) $("stream-refresh").onclick = refreshStreams;
+  },
+  isBusy() {
+    return multiLiveActiveSessions().length > 0 || !!state.file;
+  },
+  liveUI(statusText) {
+    if (!multiLiveActiveSessions().length && statusText && $("live-status")) {
+      $("live-status").textContent = statusText;
     }
-    return;
-  }
-  if (name === "playback_streams_changed") {
-    if (Array.isArray(value)) renderPlaybackStreams(value);
-    return;
-  }
-  if (name === "audio_source_health_changed") {
-    const sameSource = value?.source === state.source;
-    const sameSelection = String(value?.selected_input || "") === String(selectedInputValue() || "");
-    if (sameSource && sameSelection) renderSourceHealth(value);
-    return;
-  }
-  if (name === "audio_discovery_error") {
-    showError(value, "audio");
-    return;
-  }
-  if (name === "live_session_route_status" || name === "live_session_updated" || name === "live_session_removed") {
+    multiLiveSyncAggregate();
+  },
+  startLive() {
+    const settings = state.boot?.settings || {};
+    const input = selectedInputValue();
+    if (state.file) {
+      notice("Ferma la trascrizione file prima di aggiungere una sessione Live", true);
+      return true;
+    }
+    if (state.source === "application" && !input) {
+      notice("Seleziona uno stream applicazione da trascrivere", true);
+      return true;
+    }
+    if ($("live-status")) $("live-status").textContent = "Creazione sessione";
+    call("startLive", [state.source, input, settings.language || "auto"]);
+    return true;
+  },
+  view(name) {
+    if (name === "live") refreshAllAudioSources();
+  },
+  sourceUI() {
+    if (backend) probeSelectedAudioSource();
+  },
+  streamMeta() {
     probeSelectedAudioSource();
-  }
+  },
+  event(name, value) {
+    switch (name) {
+      case "live_session_created":
+      case "live_session_updated":
+        multiLiveUpsert(value);
+        multiLiveRender();
+        multiLiveSyncAggregate();
+        if (name === "live_session_updated" && value?.terminal && historyIsVisible()) refreshHistory();
+        probeSelectedAudioSource();
+        return true;
+      case "live_session_buffer_level": {
+        const session = state.liveSessions.get(value?.session_id);
+        if (session) {
+          session.buffer_level = Number(value.level) || 0;
+          multiLiveRender();
+        }
+        return true;
+      }
+      case "live_session_queue_wait": {
+        const session = state.liveSessions.get(value?.session_id);
+        if (session) {
+          session.queue_wait_ms = Number(value.wait_ms) || 0;
+          session.queue_peak_ms = Number(value.peak_ms) || 0;
+          session.queue_samples = (Number(session.queue_samples) || 0) + 1;
+          multiLiveRender();
+        }
+        return true;
+      }
+      case "live_session_text": {
+        const session = state.liveSessions.get(value?.session_id);
+        if (session) {
+          const addition = String(value.text || "").trim();
+          session.text = (String(session.text || "").trim() + (addition ? ` ${addition}` : "")).trim();
+          multiLiveRender();
+        }
+        return true;
+      }
+      case "live_session_route_status":
+        multiLiveHandleRoute(value);
+        probeSelectedAudioSource();
+        return true;
+      case "live_session_error":
+        if (value?.session_id && state.liveSessions.has(value.session_id)) {
+          const session = state.liveSessions.get(value.session_id);
+          session.status = "error";
+          session.terminal = true;
+        }
+        multiLiveRender();
+        multiLiveSyncAggregate();
+        showError(value?.error || value, "live");
+        return true;
+      case "live_session_removed":
+        if (value?.session_id) state.liveSessions.delete(value.session_id);
+        multiLiveRender();
+        multiLiveSyncAggregate();
+        probeSelectedAudioSource();
+        return true;
+      case "live_session_start_error":
+      case "live_session_action_error":
+        showError(value, "live");
+        multiLiveSyncAggregate();
+        return true;
+      case "audio_devices_changed":
+        if (state.source !== "application" && Array.isArray(value)) devices(state.source, value);
+        return true;
+      case "playback_streams_changed":
+        if (Array.isArray(value)) renderPlaybackStreams(value);
+        return true;
+      case "audio_source_health_changed": {
+        const sameSource = value?.source === state.source;
+        const sameSelection = String(value?.selected_input || "") === String(selectedInputValue() || "");
+        if (sameSource && sameSelection) renderSourceHealth(value);
+        return true;
+      }
+      case "audio_discovery_error":
+        showError(value, "audio");
+        return true;
+      case "recovery_audio_saved":
+        if (value && typeof value === "object" && value.path) {
+          notice("Audio non trascritto salvato in Recovery", true);
+          if (historyIsVisible()) refreshRecovery();
+          return true;
+        }
+        return false;
+      default:
+        return false;
+    }
+  },
 };
 
-const sourceUxLegacyBind = bind;
-bind = function() {
-  sourceUxLegacyBind();
-  if ($("source-refresh-all")) $("source-refresh-all").onclick = refreshAllAudioSources;
-  if ($("live-device")) $("live-device").onchange = () => {
-    updateLiveSummary();
-    probeSelectedAudioSource();
-  };
-  if ($("live-stream")) $("live-stream").onchange = updateSelectedStreamMeta;
-  if ($("stream-refresh")) $("stream-refresh").onclick = refreshStreams;
-};
-
+ultraRegisterModule(liveSessionsModule);
 multiLiveRender();
 multiLiveSyncAggregate();
