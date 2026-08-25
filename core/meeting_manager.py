@@ -5,7 +5,7 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Protocol
 
 from config.settings import AudioSource, Settings
 from core.audio_capture import AudioCaptureThread
@@ -15,8 +15,34 @@ from core.meeting_store import MeetingStore
 from core.microphone_recording import MicrophoneRecorder, RecordingInfo
 from core.sink_finder import find_source
 from core.speaker_diarization import DiarizationModelManager, SpeakerDiarizer, align_speakers
+from core.transcript_history import TranscriptHistoryStore
+from core.whisper_backend import WhisperBackend
 
 logger = logging.getLogger(__name__)
+
+
+class MeetingController(Protocol):
+    """Small application contract required by MeetingManager."""
+
+    @property
+    def settings(self) -> Settings: ...
+
+    @property
+    def history(self) -> TranscriptHistoryStore: ...
+
+    @property
+    def backend(self) -> WhisperBackend: ...
+
+    def active_live_count(self) -> int: ...
+
+    def is_file_busy(self) -> bool: ...
+
+    def ensure_backend_started(
+        self,
+        *,
+        vad: Optional[bool] = None,
+        settings: Optional[Settings] = None,
+    ) -> None: ...
 
 
 class _RecordingOnlyBuffer:
@@ -54,7 +80,7 @@ class MeetingRuntime:
 class MeetingManager:
     """Own at most one active Meeting while keeping review data persistent."""
 
-    def __init__(self, controller) -> None:
+    def __init__(self, controller: MeetingController) -> None:
         self._controller = controller
         self.store = MeetingStore(controller.history)
         self.models = DiarizationModelManager()
