@@ -32,32 +32,50 @@ def test_meeting_manager_depends_on_narrow_application_contract() -> None:
     assert "MeetingManager(_MeetingControllerView(self))" in controller
 
 
-def test_application_controller_owns_workflow_services_and_shutdown() -> None:
+def test_application_controller_owns_runtime_services_and_shutdown() -> None:
     controller = _read("core/app_controller.py")
     bridge = _read("ui/bridge.py")
+    application = _read("core/application_service.py")
     shell = _read("ui/main_window.py")
+    main = _read("main.py")
     assert "self._meeting = MeetingManager(_MeetingControllerView(self))" in controller
     assert "self._file_batch = FileBatchCoordinator(_FileBatchControllerView(self))" in controller
     assert "self._meeting.shutdown()" in controller
     assert "self._file_batch.close()" in controller
     assert "MeetingManager(" not in bridge
     assert "FileBatchCoordinator(" not in bridge
-    assert "self._meeting = controller.meeting" in bridge
-    assert "self._file_batch = controller.file_batch" in bridge
+    assert "self.meeting = controller.meeting" in application
+    assert "self.file_batch = controller.file_batch" in application
+    assert "application = ApplicationService(controller)" in main
+    assert "BackendBridge(controller, application, self)" in shell
     assert "closePowerUser" not in shell
 
 
-def test_single_bridge_uses_public_controller_api_only() -> None:
-    source = _read("ui/bridge.py")
-    assert "self._controller._file_busy" not in source
-    assert "self._controller._startup_thread" not in source
-    assert "getattr(self._controller" not in source
-    assert "self._controller.live_sessions" not in source
-    assert "self._controller.start_live_session(" in source
-    assert "self._controller.is_file_busy()" in source
+def test_webchannel_bridge_is_transport_only() -> None:
+    bridge = _read("ui/bridge.py")
+    assert "threading" not in bridge
+    assert "SessionNameStore" not in bridge
+    assert "generate_history_postprocess" not in bridge
+    assert "delete_recording" not in bridge
+    assert "recording_info" not in bridge
+    assert "backend.reconfigure" not in bridge
+    assert "start_live_session(" not in bridge
+    assert "start_file_transcription(" not in bridge
+    assert "self._application.start_live(" in bridge
+    assert "self._application.start_file(" in bridge
+    assert "self._application.apply_settings(" in bridge
     assert not (ROOT / "ui" / "multi_session_bridge.py").exists()
     assert not (ROOT / "ui" / "phase10_bridge.py").exists()
     assert not (ROOT / "ui" / "final_features_bridge.py").exists()
+
+
+def test_application_service_uses_public_controller_api_only() -> None:
+    source = _read("core/application_service.py")
+    assert "controller._" not in source
+    assert "self.controller._" not in source
+    assert "getattr(self.controller" not in source
+    assert "self.controller.start_live_session(" in source
+    assert "self.controller.is_file_busy()" in source
 
 
 def test_meeting_control_waits_are_owned_by_core_not_webchannel_bridge() -> None:
@@ -70,6 +88,15 @@ def test_meeting_control_waits_are_owned_by_core_not_webchannel_bridge() -> None
     assert "runtime.capture.join(" not in bridge
     assert "runtime.control_thread.join(" not in bridge
     assert "transcriber.join(" not in bridge
+
+
+def test_background_work_is_owned_below_webchannel() -> None:
+    bridge = _read("ui/bridge.py")
+    application = _read("core/application_service.py")
+    assert "threading.Thread(" not in bridge
+    assert "threading.Thread(" in application
+    assert 'name=f"Application-{name}"' in application
+    assert "self._bus.emit(error_event" in application
 
 
 def test_audio_subsystem_has_one_managed_pactl_owner() -> None:
@@ -115,18 +142,20 @@ def test_audio_subsystem_has_one_managed_pactl_owner() -> None:
     assert 'name === "audio_source_health_changed"' in frontend
 
 
-def test_single_bridge_delegates_history_postprocess_to_core() -> None:
+def test_history_postprocess_and_recordings_live_below_bridge() -> None:
     bridge = _read("ui/bridge.py")
+    application = _read("core/application_service.py")
     core = _read("core/history_postprocess.py")
-    shell = _read("ui/main_window.py")
-    assert "generate_history_postprocess" in bridge
-    assert "process_text(" not in bridge
-    assert "save_derived_output(" not in bridge
+    assert "generate_history_postprocess" not in bridge
+    assert "SessionNameStore" not in bridge
+    assert "delete_recording" not in bridge
+    assert "generate_history_postprocess" in application
+    assert "SessionNameStore" in application
+    assert "delete_recording" in application
+    assert "process_text(" not in application
+    assert "save_derived_output(" not in application
     assert "process_text(" in core
     assert "save_derived_output(" in core
-    assert 'EventBus().emit("history_changed", session_id)' in core
-    assert "phase10_bridge" not in shell
-    assert "final_features_bridge" not in shell
 
 
 def test_webengine_is_local_only_and_external_links_leave_the_app() -> None:
