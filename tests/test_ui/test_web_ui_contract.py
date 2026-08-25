@@ -39,7 +39,7 @@ def test_web_ui_files_and_native_stack_are_present() -> None:
     assert not (ROOT / "ui" / "final_features_bridge.py").exists()
 
 
-def test_dark_neumorphism_uses_exact_surface_and_accent_without_gradients() -> None:
+def test_dark_neumorphism_uses_exact_surface_accent_and_radius_tokens() -> None:
     html = (WEB / "index.html").read_text(encoding="utf-8")
     linked_styles = re.findall(r'<link[^>]+rel="stylesheet"[^>]+href="([^"]+)"', html)
     assert linked_styles
@@ -48,6 +48,10 @@ def test_dark_neumorphism_uses_exact_surface_and_accent_without_gradients() -> N
     css = (WEB / "styles.css").read_text(encoding="utf-8").lower()
     assert "--surface: rgb(20, 20, 20)" in css
     assert "--accent: rgb(255, 102, 0)" in css
+    assert "--radius-xl: 28px" in css
+    assert "--radius-lg: 22px" in css
+    assert "--radius-md: 16px" in css
+    assert "--radius-sm: 12px" in css
     assert "box-shadow" in css
     assert "inset" in css
     for stylesheet in styles:
