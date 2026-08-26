@@ -19,7 +19,6 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QMainWindow
 
 from config.constants import AppMeta, UIConstraints
-from core.app_controller import AppController
 from core.application_service import ApplicationService
 from ui.bridge import BackendBridge, BridgeLogHandler
 
@@ -85,13 +84,8 @@ class DropAwareWebView(QWebEngineView):
 
 
 class MainWindow(QMainWindow):
-    def __init__(
-        self,
-        controller: AppController,
-        application: ApplicationService,
-    ) -> None:
+    def __init__(self, application: ApplicationService) -> None:
         super().__init__()
-        self._controller = controller
         self._application = application
         self._tray_icon = None
         self._closing = False
@@ -105,10 +99,10 @@ class MainWindow(QMainWindow):
             UIConstraints.MIN_WINDOW_WIDTH,
             UIConstraints.MIN_WINDOW_HEIGHT,
         )
-        settings = controller.settings
+        desktop = application.desktop_state()
         self.resize(
-            max(UIConstraints.MIN_WINDOW_WIDTH, settings.window_width),
-            max(UIConstraints.MIN_WINDOW_HEIGHT, settings.window_height),
+            max(UIConstraints.MIN_WINDOW_WIDTH, int(desktop["window_width"])),
+            max(UIConstraints.MIN_WINDOW_HEIGHT, int(desktop["window_height"])),
         )
 
         self._bridge = BackendBridge(application, self)
@@ -143,14 +137,14 @@ class MainWindow(QMainWindow):
 
     def set_tray_icon(self, tray_icon) -> None:
         self._tray_icon = tray_icon
-        self._tray_icon.set_running(self._controller.active_live_count() > 0)
+        self._tray_icon.set_running(self._application.live_active())
 
     def on_start(self) -> None:
-        settings = self._controller.settings
+        desktop = self._application.desktop_state()
         self._bridge.startLive(
-            settings.audio_source,
-            settings.sink_name or "",
-            settings.language,
+            str(desktop["audio_source"]),
+            str(desktop["sink_name"] or ""),
+            str(desktop["language"]),
         )
 
     def on_stop(self) -> None:
@@ -163,23 +157,17 @@ class MainWindow(QMainWindow):
         self._closing = True
         self._geometry_save_timer.stop()
         self._persist_window_geometry()
-        try:
-            self._application.close()
-        finally:
-            logging.getLogger().removeHandler(self._log_handler)
-            app = QApplication.instance()
-            if app is not None:
-                app.quit()
+        logging.getLogger().removeHandler(self._log_handler)
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if not self._closing:
             self._closing = True
             self._geometry_save_timer.stop()
             self._persist_window_geometry()
-            try:
-                self._application.close()
-            finally:
-                logging.getLogger().removeHandler(self._log_handler)
+            logging.getLogger().removeHandler(self._log_handler)
         event.accept()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
@@ -190,14 +178,8 @@ class MainWindow(QMainWindow):
     def _persist_window_geometry(self) -> None:
         width = max(UIConstraints.MIN_WINDOW_WIDTH, int(self.width()))
         height = max(UIConstraints.MIN_WINDOW_HEIGHT, int(self.height()))
-        current = self._controller.settings
-        if current.window_width == width and current.window_height == height:
-            return
         try:
-            self._controller.update_settings(
-                window_width=width,
-                window_height=height,
-            )
+            self._application.persist_window_geometry(width, height)
         except Exception:
             logger.exception("Salvataggio automatico geometria finestra fallito")
 
@@ -206,4 +188,4 @@ class MainWindow(QMainWindow):
         if self._tray_icon is None:
             return
         if event.startswith("live_session_"):
-            self._tray_icon.set_running(self._controller.active_live_count() > 0)
+            self._tray_icon.set_running(self._application.live_active())
