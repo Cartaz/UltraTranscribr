@@ -67,13 +67,15 @@ def test_app_is_the_single_explicit_frontend_composition_root() -> None:
     assert "const uiModules = []" in app
     assert "const uiRuntime = {bound: false, bootstrap: null}" in app
     assert "function registerUIModule" in app
-    assert "function lastUIHandler" in app
+    assert "function notifyUIModules" in app
+    assert "function lastUIHandler" not in app
     assert "window.UltraUI = Object.freeze" in app
     assert "uiRuntime.bound = true" in app
     assert "uiRuntime.bootstrap = bootstrap" in app
     assert "module.event?.(name, value, payload)" in app
     assert "module.isBusy?.() === true" in app
-    assert "module.hydrate?.(moduleBootstrap)" in app
+    assert "module.hydrate?.(bootstrap)" in app
+    assert "transformBootstrap" not in app
 
     for global_name in (
         "bind",
@@ -115,6 +117,69 @@ def test_app_is_the_single_explicit_frontend_composition_root() -> None:
             "refreshHistoryList",
         ):
             assert f"{global_name} = function" not in source
+
+
+def test_live_source_presentation_is_owned_by_live_module() -> None:
+    app = _read("app.js")
+    live = _read("multi_live.js")
+    settings = _read("settings_cleanup.js")
+
+    for token in (
+        'source: "system"',
+        "selectedStreamId",
+        "function normalizeSource",
+        "function sourceLabel",
+        "function selectedDeviceLabel",
+        "function devices",
+        "function streamMeta",
+        "function selectedStream",
+        "function selectedInputValue",
+        "function selectedInputLabel",
+        "function updateLiveSummary",
+        "function updateSelectedStreamMeta",
+        "function renderPlaybackStreams",
+        "function refreshStreams",
+        "function refreshDevices",
+        "function sourceUI",
+        "function startLive",
+        '$("live-start").onclick',
+        '$("live-stream").onchange',
+        '$("stream-refresh").onclick',
+    ):
+        assert token not in app
+
+    for token in (
+        'state.source = "system"',
+        "state.selectedStreamId = null",
+        "function normalizeSource",
+        "function sourceLabel",
+        "function selectedDeviceLabel",
+        "function devices",
+        "function streamMeta",
+        "function selectedStream",
+        "function selectedInputValue",
+        "function selectedInputLabel",
+        "function updateLiveSummary",
+        "function updateSelectedStreamMeta",
+        "function renderPlaybackStreams",
+        "function sourceUI",
+        "function multiLiveRefreshStreams",
+        "function multiLiveRefreshDevices",
+        '$("live-start").onclick',
+        'case "config_changed"',
+    ):
+        assert token in live
+
+    # Settings updates the canonical settings view only. Live reacts to the
+    # controller's config_changed event instead of calling Live globals.
+    for token in (
+        "state.source =",
+        "normalizeSource(",
+        "sourceUI(",
+        "refreshDevices(",
+        "refreshStreams(",
+    ):
+        assert token not in settings
 
 
 def test_settings_and_model_ui_are_owned_by_settings_module() -> None:
