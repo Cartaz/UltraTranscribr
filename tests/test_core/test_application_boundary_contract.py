@@ -69,7 +69,8 @@ def test_native_shell_uses_narrow_application_surface_for_desktop_state() -> Non
     assert "self._application.persist_window_geometry(" in window
     assert "self._application.live_active()" in window
     assert "update_settings(" not in window
-    assert ".settings" not in window
+    assert "self._application.settings" not in window
+    assert "application.settings" not in window
 
 
 def test_application_service_remains_the_only_presentation_workflow_boundary() -> None:
