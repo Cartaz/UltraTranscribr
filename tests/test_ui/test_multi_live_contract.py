@@ -16,7 +16,9 @@ def test_multi_session_assets_are_loaded():
 def test_live_launcher_remains_available_while_other_live_sessions_exist():
     script = (WEB / "multi_live.js").read_text(encoding="utf-8")
     assert "state.liveSessions = new Map()" in script
-    assert "sessionBusy() && !active.length" in script
+    assert 'const missingStream = state.source === "application"' in script
+    assert '$("live-start").disabled = !!state.file || missingStream' in script
+    assert "sessionBusy() && !active.length" not in script
     assert 'call("stopLiveSession", [session.id])' in script
     assert 'call("drainLiveSession", [session.id])' in script
     assert 'call("removeLiveSession", [session.id])' in script
