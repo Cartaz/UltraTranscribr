@@ -214,9 +214,6 @@ function applySettingsPayload(payload, successMessage) {
     }
     state.boot.settings = response.settings;
     hydrateSettings(response.settings);
-    state.source = normalizeSource(response.settings.audio_source);
-    sourceUI();
-    refreshDevices();
     settingsRenderModels(state.models);
     notice(successMessage);
   });
