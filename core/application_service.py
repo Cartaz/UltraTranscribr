@@ -50,7 +50,7 @@ class ApplicationService:
         self._closed = False
 
     def close(self) -> None:
-        """Close presentation bindings, owned work and runtime exactly once."""
+        """Release application-boundary subscriptions and owned work exactly once."""
         if self._closed:
             return
         self._closed = True
@@ -60,10 +60,7 @@ class ApplicationService:
             except Exception:
                 logger.exception("Disiscrizione evento applicativo '%s' fallita", event)
         self._subscriptions.clear()
-        try:
-            self._tasks.close()
-        finally:
-            self.controller.shutdown()
+        self._tasks.close()
 
     def subscribe(self, event: str, handler: Callable[[Any], None]) -> None:
         if self._closed:
@@ -80,6 +77,29 @@ class ApplicationService:
     @property
     def settings(self) -> Settings:
         return self.controller.settings
+
+    def desktop_state(self) -> dict[str, Any]:
+        """Return the small native-shell state surface without leaking AppController."""
+        settings = self.controller.settings
+        return {
+            "window_width": settings.window_width,
+            "window_height": settings.window_height,
+            "audio_source": settings.audio_source,
+            "sink_name": settings.sink_name,
+            "language": settings.language,
+            "live_active": self.controller.active_live_count() > 0,
+        }
+
+    def persist_window_geometry(self, width: int, height: int) -> None:
+        """Persist native window geometry independently from workflow settings rules."""
+        settings = self.controller.settings
+        if settings.window_width == width and settings.window_height == height:
+            return
+        self.controller.update_settings(window_width=width, window_height=height)
+
+    def live_active(self) -> bool:
+        """Expose the tray's coarse runtime indicator without leaking controller state."""
+        return self.controller.active_live_count() > 0
 
     def submit(
         self,
