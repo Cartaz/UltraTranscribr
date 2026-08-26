@@ -8,7 +8,7 @@ import core.audio_routing as routing
 from core.audio_routing import PlaybackStream, PulseAudioRouter, StreamRouteLease
 
 
-PACTl_STREAMS = r'''
+PACTL_STREAMS = r'''
 Sink Input #42
 	Driver: PipeWire
 	Sink: 7
@@ -30,6 +30,25 @@ Sink Input #43
 		application.process.binary = "firefox"
 		node.name = "Firefox"
 '''
+
+
+class FakePactlRunner:
+    def __init__(self, handler=None) -> None:
+        self.handler = handler or (lambda _args: "")
+        self.commands: list[list[str]] = []
+        self.cancelled = False
+        self.closed = False
+
+    def run(self, args: list[str], *, timeout: float = 10.0):
+        del timeout
+        self.commands.append(list(args))
+        return self.handler(args)
+
+    def cancel_all(self) -> None:
+        self.cancelled = True
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def stream(
@@ -54,10 +73,9 @@ def stream(
 
 def test_parse_playback_streams_keeps_each_sink_input_separate() -> None:
     streams = routing.parse_playback_streams(
-        PACTl_STREAMS,
+        PACTL_STREAMS,
         {7: "alsa_output.speakers"},
     )
-
     assert [item.id for item in streams] == [42, 43]
     assert streams[0].application_name == "Firefox"
     assert streams[0].media_name == "YouTube — Interview"
@@ -73,22 +91,9 @@ def test_isolate_stream_moves_only_selected_stream_and_close_restores_it(
     monkeypatch,
     tmp_path,
 ) -> None:
-    router = PulseAudioRouter(tmp_path / "routes.json")
-    original = stream()
     captured: dict[str, str] = {}
-    commands: list[list[str]] = []
-    list_calls = 0
 
-    def fake_list_streams():
-        nonlocal list_calls
-        list_calls += 1
-        if list_calls == 1:
-            return [original]
-        return [replace(original, sink_name=captured["route_sink"])]
-
-    def fake_pactl(args: list[str], *, timeout: float = 10.0):
-        del timeout
-        commands.append(args)
+    def handle(args: list[str]):
         if args[:2] == ["load-module", "module-null-sink"]:
             captured["route_sink"] = next(
                 part.split("=", 1)[1]
@@ -100,25 +105,34 @@ def test_isolate_stream_moves_only_selected_stream_and_close_restores_it(
             return "alsa_output.speakers"
         return ""
 
+    pactl = FakePactlRunner(handle)
+    router = PulseAudioRouter(tmp_path / "routes.json", pactl_runner=pactl)
+    original = stream()
+    list_calls = 0
+
+    def fake_list_streams():
+        nonlocal list_calls
+        list_calls += 1
+        if list_calls == 1:
+            return [original]
+        return [replace(original, sink_name=captured["route_sink"])]
+
     monkeypatch.setattr(router, "list_streams", fake_list_streams)
-    monkeypatch.setattr(routing, "_run_pactl", fake_pactl)
     monkeypatch.setattr(StreamRouteLease, "start", lambda self: None)
 
     lease = router.isolate_stream(42)
-
     assert lease.monitor_name == f"{captured['route_sink']}.monitor"
-    assert ["move-sink-input", "42", captured["route_sink"]] in commands
+    assert ["move-sink-input", "42", captured["route_sink"]] in pactl.commands
     assert (tmp_path / "routes.json").is_file()
 
     lease.close()
-
-    assert ["move-sink-input", "42", "alsa_output.speakers"] in commands
-    assert ["unload-module", "77"] in commands
+    assert ["move-sink-input", "42", "alsa_output.speakers"] in pactl.commands
+    assert ["unload-module", "77"] in pactl.commands
     assert not (tmp_path / "routes.json").exists()
 
 
 def test_disappeared_stream_reconnects_only_to_unique_match(monkeypatch, tmp_path) -> None:
-    router = PulseAudioRouter(tmp_path / "routes.json")
+    router = PulseAudioRouter(tmp_path / "routes.json", pactl_runner=FakePactlRunner())
     selected = stream()
     replacement = stream(99)
     events: list[dict] = []
@@ -135,7 +149,6 @@ def test_disappeared_stream_reconnects_only_to_unique_match(monkeypatch, tmp_pat
     monkeypatch.setattr(router, "list_streams", lambda: [replacement])
     monkeypatch.setattr(router, "_move_stream", lambda stream_id, sink: moves.append((stream_id, sink)))
     monkeypatch.setattr(router, "_lease_changed", lambda: None)
-
     lease._poll_once()
 
     assert moves == [(99, "ultratranscribr_capture_test")]
@@ -146,7 +159,7 @@ def test_disappeared_stream_reconnects_only_to_unique_match(monkeypatch, tmp_pat
 
 
 def test_ambiguous_replacement_never_routes_arbitrarily(monkeypatch, tmp_path) -> None:
-    router = PulseAudioRouter(tmp_path / "routes.json")
+    router = PulseAudioRouter(tmp_path / "routes.json", pactl_runner=FakePactlRunner())
     selected = stream()
     events: list[dict] = []
     moves: list[tuple[int, str]] = []
@@ -162,7 +175,6 @@ def test_ambiguous_replacement_never_routes_arbitrarily(monkeypatch, tmp_path) -
 
     monkeypatch.setattr(router, "list_streams", lambda: candidates)
     monkeypatch.setattr(router, "_move_stream", lambda stream_id, sink: moves.append((stream_id, sink)))
-
     lease._poll_once()
 
     assert moves == []
@@ -193,15 +205,8 @@ def test_cleanup_stale_route_restores_stream_then_unloads_module(
         ),
         encoding="utf-8",
     )
-    router = PulseAudioRouter(state_path)
-    routed = stream(sink=route_sink)
-    commands: list[list[str]] = []
 
-    monkeypatch.setattr(router, "list_streams", lambda: [routed])
-
-    def fake_pactl(args: list[str], *, timeout: float = 10.0):
-        del timeout
-        commands.append(args)
+    def handle(args: list[str]):
         if args == ["list", "short", "modules"]:
             return (
                 "77\tmodule-null-sink\t"
@@ -211,9 +216,20 @@ def test_cleanup_stale_route_restores_stream_then_unloads_module(
             return "alsa_output.speakers"
         return ""
 
-    monkeypatch.setattr(routing, "_run_pactl", fake_pactl)
+    pactl = FakePactlRunner(handle)
+    router = PulseAudioRouter(state_path, pactl_runner=pactl)
+    routed = stream(sink=route_sink)
+    monkeypatch.setattr(router, "list_streams", lambda: [routed])
 
     assert router.cleanup_stale_routes() == 1
-    assert ["move-sink-input", "42", "alsa_output.speakers"] in commands
-    assert ["unload-module", "77"] in commands
+    assert ["move-sink-input", "42", "alsa_output.speakers"] in pactl.commands
+    assert ["unload-module", "77"] in pactl.commands
     assert not state_path.exists()
+
+
+def test_router_close_cancels_watchers_but_does_not_close_shared_runner(tmp_path) -> None:
+    pactl = FakePactlRunner()
+    router = PulseAudioRouter(tmp_path / "routes.json", pactl_runner=pactl)
+    router.close()
+    assert pactl.cancelled is True
+    assert pactl.closed is False

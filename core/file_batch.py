@@ -2,15 +2,42 @@
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Optional, Protocol
 
+from config.settings import Settings
+from core.background_tasks import BackgroundTaskGroup
 from core.event_bus import EventBus
 
-if TYPE_CHECKING:
-    from core.app_controller import AppController
+
+class FileBatchController(Protocol):
+    """Small application contract required by FileBatchCoordinator."""
+
+    @property
+    def settings(self) -> Settings: ...
+
+    def subscribe(self, event: str, handler) -> None: ...
+
+    def unsubscribe(self, event: str, handler) -> None: ...
+
+    def active_live_count(self) -> int: ...
+
+    def is_file_transcribing(self) -> bool: ...
+
+    def start_file_transcription(
+        self,
+        file_path: str,
+        language: Optional[str] = None,
+        model_size: Optional[str] = None,
+        song_mode: bool = False,
+        isolate_vocals_flag: bool = False,
+        history_source: str = "file",
+    ) -> None: ...
+
+    def stop_file_transcription(self) -> None: ...
 
 
 @dataclass
@@ -30,12 +57,16 @@ class FileBatchJob:
 
 
 class FileBatchCoordinator:
-    """Own a FIFO queue while reusing AppController's proven File lifecycle."""
+    """Own a FIFO queue while reusing the public File lifecycle."""
 
-    def __init__(self, controller: "AppController") -> None:
+    _WORKER_EXIT_TIMEOUT_S = 10.0
+    _WORKER_EXIT_POLL_S = 0.05
+
+    def __init__(self, controller: FileBatchController) -> None:
         self._controller = controller
         self._bus = EventBus()
         self._lock = threading.RLock()
+        self._tasks = BackgroundTaskGroup("FileBatch", join_timeout=10.0)
         self._jobs: list[FileBatchJob] = []
         self._active_id: Optional[str] = None
         self._closed = False
@@ -102,15 +133,15 @@ class FileBatchCoordinator:
                 for job in self._jobs:
                     if job.status == "queued":
                         job.status = "cancelled"
-        if self._controller.is_file_transcribing() or getattr(self._controller, "_startup_thread", None):
-            self._controller.stop_file_transcription()
+        self._controller.stop_file_transcription()
         self._emit_changed()
         return self.list_jobs()
 
     def clear_finished(self) -> list[dict[str, Any]]:
         with self._lock:
             self._jobs = [
-                job for job in self._jobs
+                job
+                for job in self._jobs
                 if job.status in {"queued", "starting", "running"}
             ]
         self._emit_changed()
@@ -118,16 +149,21 @@ class FileBatchCoordinator:
 
     def close(self) -> None:
         with self._lock:
+            if self._closed:
+                return
             self._closed = True
         for event, handler in self._subscriptions:
-            self._bus.unsubscribe(event, handler)
+            self._controller.unsubscribe(event, handler)
+        self._tasks.close()
 
     def _maybe_start_next_async(self) -> None:
-        threading.Thread(
-            target=self._maybe_start_next,
-            daemon=True,
-            name="FileBatchCoordinator",
-        ).start()
+        with self._lock:
+            if self._closed:
+                return
+        try:
+            self._tasks.start("Start", self._maybe_start_next)
+        except RuntimeError:
+            return
 
     def _maybe_start_next(self) -> None:
         with self._lock:
@@ -190,9 +226,6 @@ class FileBatchCoordinator:
     def _on_status(self, payload: Any) -> None:
         if str(payload) != "stopped":
             return
-        # "Ferma" cancella solo il job corrente; i pending restano in FIFO.
-        # If the stopped File work was external (e.g. Recovery), any pending
-        # batch begins after that worker has actually exited.
         if self._finish_active("cancelled") or self._has_pending():
             self._advance_after_worker()
 
@@ -216,19 +249,23 @@ class FileBatchCoordinator:
 
     def _advance_after_worker(self) -> None:
         def advance() -> None:
-            worker = getattr(self._controller, "_file_thread", None)
-            if worker is not None and worker is not threading.current_thread():
-                try:
-                    worker.join(timeout=10.0)
-                except RuntimeError:
-                    pass
+            deadline = time.monotonic() + self._WORKER_EXIT_TIMEOUT_S
+            while self._controller.is_file_transcribing():
+                with self._lock:
+                    if self._closed:
+                        return
+                if time.monotonic() >= deadline:
+                    return
+                time.sleep(self._WORKER_EXIT_POLL_S)
             self._maybe_start_next()
 
-        threading.Thread(
-            target=advance,
-            daemon=True,
-            name="FileBatchAdvance",
-        ).start()
+        with self._lock:
+            if self._closed:
+                return
+        try:
+            self._tasks.start("Advance", advance)
+        except RuntimeError:
+            return
 
     def _find(self, job_id: Optional[str]) -> Optional[FileBatchJob]:
         if not job_id:

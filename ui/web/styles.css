@@ -12,10 +12,10 @@
   --shadow-inset: inset 5px 5px 11px rgba(0, 0, 0, .72), inset -4px -4px 9px rgba(75, 75, 75, .11);
   --shadow-inset-small: inset 3px 3px 7px rgba(0, 0, 0, .72), inset -3px -3px 6px rgba(75, 75, 75, .10);
   --shadow-active: inset 3px 3px 7px rgba(0, 0, 0, .72), inset -3px -3px 6px rgba(75, 75, 75, .10), 0 0 0 1px var(--accent-border), 0 0 8px var(--accent-glow), 0 0 17px var(--accent-glow-soft);
-  --radius-xl: 26px;
-  --radius-lg: 20px;
-  --radius-md: 15px;
-  --radius-sm: 11px;
+  --radius-xl: 28px;
+  --radius-lg: 22px;
+  --radius-md: 16px;
+  --radius-sm: 12px;
 }
 
 * { box-sizing: border-box; }

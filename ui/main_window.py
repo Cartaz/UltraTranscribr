@@ -5,21 +5,45 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, QUrl, Signal
-from PySide6.QtGui import QCloseEvent, QDragEnterEvent, QDragMoveEvent, QDropEvent, QResizeEvent
+from PySide6.QtGui import (
+    QCloseEvent,
+    QDesktopServices,
+    QDragEnterEvent,
+    QDragMoveEvent,
+    QDropEvent,
+    QResizeEvent,
+)
 from PySide6.QtWebChannel import QWebChannel
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QMainWindow
 
 from config.constants import AppMeta, UIConstraints
-from core.app_controller import AppController
-from ui.bridge import BridgeLogHandler
-from ui.final_features_bridge import FinalFeaturesBackendBridge
-from ui.phase10_bridge import Phase10BackendBridge
-
-# Keep the Phase 10 shell contract stable while extending its implementation.
-Phase10BackendBridge = FinalFeaturesBackendBridge
+from core.application_service import ApplicationService
+from ui.bridge import BackendBridge, BridgeLogHandler
 
 logger = logging.getLogger(__name__)
+
+
+class LocalOnlyWebPage(QWebEnginePage):
+    """Keep application content local and hand external web links to the OS."""
+
+    _LOCAL_SCHEMES = {"about", "file", "qrc"}
+    _EXTERNAL_SCHEMES = {"http", "https"}
+
+    def acceptNavigationRequest(self, url: QUrl, navigation_type, is_main_frame: bool) -> bool:
+        scheme = url.scheme().lower()
+        if url.isLocalFile() or scheme in self._LOCAL_SCHEMES:
+            return super().acceptNavigationRequest(url, navigation_type, is_main_frame)
+        if scheme in self._EXTERNAL_SCHEMES:
+            logger.info("Apertura URL esterno nel browser di sistema: %s", url.toString())
+            QDesktopServices.openUrl(url)
+            return False
+        logger.warning("Navigazione WebEngine bloccata per schema non consentito: %s", scheme or "<vuoto>")
+        return False
+
+    def createWindow(self, _window_type):
+        return self
 
 
 class DropAwareWebView(QWebEngineView):
@@ -36,14 +60,7 @@ class DropAwareWebView(QWebEngineView):
         mime = event.mimeData()
         if mime is None or not mime.hasUrls():
             return []
-        paths: list[str] = []
-        for url in mime.urls():
-            if not url.isLocalFile():
-                continue
-            path = Path(url.toLocalFile())
-            if path.is_file():
-                paths.append(str(path))
-        return paths
+        return [url.toLocalFile() for url in mime.urls() if url.isLocalFile()]
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if self._local_files(event):
@@ -67,9 +84,9 @@ class DropAwareWebView(QWebEngineView):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, controller: AppController) -> None:
+    def __init__(self, application: ApplicationService) -> None:
         super().__init__()
-        self._controller = controller
+        self._application = application
         self._tray_icon = None
         self._closing = False
         self._geometry_tracking_ready = False
@@ -82,25 +99,36 @@ class MainWindow(QMainWindow):
             UIConstraints.MIN_WINDOW_WIDTH,
             UIConstraints.MIN_WINDOW_HEIGHT,
         )
-        settings = controller.settings
+        desktop = application.desktop_state()
         self.resize(
-            max(UIConstraints.MIN_WINDOW_WIDTH, settings.window_width),
-            max(UIConstraints.MIN_WINDOW_HEIGHT, settings.window_height),
+            max(UIConstraints.MIN_WINDOW_WIDTH, int(desktop["window_width"])),
+            max(UIConstraints.MIN_WINDOW_HEIGHT, int(desktop["window_height"])),
         )
 
-        self._bridge = Phase10BackendBridge(controller, self)
+        self._bridge = BackendBridge(application, self)
         self._bridge.eventReceived.connect(self._observe_backend_event)
 
         self._log_handler = BridgeLogHandler(self._bridge)
         logging.getLogger().addHandler(self._log_handler)
 
         self._web_view = DropAwareWebView(self)
+        self._web_page = LocalOnlyWebPage(self._web_view)
+        self._web_view.setPage(self._web_page)
+        web_settings = self._web_page.settings()
+        web_settings.setAttribute(
+            QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls,
+            False,
+        )
+        web_settings.setAttribute(
+            QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls,
+            True,
+        )
         self._web_view.filesDropped.connect(self._bridge.emitDroppedFiles)
         self.setCentralWidget(self._web_view)
 
-        channel = QWebChannel(self._web_view.page())
+        channel = QWebChannel(self._web_page)
         channel.registerObject("backend", self._bridge)
-        self._web_view.page().setWebChannel(channel)
+        self._web_page.setWebChannel(channel)
         self._channel = channel
 
         index_path = Path(__file__).resolve().parent / "web" / "index.html"
@@ -109,19 +137,20 @@ class MainWindow(QMainWindow):
 
     def set_tray_icon(self, tray_icon) -> None:
         self._tray_icon = tray_icon
-        self._tray_icon.set_running(self._controller.active_live_count() > 0)
+        self._tray_icon.set_running(self._application.live_active())
 
     def on_start(self) -> None:
-        settings = self._controller.settings
-        self._bridge.startLive(
-            settings.audio_source,
-            settings.sink_name or "",
-            settings.language,
+        desktop = self._application.desktop_state()
+        self._application.start_live(
+            str(desktop["audio_source"]),
+            str(desktop["sink_name"] or ""),
+            str(desktop["language"]),
+            False,
         )
 
     def on_stop(self) -> None:
-        self._bridge.stopAllLive()
-        self._bridge.cancelFileQueue()
+        self._application.stop_all_live(drain=False)
+        self._application.cancel_file_queue()
 
     def force_quit(self) -> None:
         if self._closing:
@@ -129,23 +158,17 @@ class MainWindow(QMainWindow):
         self._closing = True
         self._geometry_save_timer.stop()
         self._persist_window_geometry()
-        try:
-            self._shutdown_runtime()
-        finally:
-            logging.getLogger().removeHandler(self._log_handler)
-            app = QApplication.instance()
-            if app is not None:
-                app.quit()
+        logging.getLogger().removeHandler(self._log_handler)
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if not self._closing:
             self._closing = True
             self._geometry_save_timer.stop()
             self._persist_window_geometry()
-            try:
-                self._shutdown_runtime()
-            finally:
-                logging.getLogger().removeHandler(self._log_handler)
+            logging.getLogger().removeHandler(self._log_handler)
         event.accept()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
@@ -153,25 +176,11 @@ class MainWindow(QMainWindow):
         if self._geometry_tracking_ready and not self._closing:
             self._geometry_save_timer.start(350)
 
-    def _shutdown_runtime(self) -> None:
-        try:
-            self._bridge.closePowerUser()
-        except Exception:
-            logger.exception("Cleanup coordinatori UI fallito durante shutdown")
-        finally:
-            self._controller.shutdown()
-
     def _persist_window_geometry(self) -> None:
         width = max(UIConstraints.MIN_WINDOW_WIDTH, int(self.width()))
         height = max(UIConstraints.MIN_WINDOW_HEIGHT, int(self.height()))
-        current = self._controller.settings
-        if current.window_width == width and current.window_height == height:
-            return
         try:
-            self._controller.update_settings(
-                window_width=width,
-                window_height=height,
-            )
+            self._application.persist_window_geometry(width, height)
         except Exception:
             logger.exception("Salvataggio automatico geometria finestra fallito")
 
@@ -180,4 +189,4 @@ class MainWindow(QMainWindow):
         if self._tray_icon is None:
             return
         if event.startswith("live_session_"):
-            self._tray_icon.set_running(self._controller.active_live_count() > 0)
+            self._tray_icon.set_running(self._application.live_active())

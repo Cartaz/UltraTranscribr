@@ -1,20 +1,7 @@
-# config/__init__.py
-"""Pacchetto configurazione dell'applicazione UltraTranscribr (SYCL).
+"""Public configuration exports for UltraTranscribr.
 
-Esporre solo le classi pubbliche necessarie. Il livello config
-non importa mai da core/ o ui/.
-
-Exports:
-    AppMeta: Metadati dell'applicazione.
-    ProcessDefaults: Valori predefiniti per i processi.
-    UIConstraints: Vincoli e dimensioni dell'interfaccia.
-    SYCLDefaults: Parametri predefiniti per il backend SYCL.
-    WhisperServerDefaults: Parametri del server whisper.cpp.
-    Settings: Impostazioni persistenti dell'applicazione.
-    ModelSize: Enum dimensioni modello Whisper.
-    ComputeDevice: Enum backend di calcolo.
-    AudioSource: Enum sorgente audio.
-    ThemeColors: Token di colore Breeze Dark.
+The config layer contains application metadata, process/UI constants and the
+persistent Settings model. Presentation styling lives exclusively in ui/web/.
 """
 
 from config.constants import (
@@ -25,7 +12,6 @@ from config.constants import (
     WhisperServerDefaults,
 )
 from config.settings import AudioSource, ComputeDevice, ModelSize, Settings
-from config.theme import ThemeColors
 
 __all__ = [
     "AppMeta",
@@ -37,5 +23,4 @@ __all__ = [
     "ModelSize",
     "ComputeDevice",
     "AudioSource",
-    "ThemeColors",
 ]

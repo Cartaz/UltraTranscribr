@@ -7,12 +7,16 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from config.settings import AudioSource, Settings
+from core.audio_discovery import AudioDiscoveryService
 from core.audio_routing import PulseAudioRouter
 from core.event_bus import EventBus
 from core.exceptions import GPUNotAvailableError, SinkNotFoundError
+from core.file_batch import FileBatchCoordinator
 from core.file_transcriber import FileTranscriberThread
 from core.live_sessions import LiveSessionManager
+from core.meeting_manager import MeetingManager
 from core.models import StatusEnum
+from core.pactl import PactlRunner
 from core.sink_finder import find_source
 from core.transcript_history import TranscriptHistoryStore
 from core.whisper_backend import WhisperBackend
@@ -34,6 +38,83 @@ class _AggregateLiveBufferView:
         return max((int(item.get("buffer_level", 0)) for item in snapshots), default=0)
 
 
+class _MeetingControllerView:
+    """Narrow application facade consumed by MeetingManager."""
+
+    def __init__(self, controller: "AppController") -> None:
+        self._controller = controller
+
+    @property
+    def settings(self) -> Settings:
+        return self._controller.settings
+
+    @property
+    def history(self) -> TranscriptHistoryStore:
+        return self._controller.history
+
+    @property
+    def backend(self) -> WhisperBackend:
+        return self._controller.backend
+
+    def active_live_count(self) -> int:
+        return self._controller.active_live_count()
+
+    def is_file_busy(self) -> bool:
+        return self._controller.is_file_busy()
+
+    def ensure_backend_started(
+        self,
+        *,
+        vad: Optional[bool] = None,
+        settings: Optional[Settings] = None,
+    ) -> None:
+        self._controller.ensure_backend_started(vad=vad, settings=settings)
+
+
+class _FileBatchControllerView:
+    """Narrow application facade consumed by FileBatchCoordinator."""
+
+    def __init__(self, controller: "AppController") -> None:
+        self._controller = controller
+
+    @property
+    def settings(self) -> Settings:
+        return self._controller.settings
+
+    def subscribe(self, event: str, handler: Callable) -> None:
+        self._controller.subscribe(event, handler)
+
+    def unsubscribe(self, event: str, handler: Callable) -> None:
+        self._controller.unsubscribe(event, handler)
+
+    def active_live_count(self) -> int:
+        return self._controller.active_live_count()
+
+    def is_file_transcribing(self) -> bool:
+        return self._controller.is_file_transcribing()
+
+    def start_file_transcription(
+        self,
+        file_path: str,
+        language: Optional[str] = None,
+        model_size: Optional[str] = None,
+        song_mode: bool = False,
+        isolate_vocals_flag: bool = False,
+        history_source: str = "file",
+    ) -> None:
+        self._controller.start_file_transcription(
+            file_path,
+            language=language,
+            model_size=model_size,
+            song_mode=song_mode,
+            isolate_vocals_flag=isolate_vocals_flag,
+            history_source=history_source,
+        )
+
+    def stop_file_transcription(self) -> None:
+        self._controller.stop_file_transcription()
+
+
 class AppController:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -48,7 +129,8 @@ class AppController:
         self._model_manager = WhisperModelManager()
         self._backend = WhisperBackend(settings, self._project_root)
         self._history = TranscriptHistoryStore()
-        self._audio_router = PulseAudioRouter()
+        self._pactl = PactlRunner()
+        self._audio_router = PulseAudioRouter(pactl_runner=self._pactl)
         try:
             self._audio_router.cleanup_stale_routes()
         except Exception as exc:
@@ -63,6 +145,7 @@ class AppController:
         self._backend_started = False
         self._file_history_id: Optional[str] = None
         self._history_subscriptions: list[tuple[str, Callable[[Any], None]]] = []
+        self._shutdown_started = False
 
         self._live_sessions = LiveSessionManager(
             backend=self._backend,
@@ -72,7 +155,15 @@ class AppController:
             sink_resolver=self._resolve_sink,
         )
         self._buffer_view = _AggregateLiveBufferView(self._live_sessions)
+        self._meeting = MeetingManager(_MeetingControllerView(self))
+        self._file_batch = FileBatchCoordinator(_FileBatchControllerView(self))
+        self._audio_discovery = AudioDiscoveryService(
+            settings_provider=lambda: self._settings,
+            event_sink=self._bus.emit,
+            pactl_runner=self._pactl,
+        )
         self._subscribe_history_events()
+        self._audio_discovery.request_refresh()
 
     @property
     def settings(self) -> Settings:
@@ -93,6 +184,14 @@ class AppController:
     @property
     def live_sessions(self) -> LiveSessionManager:
         return self._live_sessions
+
+    @property
+    def meeting(self) -> MeetingManager:
+        return self._meeting
+
+    @property
+    def file_batch(self) -> FileBatchCoordinator:
+        return self._file_batch
 
     def _next_generation(self) -> int:
         with self._lock:
@@ -168,10 +267,6 @@ class AppController:
         self.ensure_backend_started(vad=settings.vad_filter, settings=settings)
 
     def stop_backend(self) -> None:
-        # Startup and shutdown share the same lifecycle lock. This prevents a
-        # stop from racing a half-started whisper-server and also guarantees
-        # that shutdown wins once an in-flight startup leaves the critical
-        # section.
         with self._backend_init_lock:
             with self._lock:
                 self._backend.stop()
@@ -210,9 +305,6 @@ class AppController:
             self._startup_thread = thread
         thread.start()
 
-    # ------------------------------------------------------------------
-    # Live sessions
-    # ------------------------------------------------------------------
     def start_live_session(
         self,
         *,
@@ -220,14 +312,20 @@ class AppController:
         audio_source: Optional[str] = None,
         language: Optional[str] = None,
         stream_id: Optional[int] = None,
+        record_audio: bool = False,
     ) -> dict[str, Any]:
-        if self._file_busy():
+        if self.is_file_busy():
             raise RuntimeError(
                 "Ferma la trascrizione file prima di avviare una sessione Live"
             )
         source = audio_source or self._settings.audio_source
+        session_settings = self._settings.with_(
+            live_microphone_recording=bool(
+                record_audio and source == AudioSource.MICROPHONE.value
+            )
+        )
         return self._live_sessions.create_session(
-            settings=self._settings,
+            settings=session_settings,
             audio_source=source,
             sink_name=sink_name,
             language=language,
@@ -257,8 +355,6 @@ class AppController:
     def active_live_count(self) -> int:
         return self._live_sessions.active_count()
 
-    # Legacy compatibility API. A start now adds a session rather than
-    # replacing the previously active Live pipeline.
     def start_transcription(
         self,
         sink_name=None,
@@ -291,9 +387,6 @@ class AppController:
             for item in self._live_sessions.list_sessions()
         )
 
-    # ------------------------------------------------------------------
-    # File transcription (kept exclusive from Live sessions in Phase 4)
-    # ------------------------------------------------------------------
     def start_file_transcription(
         self,
         file_path: str,
@@ -323,9 +416,6 @@ class AppController:
         )
 
         def start() -> None:
-            # Stop/Start and shutdown invalidate older generations. Check before
-            # doing expensive model/backend work so a stale queued startup can
-            # never resurrect whisper-server after the user has stopped it.
             if not self._is_current(generation):
                 return
             self.ensure_backend_started(
@@ -351,7 +441,7 @@ class AppController:
         self._run_async(generation, start, "file_transcriber_error")
 
     def start_recovery_transcription(self, recovery_path: str) -> None:
-        if self._live_sessions.has_active_sessions() or self._file_busy():
+        if self._live_sessions.has_active_sessions() or self.is_file_busy():
             raise RuntimeError(
                 "Ferma la trascrizione attiva prima di recuperare l'audio"
             )
@@ -373,8 +463,6 @@ class AppController:
         if worker:
             worker.stop()
             if worker.is_alive():
-                # File mode is exclusive from Live sessions, therefore aborting
-                # the active request cannot terminate another Live pipeline.
                 self._backend.abort_active_request()
                 self._backend_started = False
             if worker is not threading.current_thread():
@@ -385,15 +473,12 @@ class AppController:
         worker = self._file_thread
         return bool(worker and worker.is_alive())
 
-    def _file_busy(self) -> bool:
+    def is_file_busy(self) -> bool:
         if self.is_file_transcribing():
             return True
         startup = self._startup_thread
         return bool(startup and startup.is_alive())
 
-    # ------------------------------------------------------------------
-    # Settings, models and discovery
-    # ------------------------------------------------------------------
     def update_settings(self, **overrides: object) -> None:
         self._settings = self._settings.with_(**overrides)
         self._settings.save()
@@ -408,6 +493,31 @@ class AppController:
 
     def list_playback_streams(self) -> list[dict[str, Any]]:
         return [stream.to_dict() for stream in self._audio_router.list_streams()]
+
+    def audio_discovery_snapshot(self) -> dict[str, list[dict[str, Any]]]:
+        return self._audio_discovery.snapshot()
+
+    def request_audio_discovery(
+        self,
+        *,
+        devices: bool = True,
+        streams: bool = True,
+    ) -> None:
+        self._audio_discovery.request_refresh(devices=devices, streams=streams)
+
+    def cached_audio_source_health(
+        self,
+        source: str,
+        selected_input: str = "",
+    ) -> dict[str, Any]:
+        return self._audio_discovery.cached_health(source, selected_input)
+
+    def request_audio_source_probe(
+        self,
+        source: str,
+        selected_input: str = "",
+    ) -> None:
+        self._audio_discovery.request_probe(source, selected_input)
 
     def download_model(self, model_size: str) -> str:
         self._require_idle_for_model_operation()
@@ -460,14 +570,11 @@ class AppController:
             self._model_operation_lock.release()
 
     def _require_idle_for_model_operation(self) -> None:
-        if self._live_sessions.has_active_sessions() or self._file_busy():
+        if self._live_sessions.has_active_sessions() or self.is_file_busy():
             raise RuntimeError(
                 "Ferma la trascrizione attiva prima di gestire i modelli"
             )
 
-    # ------------------------------------------------------------------
-    # History and recovery
-    # ------------------------------------------------------------------
     def list_history(self, limit: int = 50) -> list[dict[str, Any]]:
         self.prune_history()
         return self._history.list_recent(limit)
@@ -502,7 +609,7 @@ class AppController:
         return self._history.list_recovery_audio()
 
     def delete_recovery_audio(self, recovery_path: str) -> bool:
-        if self._file_busy():
+        if self.is_file_busy():
             raise RuntimeError(
                 "Ferma la trascrizione file prima di eliminare un recovery"
             )
@@ -511,16 +618,42 @@ class AppController:
             self._bus.emit("history_changed", None)
         return deleted
 
-    # ------------------------------------------------------------------
-    # Lifecycle and helpers
-    # ------------------------------------------------------------------
     def subscribe(self, event: str, handler: Callable) -> None:
         self._bus.subscribe(event, handler)
 
+    def unsubscribe(self, event: str, handler: Callable) -> None:
+        self._bus.unsubscribe(event, handler)
+
     def shutdown(self) -> None:
-        self.stop_file_transcription()
-        self._live_sessions.shutdown()
-        self.stop_backend()
+        with self._lock:
+            if self._shutdown_started:
+                return
+            self._shutdown_started = True
+        self._next_generation()
+
+        steps = (
+            ("FileBatch", self._file_batch.close),
+            ("Meeting", self._meeting.shutdown),
+            ("File", self.stop_file_transcription),
+            ("Live", self._live_sessions.shutdown),
+            ("AudioRouter", self._audio_router.close),
+            ("AudioDiscovery", self._audio_discovery.close),
+            ("Pactl", self._pactl.close),
+            ("WhisperBackend", self.stop_backend),
+        )
+        for label, action in steps:
+            try:
+                action()
+            except Exception:
+                logger.exception("Shutdown %s fallito", label)
+
+        with self._lock:
+            startup = self._startup_thread
+        if startup and startup.is_alive() and startup is not threading.current_thread():
+            startup.join(timeout=5.0)
+            if startup.is_alive():
+                logger.warning("ControllerStartup ancora attivo dopo shutdown bounded")
+
         for event, handler in self._history_subscriptions:
             self._bus.unsubscribe(event, handler)
         self._history_subscriptions.clear()
@@ -533,7 +666,11 @@ class AppController:
                 "Per la sorgente Applicazione devi selezionare uno stream",
                 detail="Scegli uno stream attivo dall'elenco delle applicazioni.",
             )
-        found = find_source(self._settings, audio_source=audio_source)
+        found = find_source(
+            self._settings,
+            audio_source=audio_source,
+            pactl_runner=self._pactl,
+        )
         if found is not None:
             return found
         if audio_source == AudioSource.SYSTEM.value:
@@ -550,13 +687,12 @@ class AppController:
         )
 
     def _subscribe_history_events(self) -> None:
-        # Live history is owned directly by LiveSessionManager. Only the
-        # singleton File worker still uses global EventBus history hooks.
         handlers: tuple[tuple[str, Callable[[Any], None]], ...] = (
             (
                 "file_transcriber_new_text",
                 lambda payload: self._append_file_history_text(payload),
             ),
+            ("file_transcriber_segments", self._append_file_history_segments),
             ("file_transcriber_status_changed", self._on_file_history_status),
             (
                 "file_transcriber_error",
@@ -591,6 +727,19 @@ class AppController:
             self._history.append_text(session_id, str(payload or ""))
         except Exception as exc:
             logger.exception("Autosave trascrizione file fallito")
+            self._bus.emit("history_error", str(exc))
+
+    def _append_file_history_segments(self, payload: Any) -> None:
+        if not isinstance(payload, list) or not payload:
+            return
+        with self._lock:
+            session_id = self._file_history_id
+        if session_id is None:
+            return
+        try:
+            self._history.append_segments(session_id, payload)
+        except Exception as exc:
+            logger.exception("Autosave segmenti temporizzati fallito")
             self._bus.emit("history_error", str(exc))
 
     def _set_file_history_status(self, status: str) -> None:

@@ -1,20 +1,15 @@
 # core/sink_finder.py
-"""Discovery unificato dei dispositivi audio PipeWire / PulseAudio.
-
-La sorgente ``system`` cattura il monitor dell'uscita audio predefinita,
-indipendentemente dall'applicazione che sta riproducendo. Il microfono resta
-una sorgente separata e la UI puo sempre forzare manualmente un dispositivo.
-"""
+"""Discovery unificato dei dispositivi audio PipeWire / PulseAudio."""
 
 from __future__ import annotations
 
 import logging
-import subprocess
 from typing import Optional
 
 import sounddevice as sd
 
 from config.settings import AudioSource, Settings
+from core.pactl import PactlRunner
 from core.sink_helpers import hostapi_name
 
 logger = logging.getLogger(__name__)
@@ -23,6 +18,8 @@ logger = logging.getLogger(__name__)
 def find_source(
     settings: Settings | None = None,
     audio_source: Optional[str] = None,
+    *,
+    pactl_runner: Optional[PactlRunner] = None,
 ) -> Optional[str]:
     """Trova il dispositivo audio per ``system`` o ``microphone``."""
     if settings is None:
@@ -30,24 +27,25 @@ def find_source(
     source = audio_source or settings.audio_source
 
     if source == AudioSource.SYSTEM.value:
-        return find_system_monitor()
+        return find_system_monitor(pactl_runner=pactl_runner)
     if source == AudioSource.MICROPHONE.value:
         return find_microphone(settings)
     logger.warning("Sorgente audio sconosciuta: %s", source)
     return None
 
 
-def find_system_monitor() -> Optional[str]:
-    """Trova il monitor dell'uscita audio predefinita.
-
-    ``pactl`` e la fonte primaria perché espone direttamente il default sink
-    di PipeWire-Pulse/PulseAudio. ``sounddevice`` viene usato come fallback
-    quando pactl non è disponibile.
-    """
-    result = _find_default_monitor_via_pactl()
-    if result:
-        logger.info("Monitor audio di sistema trovato via pactl: %s", result)
-        return result
+def find_system_monitor(*, pactl_runner: Optional[PactlRunner] = None) -> Optional[str]:
+    """Trova il monitor dell'uscita audio predefinita."""
+    runner = pactl_runner or PactlRunner()
+    owns_runner = pactl_runner is None
+    try:
+        result = _find_default_monitor_via_pactl(runner)
+        if result:
+            logger.info("Monitor audio di sistema trovato via pactl: %s", result)
+            return result
+    finally:
+        if owns_runner:
+            runner.close()
 
     result = _find_default_monitor_via_sounddevice()
     if result:
@@ -113,37 +111,14 @@ def list_all_monitor_sources() -> list[dict]:
     return [d for d in list_available_devices() if d["is_monitor"]]
 
 
-def _run_pactl(args: list[str]) -> Optional[str]:
-    try:
-        result = subprocess.run(
-            ["pactl", *args],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        logger.debug("pactl non disponibile (%s): %s", " ".join(args), exc)
-        return None
-    if result.returncode != 0:
-        logger.debug(
-            "pactl %s fallito (%d): %s",
-            " ".join(args),
-            result.returncode,
-            result.stderr.strip(),
-        )
-        return None
-    return result.stdout.strip()
-
-
-def _default_sink_name_via_pactl() -> Optional[str]:
-    output = _run_pactl(["get-default-sink"])
+def _default_sink_name_via_pactl(runner: PactlRunner) -> Optional[str]:
+    output = runner.run(["get-default-sink"])
     if output:
         first = output.splitlines()[0].strip()
         if first:
             return first
 
-    # Compatibilità con versioni di pactl che non espongono get-default-sink.
-    info = _run_pactl(["info"])
+    info = runner.run(["info"])
     if info:
         for line in info.splitlines():
             key, sep, value = line.partition(":")
@@ -154,13 +129,13 @@ def _default_sink_name_via_pactl() -> Optional[str]:
     return None
 
 
-def _find_default_monitor_via_pactl() -> Optional[str]:
-    sink_name = _default_sink_name_via_pactl()
+def _find_default_monitor_via_pactl(runner: PactlRunner) -> Optional[str]:
+    sink_name = _default_sink_name_via_pactl(runner)
     if not sink_name:
         return None
     monitor_name = f"{sink_name}.monitor"
 
-    sources = _run_pactl(["list", "short", "sources"])
+    sources = runner.run(["list", "short", "sources"])
     if sources:
         for line in sources.splitlines():
             fields = line.split()
@@ -169,9 +144,6 @@ def _find_default_monitor_via_pactl() -> Optional[str]:
         logger.debug("Monitor %s non presente in pactl sources", monitor_name)
         return None
 
-    # Se possiamo leggere il default sink ma non enumerare le sources,
-    # restituiamo comunque il nome Pulse standard: AudioCaptureThread lo usa
-    # via PULSE_SOURCE e potrà produrre un errore operativo se non esiste.
     return monitor_name
 
 
@@ -186,8 +158,10 @@ def _find_default_monitor_via_sounddevice() -> Optional[str]:
         str(dev.get("name", ""))
         for dev in devices
         if dev.get("max_input_channels", 0) > 0
-        and (".monitor" in str(dev.get("name", ""))
-             or "monitor" in str(dev.get("name", "")).lower())
+        and (
+            ".monitor" in str(dev.get("name", ""))
+            or "monitor" in str(dev.get("name", "")).lower()
+        )
     ]
     if not monitors:
         return None
@@ -210,7 +184,6 @@ def _find_default_monitor_via_sounddevice() -> Optional[str]:
             if candidate in monitors:
                 return candidate
 
-    # Con un solo monitor non esiste ambiguità anche senza pactl.
     if len(monitors) == 1:
         return monitors[0]
     return None
@@ -248,7 +221,6 @@ def _find_mic_via_sounddevice(keyword: str = "") -> Optional[str]:
                 logger.info("Uso input predefinito: %s", default_name)
                 return default_name
 
-    # Ultimo fallback: primo vero input non-monitor.
     for dev in devices:
         if dev.get("max_input_channels", 0) <= 0:
             continue
@@ -258,12 +230,22 @@ def _find_mic_via_sounddevice(keyword: str = "") -> Optional[str]:
     return None
 
 
-def debug_dump() -> str:
-    """Dump delle informazioni audio utili al troubleshooting."""
+def debug_dump(*, pactl_runner: Optional[PactlRunner] = None) -> str:
+    """Dump diagnostico; pactl viene interrogato solo con ownership esplicita."""
     lines: list[str] = []
     lines.append("=== default playback ===")
-    lines.append(f"  default sink: {_default_sink_name_via_pactl() or 'non disponibile'}")
-    lines.append(f"  system monitor: {find_system_monitor() or 'non disponibile'}")
+    if pactl_runner is None:
+        lines.append("  default sink: non interrogato (runner applicativo richiesto)")
+        lines.append(
+            f"  system monitor: {_find_default_monitor_via_sounddevice() or 'non disponibile'}"
+        )
+    else:
+        lines.append(
+            f"  default sink: {_default_sink_name_via_pactl(pactl_runner) or 'non disponibile'}"
+        )
+        lines.append(
+            f"  system monitor: {find_system_monitor(pactl_runner=pactl_runner) or 'non disponibile'}"
+        )
 
     lines.append("")
     lines.append("=== sounddevice devices (input only) ===")
@@ -281,16 +263,18 @@ def debug_dump() -> str:
 
     lines.append("")
     lines.append("=== pactl sources (monitors) ===")
-    sources = _run_pactl(["list", "short", "sources"])
-    if sources is None:
-        lines.append("  pactl non disponibile")
+    if pactl_runner is None:
+        lines.append("  non interrogato (runner applicativo richiesto)")
     else:
-        found = False
-        for line in sources.splitlines():
-            if ".monitor" in line or "monitor" in line.lower():
-                lines.append(f"  {line}")
-                found = True
-        if not found:
-            lines.append("  nessun monitor")
-
+        sources = pactl_runner.run(["list", "short", "sources"])
+        if sources is None:
+            lines.append("  pactl non disponibile")
+        else:
+            found = False
+            for line in sources.splitlines():
+                if ".monitor" in line or "monitor" in line.lower():
+                    lines.append(f"  {line}")
+                    found = True
+            if not found:
+                lines.append("  nessun monitor")
     return "\n".join(lines)

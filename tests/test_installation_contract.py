@@ -17,6 +17,13 @@ def test_install_script_has_valid_bash_syntax() -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_install_script_requires_python_312_or_newer() -> None:
+    source = (ROOT / "install.sh").read_text(encoding="utf-8")
+    assert "python3.11" not in source
+    assert "sys.version_info >= (3, 12)" in source
+    assert "Python 3.12+ non trovato" in source
+
+
 def test_install_script_skips_unchanged_expensive_steps() -> None:
     source = (ROOT / "install.sh").read_text(encoding="utf-8")
     assert "REQ_MARKER=" in source

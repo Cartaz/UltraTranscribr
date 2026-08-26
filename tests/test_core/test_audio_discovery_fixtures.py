@@ -9,6 +9,21 @@ from core import audio_routing, sink_finder
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "pactl"
 
 
+class FakePactlRunner:
+    def __init__(self, responses: dict[tuple[str, ...], str | None]) -> None:
+        self._responses = responses
+
+    def run(self, args: list[str], *, timeout: float = 10.0):
+        del timeout
+        return self._responses.get(tuple(args))
+
+    def cancel_all(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
 def _fixture(name: str) -> str:
     return (FIXTURES / name).read_text(encoding="utf-8")
 
@@ -41,49 +56,41 @@ def test_sink_input_fixture_preserves_metadata_and_pause_state() -> None:
     assert vlc.display_name == "VLC media player — Musica"
 
 
-def test_router_list_streams_combines_short_sinks_and_verbose_inputs(monkeypatch) -> None:
-    responses = {
-        ("list", "short", "sinks"): _fixture("sinks-short.txt"),
-        ("list", "sink-inputs"): _fixture("sink-inputs.txt"),
-    }
-    monkeypatch.setattr(
-        audio_routing,
-        "_run_pactl",
-        lambda args, timeout=10.0: responses.get(tuple(args)),
+def test_router_list_streams_combines_short_sinks_and_verbose_inputs() -> None:
+    pactl = FakePactlRunner(
+        {
+            ("list", "short", "sinks"): _fixture("sinks-short.txt"),
+            ("list", "sink-inputs"): _fixture("sink-inputs.txt"),
+        }
     )
-
-    streams = audio_routing.PulseAudioRouter().list_streams()
+    streams = audio_routing.PulseAudioRouter(pactl_runner=pactl).list_streams()
     assert len(streams) == 2
     assert streams[0].id == 101
     assert streams[1].corked is True
 
 
-def test_default_monitor_is_resolved_from_pactl_fixtures(monkeypatch) -> None:
-    responses = {
-        ("get-default-sink",): "alsa_output.pci-0000_00_1f.3.analog-stereo",
-        ("list", "short", "sources"): _fixture("sources-short.txt"),
-    }
-    monkeypatch.setattr(
-        sink_finder,
-        "_run_pactl",
-        lambda args: responses.get(tuple(args)),
+def test_default_monitor_is_resolved_from_pactl_fixtures() -> None:
+    pactl = FakePactlRunner(
+        {
+            ("get-default-sink",): "alsa_output.pci-0000_00_1f.3.analog-stereo",
+            ("list", "short", "sources"): _fixture("sources-short.txt"),
+        }
     )
-
     assert (
-        sink_finder._find_default_monitor_via_pactl()
+        sink_finder._find_default_monitor_via_pactl(pactl)
         == "alsa_output.pci-0000_00_1f.3.analog-stereo.monitor"
     )
 
 
-def test_default_sink_parser_falls_back_to_pactl_info(monkeypatch) -> None:
+def test_default_sink_parser_falls_back_to_pactl_info() -> None:
     info = "Server String: /run/user/1000/pulse/native\nDefault Sink: bluez_output.demo\n"
-    monkeypatch.setattr(
-        sink_finder,
-        "_run_pactl",
-        lambda args: None if args == ["get-default-sink"] else info,
+    pactl = FakePactlRunner(
+        {
+            ("get-default-sink",): None,
+            ("info",): info,
+        }
     )
-
-    assert sink_finder._default_sink_name_via_pactl() == "bluez_output.demo"
+    assert sink_finder._default_sink_name_via_pactl(pactl) == "bluez_output.demo"
 
 
 def test_module_fixture_only_identifies_ultratranscribr_null_sink() -> None:

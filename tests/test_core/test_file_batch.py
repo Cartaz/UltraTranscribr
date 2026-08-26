@@ -11,13 +11,15 @@ class FakeController:
     def __init__(self) -> None:
         self.settings = SimpleNamespace(language="it", model_size="medium")
         self._handlers = {}
-        self._file_thread = None
-        self._startup_thread = None
         self.started = []
         self.stopped = 0
 
     def subscribe(self, event, handler) -> None:
         self._handlers[event] = handler
+
+    def unsubscribe(self, event, handler) -> None:
+        if self._handlers.get(event) is handler:
+            self._handlers.pop(event, None)
 
     def active_live_count(self) -> int:
         return 0
@@ -62,6 +64,7 @@ def test_batch_starts_fifo_and_advances_after_completion(monkeypatch, tmp_path: 
     assert controller.started[1][0] == str(second)
     assert batch.list_jobs()[1]["status"] == "running"
     batch.close()
+    assert controller._handlers == {}
 
 
 def test_batch_rejects_missing_file(tmp_path: Path) -> None:
@@ -96,6 +99,7 @@ def test_cancel_marks_active_and_pending_jobs(tmp_path: Path, monkeypatch) -> No
     jobs = batch.cancel(clear_pending=True)
 
     assert [job["status"] for job in jobs] == ["cancelled", "cancelled"]
+    assert controller.stopped == 1
     batch.close()
 
 

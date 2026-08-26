@@ -3,25 +3,30 @@ on:
   push:
     branches:
       - main
-      - fix/full-bug-hunt-hardening
+      - strategic-architecture-cleanup
   pull_request:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QTWEBENGINE_DISABLE_SANDBOX: "1"
+      QTWEBENGINE_CHROMIUM_FLAGS: "--no-sandbox --disable-gpu"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: sudo apt-get update && sudo apt-get install -y libportaudio2
+      - run: >-
+          sudo apt-get update && sudo apt-get install -y
+          libportaudio2 libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements.txt pytest
       - run: bash -n install.sh
+      - run: python -m compileall -q main.py config core ui tests
       - run: node --check ui/web/app.js
       - run: node --check ui/web/multi_live.js
       - run: node --check ui/web/settings_cleanup.js
-      - run: node --check ui/web/power_user.js
-      - run: node --check ui/web/phase10.js
-      - run: node --check ui/web/phase10_hardening.js
-      - run: node --check ui/web/final_features.js
+      - run: node --check ui/web/file_history.js
+      - run: node --check ui/web/meeting.js
       - run: pytest -q

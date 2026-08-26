@@ -1,26 +1,23 @@
-"""Qt WebChannel bridge between the HTML frontend and Python backend."""
+"""Single Qt WebChannel boundary between the local web UI and Python application."""
 from __future__ import annotations
 
 import json
 import logging
-import threading
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, QTimer, QUrl, Signal, Slot
 from PySide6.QtWidgets import QFileDialog
 
 from config.constants import AppMeta
-from config.settings import AudioSource, ModelSize
-from core.app_controller import AppController
-from core.sink_finder import debug_dump, list_available_devices
+from core.application_service import ApplicationService
 
 logger = logging.getLogger(__name__)
 
 
 class BackendBridge(QObject):
-    """Expose a deliberately small, presentation-oriented API to JavaScript."""
+    """Validate/serialize WebChannel values and delegate application behavior."""
 
     eventReceived = Signal(str, str)
     logReceived = Signal(str, str, str)
@@ -28,20 +25,15 @@ class BackendBridge(QObject):
 
     _EVENTS = (
         "backend_status_changed",
-        "process_started",
-        "process_stopped",
-        "capture_stopped",
-        "transcriber_status_changed",
-        "transcriber_buffer_level",
-        "transcriber_new_text",
-        "transcriber_error",
-        "transcriber_drained",
         "file_transcriber_status_changed",
         "file_transcriber_progress",
         "file_transcriber_new_text",
         "file_transcriber_full_text",
         "file_transcriber_completed",
         "file_transcriber_error",
+        "file_transcriber_segments",
+        "file_queue_changed",
+        "file_queue_job_updated",
         "config_changed",
         "history_changed",
         "history_error",
@@ -49,19 +41,54 @@ class BackendBridge(QObject):
         "model_download_started",
         "model_download_progress",
         "model_status_changed",
-        "playback_stream_status_changed",
+        "audio_devices_changed",
+        "playback_streams_changed",
+        "audio_source_health_changed",
+        "audio_discovery_error",
+        "audio_diagnostics",
+        "audio_diagnostics_error",
+        "backend_preload_error",
+        "live_session_created",
+        "live_session_updated",
+        "live_session_buffer_level",
+        "live_session_queue_wait",
+        "live_session_text",
+        "live_session_error",
+        "live_session_start_error",
+        "live_session_action_error",
+        "live_session_route_status",
+        "live_session_removed",
+        "microphone_recording_saved",
+        "meeting_started",
+        "meeting_updated",
+        "meeting_recording_saved",
+        "meeting_model_progress",
+        "meeting_completed",
+        "meeting_error",
+        "meeting_review_changed",
     )
 
-    def __init__(self, controller: AppController, parent: QObject | None = None) -> None:
+    _MEDIA_FILTER = (
+        "Media (*.wav *.mp3 *.flac *.ogg *.m4a *.aac *.opus *.mp4 *.mkv "
+        "*.webm *.mov *.avi);;Tutti i file (*)"
+    )
+    _EXPORT_FILTERS = {
+        "txt": "Testo (*.txt)",
+        "srt": "SubRip (*.srt)",
+        "vtt": "WebVTT (*.vtt)",
+    }
+
+    def __init__(
+        self,
+        application: ApplicationService,
+        parent: QObject | None = None,
+    ) -> None:
         super().__init__(parent)
-        self._controller = controller
-        self._subscriptions: list[tuple[str, Callable[[Any], None]]] = []
-        self._backend_reload_required = False
-        self._backend_reload_lock = threading.Lock()
+        self._application = application
         for event in self._EVENTS:
             handler = self._make_event_handler(event)
-            self._controller.subscribe(event, handler)
-            self._subscriptions.append((event, handler))
+            self._application.subscribe(event, handler)
+        QTimer.singleShot(0, self._application.preload_model_if_requested)
 
     def _make_event_handler(self, event: str) -> Callable[[Any], None]:
         def handler(payload: Any) -> None:
@@ -77,168 +104,196 @@ class BackendBridge(QObject):
             encoded = json.dumps(str(payload), ensure_ascii=False)
         self.eventReceived.emit(event, encoded)
 
-    def _run_async(
-        self,
-        name: str,
-        operation: Callable[[], None],
-        error_event: str,
-    ) -> None:
-        def worker() -> None:
-            try:
-                operation()
-            except Exception as exc:
-                logger.exception("Operazione UI '%s' fallita", name)
-                self._emit_event(error_event, str(exc))
+    @staticmethod
+    def _ok(**payload: Any) -> str:
+        return json.dumps({"ok": True, **payload}, ensure_ascii=False, default=str)
 
-        threading.Thread(
-            target=worker,
-            daemon=True,
-            name=f"UIBridge-{name}",
-        ).start()
+    @staticmethod
+    def _error(exc: Exception | str) -> str:
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
 
     @Slot(result=str)
     def getBootstrap(self) -> str:
-        settings = asdict(self._controller.settings)
-        try:
-            devices = list_available_devices()
-        except Exception as exc:
-            logger.warning("Enumerazione dispositivi fallita: %s", exc)
-            devices = []
-        try:
-            playback_streams = self._controller.list_playback_streams()
-        except Exception as exc:
-            logger.warning("Enumerazione stream playback fallita: %s", exc)
-            playback_streams = []
-        payload = {
-            "app": {
-                "name": AppMeta.NAME,
-                "version": AppMeta.VERSION,
-                "description": AppMeta.DESCRIPTION,
-            },
-            "settings": settings,
-            "modelChoices": ModelSize.choices(),
-            "models": self._controller.list_models(),
-            "audioSources": AudioSource.choices(),
-            "devices": devices,
-            "playbackStreams": playback_streams,
-            "runtime": {
-                "liveRunning": self._controller.is_running(),
-                "liveDraining": self._controller.is_draining(),
-                "fileRunning": self._controller.is_file_transcribing(),
-                "backendRunning": self._controller.backend.is_running,
-                "bufferLevel": self._controller.buffer.buffer_level,
-            },
-            "logTail": self._read_log_tail(160),
+        payload = self._application.bootstrap_snapshot()
+        payload["app"] = {
+            "name": AppMeta.NAME,
+            "version": AppMeta.VERSION,
+            "description": AppMeta.DESCRIPTION,
         }
+        payload["logTail"] = self._application.read_log_tail(160)
         return json.dumps(payload, ensure_ascii=False, default=str)
+
+    @Slot(result=str)
+    def getSettingsDefaults(self) -> str:
+        return json.dumps(
+            self._application.settings_defaults(), ensure_ascii=False, default=str
+        )
 
     @Slot(str, result=str)
     def refreshDevices(self, audio_source: str) -> str:
-        source = (
-            audio_source
-            if audio_source in AudioSource.choices()
-            else self._controller.settings.audio_source
+        return json.dumps(
+            self._application.refresh_devices(audio_source),
+            ensure_ascii=False,
+            default=str,
         )
-        if source == AudioSource.APPLICATION.value:
-            return "[]"
-        try:
-            devices = list_available_devices()
-        except Exception as exc:
-            logger.warning("Enumerazione dispositivi fallita: %s", exc)
-            devices = []
-        key = "is_monitor" if source == AudioSource.SYSTEM.value else "is_mic"
-        filtered = [device for device in devices if bool(device.get(key))]
-        return json.dumps(filtered, ensure_ascii=False, default=str)
 
     @Slot(result=str)
     def listPlaybackStreams(self) -> str:
-        try:
-            streams = self._controller.list_playback_streams()
-            return json.dumps(streams, ensure_ascii=False, default=str)
-        except Exception as exc:
-            logger.warning("Enumerazione stream playback fallita: %s", exc)
-            return json.dumps(
-                {"ok": False, "error": str(exc), "streams": []},
-                ensure_ascii=False,
-            )
+        return json.dumps(
+            self._application.list_playback_streams(),
+            ensure_ascii=False,
+            default=str,
+        )
 
-    def _prepare_backend_for_selected_model(self) -> None:
-        with self._backend_reload_lock:
-            reload_required = self._backend_reload_required
-            self._backend_reload_required = False
-        if reload_required and self._controller.backend.is_running:
-            self._controller.stop_backend()
+    @Slot(str, str, result=str)
+    def probeAudioSource(self, audio_source: str, selected_input: str) -> str:
+        return json.dumps(
+            self._application.probe_audio_source(audio_source, selected_input),
+            ensure_ascii=False,
+            default=str,
+        )
 
-    @Slot(str, str, str)
-    def startLive(
+    def _start_live(
         self,
         audio_source: str,
         selected_input: str,
         language: str,
+        record_audio: bool,
     ) -> None:
-        source = (
-            audio_source
-            if audio_source in AudioSource.choices()
-            else self._controller.settings.audio_source
+        self._application.start_live(
+            audio_source,
+            selected_input,
+            language,
+            bool(record_audio),
         )
-        selection = selected_input.strip()
-        lang = language.strip() or self._controller.settings.language
-        sink = None
-        stream_id = None
-        if source == AudioSource.APPLICATION.value:
-            if not selection:
-                self._emit_event(
-                    "transcriber_error",
-                    "Seleziona uno stream applicazione prima di avviare la trascrizione",
-                )
-                return
-            try:
-                stream_id = int(selection)
-            except ValueError:
-                self._emit_event(
-                    "transcriber_error",
-                    "Identificatore dello stream applicazione non valido",
-                )
-                return
-        else:
-            sink = selection or None
 
-        def operation() -> None:
-            self._prepare_backend_for_selected_model()
-            self._controller.start_transcription(
-                sink_name=sink,
-                audio_source=source,
-                language=lang,
-                stream_id=stream_id,
-            )
+    @Slot(str, str, str)
+    def startLive(self, audio_source: str, selected_input: str, language: str) -> None:
+        self._start_live(audio_source, selected_input, language, False)
 
-        self._run_async("start-live", operation, "transcriber_error")
+    @Slot(str, str, str, bool)
+    def startLiveWithRecording(
+        self,
+        audio_source: str,
+        selected_input: str,
+        language: str,
+        record_audio: bool,
+    ) -> None:
+        self._start_live(audio_source, selected_input, language, record_audio)
+
+    @Slot(str)
+    def stopLiveSession(self, session_id: str) -> None:
+        self._application.stop_live(session_id, drain=False)
+
+    @Slot(str)
+    def drainLiveSession(self, session_id: str) -> None:
+        self._application.stop_live(session_id, drain=True)
+
+    @Slot(str)
+    def removeLiveSession(self, session_id: str) -> None:
+        self._application.remove_live(session_id)
+
+    @Slot()
+    def stopAllLive(self) -> None:
+        self._application.stop_all_live(drain=False)
+
+    @Slot()
+    def drainAllLive(self) -> None:
+        self._application.stop_all_live(drain=True)
 
     @Slot()
     def stopLive(self) -> None:
-        self._run_async(
-            "stop-live",
-            self._controller.stop_transcription,
-            "transcriber_error",
-        )
+        self.stopAllLive()
 
     @Slot()
     def stopListening(self) -> None:
-        self._run_async(
-            "stop-listening",
-            self._controller.stop_listening,
-            "transcriber_error",
+        self.drainAllLive()
+
+    @Slot(str, str, int, result=str)
+    def startMeeting(self, microphone: str, language: str, num_speakers: int) -> str:
+        try:
+            meeting = self._application.start_meeting(
+                microphone=microphone.strip() or None,
+                language=language.strip() or None,
+                num_speakers=max(0, int(num_speakers)),
+            )
+            return self._ok(meeting=meeting)
+        except Exception as exc:
+            return self._error(exc)
+
+    @Slot(result=str)
+    def finishMeeting(self) -> str:
+        try:
+            return self._ok(meeting=self._application.finish_meeting())
+        except Exception as exc:
+            return self._error(exc)
+
+    @Slot(result=str)
+    def cancelMeeting(self) -> str:
+        try:
+            return self._ok(meeting=self._application.cancel_meeting())
+        except Exception as exc:
+            return self._error(exc)
+
+    @Slot(str, result=str)
+    def getMeetingSession(self, session_id: str) -> str:
+        return json.dumps(
+            self._application.get_meeting(session_id),
+            ensure_ascii=False,
+            default=str,
         )
+
+    @Slot(str, result=str)
+    def getMeetingAudioUrl(self, session_id: str) -> str:
+        path = self._application.meeting_audio_path(session_id)
+        return QUrl.fromLocalFile(path).toString() if path else ""
+
+    @Slot(str, str, str, result=str)
+    def setMeetingSpeakerName(self, session_id: str, speaker_id: str, name: str) -> str:
+        try:
+            meeting = self._application.set_meeting_speaker_name(
+                session_id, speaker_id, name
+            )
+            return self._ok(meeting=meeting)
+        except Exception as exc:
+            return self._error(exc)
+
+    @Slot(str, int, str, result=str)
+    def editMeetingSegment(self, session_id: str, index: int, text: str) -> str:
+        try:
+            meeting = self._application.edit_meeting_segment(
+                session_id, index, text
+            )
+            return self._ok(meeting=meeting)
+        except Exception as exc:
+            return self._error(exc)
+
+    @Slot(str, result=str)
+    def deleteMeetingAudio(self, session_id: str) -> str:
+        try:
+            return self._ok(
+                deleted=self._application.delete_meeting_audio(session_id)
+            )
+        except Exception as exc:
+            return self._error(exc)
+
+    @Slot(str, str, result=str)
+    def exportMeetingFormat(self, session_id: str, format_name: str) -> str:
+        return self.exportHistoryFormat(session_id, format_name, "raw")
 
     @Slot(result=str)
     def chooseAudioFile(self) -> str:
         path, _ = QFileDialog.getOpenFileName(
-            None,
-            "Seleziona file audio o video",
-            "",
-            "Media (*.wav *.mp3 *.flac *.ogg *.m4a *.aac *.opus *.mp4 *.mkv *.webm *.mov *.avi);;Tutti i file (*)",
+            None, "Seleziona file audio o video", "", self._MEDIA_FILTER
         )
         return path
+
+    @Slot(result=str)
+    def chooseAudioFiles(self) -> str:
+        paths, _ = QFileDialog.getOpenFileNames(
+            None, "Seleziona file audio o video", "", self._MEDIA_FILTER
+        )
+        return json.dumps(paths, ensure_ascii=False)
 
     @Slot(str, str, str, bool, bool)
     def startFile(
@@ -249,185 +304,220 @@ class BackendBridge(QObject):
         song_mode: bool,
         isolate_vocals: bool,
     ) -> None:
-        path = Path(file_path).expanduser()
-        if not path.is_file():
-            self._emit_event(
-                "file_transcriber_error",
-                "Seleziona un file esistente",
-            )
-            return
-        lang = language.strip() or self._controller.settings.language
-        model = (
-            model_size
-            if model_size in ModelSize.choices()
-            else self._controller.settings.model_size
-        )
-
-        def operation() -> None:
-            self._prepare_backend_for_selected_model()
-            self._controller.start_file_transcription(
-                str(path),
-                language=lang,
-                model_size=model,
+        try:
+            self._application.start_file(
+                file_path,
+                language=language,
+                model_size=model_size,
                 song_mode=bool(song_mode),
-                isolate_vocals_flag=bool(isolate_vocals and song_mode),
+                isolate_vocals=bool(isolate_vocals),
             )
-
-        self._run_async("start-file", operation, "file_transcriber_error")
+        except Exception as exc:
+            self._emit_event("file_transcriber_error", str(exc))
 
     @Slot()
     def stopFile(self) -> None:
-        self._run_async(
-            "stop-file",
-            self._controller.stop_file_transcription,
-            "file_transcriber_error",
+        self._application.stop_file()
+
+    @Slot(str, str, str, bool, bool, result=str)
+    def enqueueFileBatch(
+        self,
+        paths_json: str,
+        language: str,
+        model_size: str,
+        song_mode: bool,
+        isolate_vocals: bool,
+    ) -> str:
+        try:
+            decoded = json.loads(paths_json)
+            if not isinstance(decoded, list):
+                raise ValueError("elenco file non valido")
+            paths = [str(path) for path in decoded if str(path).strip()]
+            jobs = self._application.enqueue_files(
+                paths,
+                language=language,
+                model_size=model_size,
+                song_mode=bool(song_mode),
+                isolate_vocals=bool(isolate_vocals),
+            )
+            return self._ok(jobs=jobs)
+        except Exception as exc:
+            return self._error(exc)
+
+    @Slot(result=str)
+    def listFileQueue(self) -> str:
+        return json.dumps(
+            self._application.list_file_queue(), ensure_ascii=False, default=str
         )
+
+    @Slot(result=str)
+    def cancelFileQueue(self) -> str:
+        return self._ok(jobs=self._application.cancel_file_queue())
+
+    @Slot(result=str)
+    def clearFinishedFileQueue(self) -> str:
+        return self._ok(jobs=self._application.clear_finished_file_queue())
+
+    def emitDroppedFiles(self, paths: list[str]) -> None:
+        existing = self._application.existing_files(paths)
+        if existing:
+            self._emit_event("file_drop_received", existing)
 
     @Slot(result=str)
     def listModels(self) -> str:
         return json.dumps(
-            self._controller.list_models(),
-            ensure_ascii=False,
-            default=str,
+            self._application.list_models(), ensure_ascii=False, default=str
         )
 
     @Slot(str, result=str)
     def downloadModel(self, model_size: str) -> str:
-        if (
-            self._controller.is_running()
-            or self._controller.is_draining()
-            or self._controller.is_file_transcribing()
-        ):
-            return json.dumps(
-                {
-                    "ok": False,
-                    "error": "Ferma la trascrizione attiva prima di scaricare un modello",
-                },
-                ensure_ascii=False,
-            )
-        self._run_async(
-            f"download-model-{model_size}",
-            lambda: self._controller.download_model(model_size),
-            "model_download_error",
-        )
-        return json.dumps({"ok": True}, ensure_ascii=False)
+        try:
+            self._application.download_model(model_size)
+            return self._ok()
+        except Exception as exc:
+            return self._error(exc)
 
     @Slot(str, result=str)
     def deleteModel(self, model_size: str) -> str:
-        if (
-            self._controller.is_running()
-            or self._controller.is_draining()
-            or self._controller.is_file_transcribing()
-        ):
-            return json.dumps(
-                {
-                    "ok": False,
-                    "error": "Ferma la trascrizione attiva prima di eliminare un modello",
-                },
-                ensure_ascii=False,
-            )
-        self._run_async(
-            f"delete-model-{model_size}",
-            lambda: self._controller.delete_model(model_size),
-            "model_delete_error",
-        )
-        return json.dumps({"ok": True}, ensure_ascii=False)
+        try:
+            self._application.delete_model(model_size)
+            return self._ok()
+        except Exception as exc:
+            return self._error(exc)
 
     @Slot(int, result=str)
     def listHistory(self, limit: int = 50) -> str:
         return json.dumps(
-            self._controller.list_history(max(1, min(int(limit), 500))),
+            self._application.list_history(max(1, min(int(limit), 500))),
+            ensure_ascii=False,
+            default=str,
+        )
+
+    @Slot(str, int, result=str)
+    def searchHistory(self, query: str, limit: int = 100) -> str:
+        return json.dumps(
+            self._application.search_history(
+                query, max(1, min(int(limit), 500))
+            ),
             ensure_ascii=False,
             default=str,
         )
 
     @Slot(str, result=str)
     def getHistorySession(self, session_id: str) -> str:
-        session = self._controller.get_history_session(session_id)
-        return json.dumps(session, ensure_ascii=False, default=str)
+        return json.dumps(
+            self._application.get_history_session(session_id),
+            ensure_ascii=False,
+            default=str,
+        )
+
+    @Slot(str, str, result=str)
+    def generatePostprocess(self, session_id: str, profile: str) -> str:
+        try:
+            return self._ok(
+                **self._application.generate_postprocess(session_id, profile)
+            )
+        except Exception as exc:
+            return self._error(exc)
+
+    @Slot(str, str, result=str)
+    def renameHistorySession(self, session_id: str, name: str) -> str:
+        try:
+            return self._ok(
+                name=self._application.rename_history_session(session_id, name)
+            )
+        except Exception as exc:
+            return self._error(exc)
 
     @Slot(str, result=str)
     def exportHistorySession(self, session_id: str) -> str:
+        return self.exportHistoryFormat(session_id, "txt", "raw")
+
+    @Slot(str, str, str, result=str)
+    def exportHistoryFormat(
+        self,
+        session_id: str,
+        format_name: str,
+        profile: str = "raw",
+    ) -> str:
         try:
-            session = self._controller.get_history_session(session_id)
+            session = self._application.get_history_session(session_id)
             if not session:
                 raise KeyError("sessione non trovata")
+            fmt = str(format_name or "txt").strip().lower().lstrip(".")
+            if fmt not in self._EXPORT_FILTERS:
+                raise ValueError("formato export non supportato")
             source_path = str(session.get("source_path") or "")
-            stem = Path(source_path).stem if source_path else session_id
-            default_path = str(Path.home() / f"{stem or session_id}.txt")
+            stem = "meeting-" + session_id if session.get("kind") == "meeting" else (
+                Path(source_path).stem if source_path else session_id
+            )
             target, _ = QFileDialog.getSaveFileName(
                 None,
-                "Esporta trascrizione",
-                default_path,
-                "Testo (*.txt)",
+                "Esporta riunione" if session.get("kind") == "meeting" else "Esporta trascrizione",
+                str(Path.home() / f"{stem}.{fmt}"),
+                self._EXPORT_FILTERS[fmt],
             )
             if not target:
-                return json.dumps(
-                    {"ok": False, "cancelled": True},
-                    ensure_ascii=False,
+                return json.dumps({"ok": False, "cancelled": True}, ensure_ascii=False)
+            return self._ok(
+                path=self._application.export_history_format(
+                    session_id, target, fmt, profile or "raw"
                 )
-            exported = self._controller.export_history_session(
-                session_id,
-                target,
-            )
-            return json.dumps(
-                {"ok": True, "path": exported},
-                ensure_ascii=False,
             )
         except Exception as exc:
-            logger.warning("Export cronologia fallito: %s", exc)
-            return json.dumps(
-                {"ok": False, "error": str(exc)},
-                ensure_ascii=False,
-            )
+            logger.warning("Export cronologia %s fallito: %s", format_name, exc)
+            return self._error(exc)
 
     @Slot(str, result=str)
     def deleteHistorySession(self, session_id: str) -> str:
         try:
-            deleted = self._controller.delete_history_session(session_id)
-            return json.dumps(
-                {"ok": True, "deleted": deleted},
-                ensure_ascii=False,
+            return self._ok(
+                deleted=self._application.delete_history_session(session_id)
             )
         except Exception as exc:
+            return self._error(exc)
+
+    @Slot(str, result=str)
+    def getSessionRecordingInfo(self, session_id: str) -> str:
+        try:
+            info = self._application.session_recording_info(session_id)
+            if info.get("exists"):
+                info["url"] = QUrl.fromLocalFile(str(info["path"])).toString()
+            return json.dumps(info, ensure_ascii=False, default=str)
+        except Exception as exc:
             return json.dumps(
-                {"ok": False, "error": str(exc)},
-                ensure_ascii=False,
+                {"exists": False, "error": str(exc)}, ensure_ascii=False
             )
+
+    @Slot(str, result=str)
+    def deleteSessionRecording(self, session_id: str) -> str:
+        try:
+            return self._ok(
+                deleted=self._application.delete_session_recording(session_id)
+            )
+        except Exception as exc:
+            return self._error(exc)
 
     @Slot(result=str)
     def listRecoveryAudio(self) -> str:
         return json.dumps(
-            self._controller.list_recovery_audio(),
-            ensure_ascii=False,
-            default=str,
+            self._application.list_recovery_audio(), ensure_ascii=False, default=str
         )
 
     @Slot(str, result=str)
     def startRecovery(self, recovery_path: str) -> str:
         try:
-            self._prepare_backend_for_selected_model()
-            self._controller.start_recovery_transcription(recovery_path)
-            return json.dumps({"ok": True}, ensure_ascii=False)
+            self._application.start_recovery(recovery_path)
+            return self._ok()
         except Exception as exc:
-            return json.dumps(
-                {"ok": False, "error": str(exc)},
-                ensure_ascii=False,
-            )
+            return self._error(exc)
 
     @Slot(str, result=str)
     def deleteRecovery(self, recovery_path: str) -> str:
         try:
-            deleted = self._controller.delete_recovery_audio(recovery_path)
-            return json.dumps(
-                {"ok": True, "deleted": deleted},
-                ensure_ascii=False,
-            )
+            return self._ok(deleted=self._application.delete_recovery(recovery_path))
         except Exception as exc:
-            return json.dumps(
-                {"ok": False, "error": str(exc)},
-                ensure_ascii=False,
-            )
+            return self._error(exc)
 
     @Slot(str, result=str)
     def applySettings(self, payload_json: str) -> str:
@@ -435,85 +525,29 @@ class BackendBridge(QObject):
             payload = json.loads(payload_json)
             if not isinstance(payload, dict):
                 raise ValueError("payload impostazioni non valido")
-            allowed = set(self._controller.settings.__dataclass_fields__)
-            overrides = {
-                key: value
-                for key, value in payload.items()
-                if key in allowed
-            }
-            current_before = self._controller.settings
-            old_width = current_before.window_width
-            old_height = current_before.window_height
-
-            model_changed = (
-                "model_size" in overrides
-                and overrides["model_size"] != current_before.model_size
-            )
-            if model_changed and (
-                self._controller.is_running()
-                or self._controller.is_draining()
-                or self._controller.is_file_transcribing()
-            ):
-                raise RuntimeError(
-                    "Ferma la trascrizione attiva prima di cambiare modello"
-                )
-            if model_changed and self._controller.backend.is_running:
-                with self._backend_reload_lock:
-                    self._backend_reload_required = True
-
-            self._controller.update_settings(**overrides)
-            current = self._controller.settings
+            overrides = self._application.filter_settings_overrides(payload)
+            before = self._application.desktop_state()
+            current = self._application.apply_settings(overrides)
             if (
-                current.window_width != old_width
-                or current.window_height != old_height
+                current.window_width != int(before["window_width"])
+                or current.window_height != int(before["window_height"])
             ):
                 self.windowResizeRequested.emit(
-                    current.window_width,
-                    current.window_height,
+                    current.window_width, current.window_height
                 )
-            return json.dumps(
-                {"ok": True, "settings": asdict(current)},
-                ensure_ascii=False,
-            )
+            return self._ok(settings=asdict(current))
         except Exception as exc:
             logger.warning("Impostazioni rifiutate: %s", exc)
-            return json.dumps(
-                {"ok": False, "error": str(exc)},
-                ensure_ascii=False,
-            )
-
-    @Slot(int, result=str)
-    def readLogTail(self, line_count: int = 200) -> str:
-        return self._read_log_tail(max(20, min(int(line_count), 1000)))
+            return self._error(exc)
 
     @Slot()
     def runAudioDiagnostics(self) -> None:
-        def operation() -> None:
-            report = debug_dump()
-            try:
-                streams = self._controller.list_playback_streams()
-            except Exception as exc:
-                streams = []
-                report += f"\n\n=== playback streams ===\n  Errore: {exc}"
-            else:
-                report += "\n\n=== playback streams ==="
-                if not streams:
-                    report += "\n  nessuno stream attivo"
-                for stream in streams:
-                    report += (
-                        f"\n  [#{stream.get('id')}] "
-                        f"{stream.get('display_name') or 'stream'}"
-                        f"\n      pid={stream.get('process_id') or '-'} "
-                        f"binary={stream.get('process_binary') or '-'} "
-                        f"sink={stream.get('sink_name') or '-'} "
-                        f"state={stream.get('state') or '-'}"
-                    )
-            self._emit_event("audio_diagnostics", report)
+        self._application.run_audio_diagnostics()
 
-        self._run_async(
-            "audio-diagnostics",
-            operation,
-            "audio_diagnostics_error",
+    @Slot(int, result=str)
+    def readLogTail(self, line_count: int = 200) -> str:
+        return self._application.read_log_tail(
+            max(20, min(int(line_count), 1000))
         )
 
     def push_log_record(self, record: logging.LogRecord) -> None:
@@ -522,19 +556,6 @@ class BackendBridge(QObject):
         except Exception:
             message = str(record.msg)
         self.logReceived.emit(record.levelname, record.name, message)
-
-    @staticmethod
-    def _read_log_tail(line_count: int) -> str:
-        try:
-            with AppMeta.LOG_PATH.open(
-                "r",
-                encoding="utf-8",
-                errors="replace",
-            ) as handle:
-                lines = handle.readlines()
-            return "".join(lines[-line_count:])
-        except OSError:
-            return ""
 
 
 class BridgeLogHandler(logging.Handler):

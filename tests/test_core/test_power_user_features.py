@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import json
-import threading
 from pathlib import Path
-from unittest.mock import MagicMock
 
-from core.file_segment_journal import FileSegmentJournal
 from core.file_transcriber import FileTranscriberThread
 from core.transcript_export import render_srt, render_vtt
 from core.transcript_history import TranscriptHistoryStore
@@ -46,8 +43,42 @@ def test_old_history_record_without_phase9_fields_remains_readable(tmp_path: Pat
 
     assert loaded is not None
     assert loaded["text"] == "vecchia trascrizione"
+    assert loaded["name"] == ""
     assert loaded["segments"] == []
     assert loaded["derived_outputs"] == {}
+
+
+def test_session_name_is_canonical_searchable_history_metadata(tmp_path: Path) -> None:
+    store = TranscriptHistoryStore(tmp_path)
+    session_id = _session(store, "ordinary transcript")
+
+    cleaned = store.set_name(session_id, "  Project   Aurora  ")
+
+    assert cleaned == "Project Aurora"
+    loaded = store.get_session(session_id)
+    assert loaded is not None
+    assert loaded["name"] == "Project Aurora"
+    assert [item["id"] for item in store.search("project aurora")] == [session_id]
+
+
+def test_legacy_session_name_sidecar_migrates_once_into_history(tmp_path: Path) -> None:
+    history_root = tmp_path / "transcripts"
+    store = TranscriptHistoryStore(history_root)
+    session_id = _session(store)
+    legacy = tmp_path / "session-names.json"
+    legacy.write_text(
+        json.dumps({session_id: "Legacy title", "missing-session": "Ignored"}),
+        encoding="utf-8",
+    )
+
+    migrated = store.migrate_legacy_session_names(legacy)
+
+    assert migrated == 1
+    assert not legacy.exists()
+    loaded = store.get_session(session_id)
+    assert loaded is not None
+    assert loaded["name"] == "Legacy title"
+    assert store.migrate_legacy_session_names(legacy) == 0
 
 
 def test_segments_are_persisted_deduplicated_and_exported(tmp_path: Path) -> None:
@@ -138,24 +169,3 @@ def test_chunk_segment_normalization_offsets_and_removes_overlap() -> None:
         {"start": 30.0, "end": 31.0, "text": "new"},
         {"start": 31.0, "end": 32.0, "text": "ticks"},
     ]
-
-
-def test_file_segment_journal_writes_to_active_history_session(tmp_path: Path) -> None:
-    history = TranscriptHistoryStore(tmp_path)
-    session_id = _session(history)
-    controller = MagicMock()
-    controller._lock = threading.RLock()
-    controller._file_history_id = session_id
-    controller.history = history
-    subscriptions = {}
-    controller.subscribe.side_effect = lambda event, handler: subscriptions.setdefault(event, handler)
-
-    journal = FileSegmentJournal(controller)
-    subscriptions["file_transcriber_segments"](
-        [{"start": 0.0, "end": 1.0, "text": "Hello"}]
-    )
-
-    loaded = history.get_session(session_id)
-    assert loaded is not None
-    assert loaded["segments"] == [{"start": 0.0, "end": 1.0, "text": "Hello"}]
-    journal.close()

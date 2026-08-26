@@ -39,6 +39,13 @@ def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
     return parsed.astimezone(timezone.utc)
 
 
+def _clean_session_name(name: str) -> str:
+    value = " ".join(str(name or "").split()).strip()
+    if len(value) > 120:
+        raise ValueError("Il nome della sessione non può superare 120 caratteri")
+    return value
+
+
 @dataclass
 class TranscriptSession:
     id: str
@@ -50,6 +57,7 @@ class TranscriptSession:
     language: str
     source: str = ""
     source_path: str = ""
+    name: str = ""
     ended_at: Optional[str] = None
     text: str = ""
     segments: list[dict[str, Any]] = field(default_factory=list)
@@ -146,6 +154,55 @@ class TranscriptHistoryStore:
             session.updated_at = _utc_now()
             self._write_session(session)
 
+    def set_name(self, session_id: str, name: str) -> str:
+        """Persist the optional display name in the canonical session record."""
+        cleaned = _clean_session_name(name)
+        with self._lock:
+            session = self._read_session_required(session_id)
+            session.name = cleaned
+            session.updated_at = _utc_now()
+            self._write_session(session)
+        return cleaned
+
+    def migrate_legacy_session_names(self, path: Optional[Path] = None) -> int:
+        """Fold the former sidecar name store into canonical session records once."""
+        legacy_path = Path(path or (AppMeta.DATA_DIR / "session-names.json"))
+        if not legacy_path.is_file():
+            return 0
+        try:
+            payload = json.loads(legacy_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            logger.warning("Migrazione nomi sessione ignorata: %s", exc)
+            return 0
+        if not isinstance(payload, dict):
+            logger.warning("Migrazione nomi sessione ignorata: sidecar non valido")
+            return 0
+
+        migrated = 0
+        with self._lock:
+            for raw_id, raw_name in payload.items():
+                session_id = str(raw_id or "").strip()
+                if not session_id:
+                    continue
+                try:
+                    session = self._read_session(session_id)
+                    cleaned = _clean_session_name(str(raw_name or ""))
+                except (ValueError, OSError):
+                    logger.warning("Nome sessione legacy non valido ignorato: %s", session_id)
+                    continue
+                if session is None or not cleaned or session.name:
+                    continue
+                session.name = cleaned
+                session.updated_at = _utc_now()
+                self._write_session(session)
+                migrated += 1
+
+        try:
+            legacy_path.unlink()
+        except OSError as exc:
+            logger.warning("Rimozione sidecar nomi sessione legacy fallita: %s", exc)
+        return migrated
+
     def set_status(self, session_id: str, status: str, *, terminal: bool = False) -> None:
         with self._lock:
             session = self._read_session_required(session_id)
@@ -191,6 +248,7 @@ class TranscriptHistoryStore:
                     haystack = "\n".join(
                         (
                             session.text,
+                            session.name,
                             session.source_path,
                             session.source,
                             session.model,
@@ -384,7 +442,7 @@ class TranscriptHistoryStore:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             raise ValueError("record cronologia non valido")
-        # Older records predate timestamp/derived-output fields; dataclass
+        # Older records predate name/timestamp/derived-output fields; dataclass
         # defaults keep them readable without migrations.
         return TranscriptSession(**data)
 

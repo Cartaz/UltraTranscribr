@@ -16,7 +16,10 @@ def controller() -> AppController:
     with patch("core.app_controller.detect_gpu_backend", return_value="sycl"), \
          patch("core.app_controller.WhisperModelManager"), \
          patch("core.app_controller.WhisperBackend"), \
-         patch("core.app_controller.PulseAudioRouter"):
+         patch("core.app_controller.PulseAudioRouter"), \
+         patch("core.app_controller.MeetingManager"), \
+         patch("core.app_controller.FileBatchCoordinator"), \
+         patch("core.app_controller.AudioDiscoveryService"):
         return AppController(settings=Settings())
 
 
@@ -24,6 +27,10 @@ class TestAppController:
     def test_settings_property(self, controller: AppController) -> None:
         assert controller.settings is not None
         assert isinstance(controller.settings, Settings)
+
+    def test_workflow_services_are_controller_owned(self, controller: AppController) -> None:
+        assert controller.meeting is controller._meeting
+        assert controller.file_batch is controller._file_batch
 
     def test_buffer_property_is_aggregate_live_view(self, controller: AppController) -> None:
         assert controller.buffer is not None
@@ -36,6 +43,7 @@ class TestAppController:
 
     def test_is_file_transcribing_initially_false(self, controller: AppController) -> None:
         assert controller.is_file_transcribing() is False
+        assert controller.is_file_busy() is False
 
     def test_update_settings(self, controller: AppController) -> None:
         controller.update_settings(language="it")
@@ -80,6 +88,36 @@ class TestAppController:
         assert second["id"] == "two"
         assert controller._live_sessions.create_session.call_count == 2
 
+    def test_recorded_microphone_live_scopes_setting_to_session(
+        self, controller: AppController
+    ) -> None:
+        controller._live_sessions.create_session = MagicMock(return_value={"id": "recorded"})
+
+        controller.start_live_session(
+            audio_source="microphone",
+            sink_name="mic-a",
+            language="it",
+            record_audio=True,
+        )
+
+        session_settings = controller._live_sessions.create_session.call_args.kwargs["settings"]
+        assert session_settings.live_microphone_recording is True
+        assert controller.settings.live_microphone_recording is False
+
+    def test_record_audio_is_ignored_for_non_microphone_live(
+        self, controller: AppController
+    ) -> None:
+        controller._live_sessions.create_session = MagicMock(return_value={"id": "system"})
+
+        controller.start_live_session(
+            audio_source="system",
+            sink_name="monitor-a",
+            record_audio=True,
+        )
+
+        session_settings = controller._live_sessions.create_session.call_args.kwargs["settings"]
+        assert session_settings.live_microphone_recording is False
+
     def test_stop_live_session_is_scoped(self, controller: AppController) -> None:
         controller._live_sessions.stop_session = MagicMock(return_value=True)
         assert controller.stop_live_session("session-a", drain=True) is True
@@ -91,6 +129,38 @@ class TestAppController:
         controller._audio_router.list_streams.return_value = []
         assert controller.list_playback_streams() == []
         controller._audio_router.list_streams.assert_called_once_with()
+
+    def test_audio_discovery_api_delegates_to_owned_service(
+        self, controller: AppController
+    ) -> None:
+        controller._audio_discovery.snapshot.return_value = {
+            "devices": [{"name": "Mic"}],
+            "streams": [],
+        }
+        controller._audio_discovery.cached_health.return_value = {
+            "status": "available"
+        }
+
+        assert controller.audio_discovery_snapshot()["devices"][0]["name"] == "Mic"
+        controller.request_audio_discovery(devices=True, streams=False)
+        assert controller.cached_audio_source_health("microphone", "Mic") == {
+            "status": "available"
+        }
+        controller.request_audio_source_probe("microphone", "Mic")
+
+        controller._audio_discovery.snapshot.assert_called_once_with()
+        controller._audio_discovery.request_refresh.assert_any_call(
+            devices=True,
+            streams=False,
+        )
+        controller._audio_discovery.cached_health.assert_called_once_with(
+            "microphone",
+            "Mic",
+        )
+        controller._audio_discovery.request_probe.assert_called_once_with(
+            "microphone",
+            "Mic",
+        )
 
     def test_file_start_is_rejected_while_live_is_active(self, controller: AppController) -> None:
         controller._live_sessions.has_active_sessions = MagicMock(return_value=True)

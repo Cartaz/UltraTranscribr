@@ -8,6 +8,7 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 from config.settings import Settings
+from core.application_service import ApplicationService
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -70,6 +71,12 @@ class _QUrl:
         return self.value
 
 
+class _QTimer:
+    @staticmethod
+    def singleShot(_delay, callback):
+        callback()
+
+
 class _QFileDialog:
     @staticmethod
     def getOpenFileName(*args, **kwargs):
@@ -87,13 +94,14 @@ class _QFileDialog:
         return "", ""
 
 
-def _load_bridges(monkeypatch):
+def _load_bridge(monkeypatch):
     pyside = ModuleType("PySide6")
     qtcore = ModuleType("PySide6.QtCore")
     qtcore.QObject = _QObject
     qtcore.Signal = _SignalDescriptor
     qtcore.Slot = _slot
     qtcore.QUrl = _QUrl
+    qtcore.QTimer = _QTimer
     qtwidgets = ModuleType("PySide6.QtWidgets")
     qtwidgets.QFileDialog = _QFileDialog
     monkeypatch.setitem(sys.modules, "PySide6", pyside)
@@ -104,37 +112,39 @@ def _load_bridges(monkeypatch):
     ui_package.__path__ = [str(ROOT / "ui")]
     monkeypatch.setitem(sys.modules, "ui", ui_package)
 
-    def load(name: str, path: Path):
-        spec = importlib.util.spec_from_file_location(name, path)
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        monkeypatch.setitem(sys.modules, name, module)
-        spec.loader.exec_module(module)
-        return module
-
-    bridge = load("ui.bridge", ROOT / "ui" / "bridge.py")
-    multi = load("ui.multi_session_bridge", ROOT / "ui" / "multi_session_bridge.py")
-    return bridge, multi
+    spec = importlib.util.spec_from_file_location("ui.bridge", ROOT / "ui" / "bridge.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, "ui.bridge", module)
+    spec.loader.exec_module(module)
+    return module
 
 
 class _FakeController:
     def __init__(self) -> None:
         self.settings = Settings(language="it", audio_source="system")
-        self.backend = SimpleNamespace(is_running=False)
+        self.backend = SimpleNamespace(is_running=False, reconfigure=lambda _settings: None)
         self.buffer = SimpleNamespace(buffer_level=17)
-        self.history = SimpleNamespace()
+        self.history = SimpleNamespace(
+            search=lambda *_args: [],
+            list_recent=lambda *_args: [],
+            migrate_legacy_session_names=lambda: 0,
+        )
+        self.file_batch = SimpleNamespace(list_jobs=lambda: [])
+        self.meeting = SimpleNamespace(
+            snapshot=lambda: None,
+            is_busy=lambda: False,
+            models=SimpleNamespace(status=lambda: {"ready": False}),
+        )
         self.subscriptions = {}
         self.started = []
         self.updated = []
-
-    def subscribe(self, event, handler) -> None:
-        self.subscriptions.setdefault(event, []).append(handler)
-
-    def list_models(self):
-        return [{"model": "medium", "installed": True}]
-
-    def list_playback_streams(self):
-        return [
+        self.discovery_requests = []
+        self.probe_requests = []
+        self.discovery_devices = [
+            {"name": "monitor", "is_monitor": True, "is_mic": False}
+        ]
+        self.discovery_streams = [
             {
                 "id": 42,
                 "display_name": "Browser — Video",
@@ -144,6 +154,43 @@ class _FakeController:
                 "sink_name": "sink.main",
             }
         ]
+
+    def subscribe(self, event, handler) -> None:
+        self.subscriptions.setdefault(event, []).append(handler)
+
+    def list_models(self):
+        return [{"id": "medium", "model": "medium", "installed": True}]
+
+    def audio_discovery_snapshot(self):
+        return {
+            "devices": list(self.discovery_devices),
+            "streams": list(self.discovery_streams),
+        }
+
+    def request_audio_discovery(self, *, devices=True, streams=True):
+        self.discovery_requests.append((devices, streams))
+
+    def cached_audio_source_health(self, source, selected_input=""):
+        if source == "application" and selected_input == "42":
+            return {
+                "source": source,
+                "selected_input": selected_input,
+                "status": "playing",
+                "label": "In riproduzione",
+                "detail": "Browser — Video",
+                "stream": self.discovery_streams[0],
+                "streams": 1,
+            }
+        return {
+            "source": source,
+            "selected_input": selected_input,
+            "status": "disconnected",
+            "label": "Verifica in corso",
+            "detail": "Controllo della sorgente audio in background.",
+        }
+
+    def request_audio_source_probe(self, source, selected_input=""):
+        self.probe_requests.append((source, selected_input))
 
     def list_live_sessions(self, include_text=False):
         payload = {
@@ -157,6 +204,9 @@ class _FakeController:
             payload["text"] = "ciao"
         return [payload]
 
+    def active_live_count(self):
+        return 0
+
     def is_running(self):
         return True
 
@@ -164,6 +214,9 @@ class _FakeController:
         return False
 
     def is_file_transcribing(self):
+        return False
+
+    def is_file_busy(self):
         return False
 
     def start_live_session(self, **kwargs):
@@ -177,17 +230,20 @@ class _FakeController:
     def prune_history(self):
         return 0
 
+    def stop_backend(self):
+        self.backend.is_running = False
+
+
+def _bridge(monkeypatch):
+    module = _load_bridge(monkeypatch)
+    controller = _FakeController()
+    application = ApplicationService(controller)
+    bridge = module.BackendBridge(application)
+    return bridge, controller, application
+
 
 def test_bootstrap_contains_real_multi_session_runtime(monkeypatch) -> None:
-    bridge_module, multi_module = _load_bridges(monkeypatch)
-    controller = _FakeController()
-    monkeypatch.setattr(
-        bridge_module,
-        "list_available_devices",
-        lambda: [{"name": "monitor", "is_monitor": True, "is_mic": False}],
-    )
-
-    bridge = multi_module.MultiSessionBackendBridge(controller)
+    bridge, controller, _application = _bridge(monkeypatch)
     payload = json.loads(bridge.getBootstrap())
 
     assert payload["settings"]["language"] == "it"
@@ -198,44 +254,41 @@ def test_bootstrap_contains_real_multi_session_runtime(monkeypatch) -> None:
     assert payload["runtime"]["liveRunning"] is True
     assert payload["runtime"]["bufferLevel"] == 17
     assert payload["runtime"]["meetingBusy"] is False
+    assert controller.discovery_requests[-1] == (True, True)
 
 
 def test_bridge_forwards_session_event_as_json(monkeypatch) -> None:
-    _, multi_module = _load_bridges(monkeypatch)
-    controller = _FakeController()
-    bridge = multi_module.MultiSessionBackendBridge(controller)
+    bridge, controller, _application = _bridge(monkeypatch)
     received = []
-    bridge.eventReceived.connect(lambda name, payload: received.append((name, json.loads(payload))))
+    bridge.eventReceived.connect(
+        lambda name, payload: received.append((name, json.loads(payload)))
+    )
 
-    handler = controller.subscriptions["live_session_updated"][0]
-    handler({"id": "live-1", "status": "draining"})
+    controller.subscriptions["live_session_updated"][0](
+        {"id": "live-1", "status": "draining"}
+    )
 
     assert received == [
         ("live_session_updated", {"id": "live-1", "status": "draining"})
     ]
 
 
-def test_probe_application_source_returns_playing_stream(monkeypatch) -> None:
-    _, multi_module = _load_bridges(monkeypatch)
-    controller = _FakeController()
-    bridge = multi_module.MultiSessionBackendBridge(controller)
-
+def test_probe_application_source_returns_cache_and_schedules_refresh(monkeypatch) -> None:
+    bridge, controller, _application = _bridge(monkeypatch)
     response = json.loads(bridge.probeAudioSource("application", "42"))
 
     assert response["status"] == "playing"
     assert response["stream"]["id"] == 42
+    assert controller.probe_requests == [("application", "42")]
 
 
 def test_start_live_application_converts_selection_to_stream_id(monkeypatch) -> None:
-    _, multi_module = _load_bridges(monkeypatch)
-    controller = _FakeController()
-    bridge = multi_module.MultiSessionBackendBridge(controller)
+    bridge, controller, application = _bridge(monkeypatch)
     monkeypatch.setattr(
-        bridge,
-        "_run_async",
+        application,
+        "submit",
         lambda name, operation, error_event: operation(),
     )
-    monkeypatch.setattr(bridge, "_prepare_backend_for_selected_model", lambda: None)
 
     bridge.startLive("application", "42", "en")
 
@@ -245,16 +298,16 @@ def test_start_live_application_converts_selection_to_stream_id(monkeypatch) -> 
             "audio_source": "application",
             "language": "en",
             "stream_id": 42,
+            "record_audio": False,
         }
     ]
 
 
-def test_apply_settings_round_trip_uses_controller_validation(monkeypatch) -> None:
-    _, multi_module = _load_bridges(monkeypatch)
-    controller = _FakeController()
-    bridge = multi_module.MultiSessionBackendBridge(controller)
-
-    response = json.loads(bridge.applySettings(json.dumps({"language": "en", "beam_size": 7})))
+def test_apply_settings_round_trip_uses_application_policy(monkeypatch) -> None:
+    bridge, controller, _application = _bridge(monkeypatch)
+    response = json.loads(
+        bridge.applySettings(json.dumps({"language": "en", "beam_size": 7}))
+    )
 
     assert response["ok"] is True
     assert response["settings"]["language"] == "en"
@@ -263,9 +316,7 @@ def test_apply_settings_round_trip_uses_controller_validation(monkeypatch) -> No
 
 
 def test_settings_defaults_are_generated_from_settings_model(monkeypatch) -> None:
-    _, multi_module = _load_bridges(monkeypatch)
-    bridge = multi_module.MultiSessionBackendBridge(_FakeController())
-
+    bridge, _controller, _application = _bridge(monkeypatch)
     defaults = json.loads(bridge.getSettingsDefaults())
 
     assert defaults["model_size"] == Settings().model_size
