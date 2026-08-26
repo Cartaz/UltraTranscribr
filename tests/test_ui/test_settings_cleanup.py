@@ -59,15 +59,18 @@ def test_each_settings_group_has_a_scoped_reset() -> None:
 
 def test_window_geometry_is_persisted_automatically_with_debounce() -> None:
     main_window = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
+    application = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
 
     assert "QTimer" in main_window
     assert "def resizeEvent" in main_window
     assert "_geometry_save_timer.start(350)" in main_window
     assert "_persist_window_geometry" in main_window
-    assert "window_width=width" in main_window
-    assert "window_height=height" in main_window
+    assert "self._application.persist_window_geometry(width, height)" in main_window
     assert "UIConstraints.MIN_WINDOW_WIDTH" in main_window
     assert "UIConstraints.MIN_WINDOW_HEIGHT" in main_window
+    assert "def persist_window_geometry" in application
+    assert "window_width=width" in application
+    assert "window_height=height" in application
 
 
 def test_settings_cleanup_assets_preserve_dark_neumorphism_and_are_checked() -> None:
