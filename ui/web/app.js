@@ -6,9 +6,6 @@ const all = selector => [...document.querySelectorAll(selector)];
 
 const state = {
   boot: null,
-  source: "system",
-  live: false,
-  draining: false,
   file: false,
   fileText: "",
   historyText: "",
@@ -17,8 +14,6 @@ const state = {
   modelBusy: null,
   modelProgress: {},
   backendState: "standby",
-  streams: [],
-  selectedStreamId: null,
 };
 
 const uiModules = [];
@@ -29,10 +24,6 @@ function registerUIModule(module) {
   uiModules.push(module);
   if (uiRuntime.bound) module.bind?.();
   if (uiRuntime.bootstrap) module.hydrate?.(uiRuntime.bootstrap);
-}
-
-function lastUIHandler(name) {
-  return [...uiModules].reverse().find(module => typeof module[name] === "function") || null;
 }
 
 function notifyUIModules(name, ...args) {
@@ -122,160 +113,22 @@ function restoreBackendStatus() {
 }
 
 function sessionBusy() {
-  return state.live || state.draining || state.file || uiModules.some(module => module.isBusy?.() === true);
+  return state.file || uiModules.some(module => module.isBusy?.() === true);
 }
 
 function lockSettings() {
   uiModules.forEach(module => module.lockSettings?.());
 }
 
-function normalizeSource(source) {
-  return ["system", "application", "microphone"].includes(source) ? source : "system";
-}
-
-function sourceLabel(source) {
-  if (source === "microphone") return "Microfono";
-  if (source === "application") return "Applicazione";
-  return "Audio di sistema";
-}
-
-function selectedDeviceLabel() {
-  const select = $("live-device");
-  if (!select.value) return "Automatico";
-  return select.options[select.selectedIndex]?.textContent || select.value;
-}
-
-function devices(source, items) {
-  const select = $("live-device");
-  const current = select.value;
-  select.replaceChildren(new Option("Rilevamento automatico", ""));
-  const flag = source === "system" ? "is_monitor" : "is_mic";
-  (items || []).filter(device => !!device[flag]).forEach(device => {
-    select.append(new Option(device.name + (device.hostapi_name ? ` · ${device.hostapi_name}` : ""), device.name));
-  });
-  if ([...select.options].some(option => option.value === current)) select.value = current;
-  updateLiveSummary();
-}
-
-function streamMeta(stream) {
-  if (!stream) return "Seleziona uno stream PipeWire/PulseAudio. Verrà isolato e ripristinato automaticamente al termine.";
-  return `${stream.process_id ? `PID ${stream.process_id}` : "PID —"} · ${stream.process_binary || "binario —"} · ${stream.sink_name || "sink —"} · ${stream.state === "paused" ? "in pausa" : "in riproduzione"}`;
-}
-
-function selectedStream() {
-  const id = Number($("live-stream").value);
-  if (!Number.isFinite(id)) return null;
-  return state.streams.find(stream => Number(stream.id) === id) || null;
-}
-
-function selectedInputValue() {
-  return state.source === "application" ? $("live-stream").value : $("live-device").value;
-}
-
-function selectedInputLabel() {
-  return state.source === "application" ? selectedStream()?.display_name || "Nessuno stream" : selectedDeviceLabel();
-}
-
-function updateLiveSummary(runtime = null) {
-  const settings = state.boot?.settings || {};
-  const source = normalizeSource(runtime?.source || state.source || settings.audio_source || "system");
-  $("live-source-value").textContent = sourceLabel(source);
-  if (runtime?.stream) $("live-device-value").textContent = runtime.stream.display_name || `Stream #${runtime.stream.id}`;
-  else if (source === "application") $("live-device-value").textContent = selectedInputLabel();
-  else $("live-device-value").textContent = runtime?.sink || selectedDeviceLabel();
-  $("live-model-value").textContent = modelLabels[settings.model_size] || settings.model_size || "—";
-  $("live-language-value").textContent = settings.language || "auto";
-}
-
-function updateSelectedStreamMeta() {
-  const stream = selectedStream();
-  state.selectedStreamId = stream ? Number(stream.id) : null;
-  $("live-stream-meta").textContent = streamMeta(stream);
-  updateLiveSummary();
-  liveUI($("live-status").textContent || "Idle");
-  uiModules.forEach(module => module.streamMeta?.());
-}
-
-function renderPlaybackStreams(items) {
-  const streams = Array.isArray(items) ? items : [];
-  const select = $("live-stream");
-  const previous = select.value || (state.selectedStreamId == null ? "" : String(state.selectedStreamId));
-  state.streams = streams;
-  select.replaceChildren(new Option(streams.length ? "Seleziona uno stream" : "Nessuno stream in riproduzione", ""));
-  streams.forEach(stream => {
-    const pid = stream.process_id ? `PID ${stream.process_id}` : "PID —";
-    const option = new Option(`${stream.display_name || `Stream #${stream.id}`} · ${pid} · ${stream.state === "paused" ? "pausa" : "playing"}`, String(stream.id));
-    option.title = `${stream.process_binary || ""} · ${stream.sink_name || ""}`;
-    select.append(option);
-  });
-  select.value = [...select.options].some(option => option.value === previous) ? previous : "";
-  updateSelectedStreamMeta();
-}
-
-function refreshStreams() {
-  const handler = lastUIHandler("refreshStreams");
-  if (handler?.refreshStreams() === true) return;
-  call("listPlaybackStreams", [], result => {
-    const response = json(result);
-    renderPlaybackStreams(Array.isArray(response) ? response : response?.streams || []);
-    if (!Array.isArray(response) && response?.ok === false) showError(response.error);
-  });
-}
-
-function refreshDevices() {
-  const handler = lastUIHandler("refreshDevices");
-  if (handler?.refreshDevices() === true) return;
-  if (state.source === "application") return refreshStreams();
-  call("refreshDevices", [state.source], result => devices(state.source, json(result)));
-}
-
-function liveUI(status) {
-  const handler = uiModules.find(module => typeof module.liveUI === "function");
-  if (handler) return handler.liveUI(status);
-  $("live-status").textContent = status;
-  const busy = state.live || state.draining;
-  $("live-start").disabled = busy || state.file || (state.source === "application" && !$("live-stream").value);
-  $("live-stop").disabled = !busy;
-  $("live-drain").disabled = !state.live || state.draining;
-  setOrb("live-orb", busy);
-  lockSettings();
-}
-
-function sourceUI() {
-  all(".segment").forEach(button => {
-    const active = button.dataset.source === state.source;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-pressed", String(active));
-  });
-  $("live-device-field").hidden = state.source === "application";
-  $("live-stream-field").hidden = state.source !== "application";
-  updateLiveSummary();
-  liveUI($("live-status").textContent || "Idle");
-  uiModules.forEach(module => module.sourceUI?.());
-}
-
 function hydrate(bootstrap) {
   uiRuntime.bootstrap = bootstrap;
-  const moduleBootstrap = bootstrap;
-  uiModules.forEach(module => {
-    if (typeof module.transformBootstrap === "function") bootstrap = module.transformBootstrap(bootstrap) || bootstrap;
-  });
   state.boot = bootstrap;
   state.models = Array.isArray(bootstrap.models) ? bootstrap.models : [];
-  state.streams = Array.isArray(bootstrap.playbackStreams) ? bootstrap.playbackStreams : [];
-  state.source = normalizeSource(bootstrap.settings.audio_source);
-  state.live = !!bootstrap.runtime.liveRunning;
-  state.draining = !!bootstrap.runtime.liveDraining;
   state.file = !!bootstrap.runtime.fileRunning;
   $("version").textContent = `v${bootstrap.app.version}`;
-  devices(state.source === "application" ? "system" : state.source, bootstrap.devices);
-  renderPlaybackStreams(state.streams);
-  sourceUI();
-  updateLiveSummary();
-  liveUI(state.draining ? "Completamento buffer" : state.live ? "In esecuzione" : "Idle");
   setBackendStatus(bootstrap.runtime.backendRunning ? "ready" : "standby");
   $("log-output").textContent = bootstrap.logTail || "Nessun log persistente disponibile.";
-  uiModules.forEach(module => module.hydrate?.(moduleBootstrap));
+  uiModules.forEach(module => module.hydrate?.(bootstrap));
 }
 
 function appendLog(level, name, message) {
@@ -305,6 +158,9 @@ function showError(value) { notice(friendlyError(value), true); }
 
 function event(name, payload) {
   const value = json(payload);
+  if (name === "config_changed" && state.boot && value && typeof value === "object") {
+    state.boot.settings = {...state.boot.settings, ...value};
+  }
   let consumed = false;
   uiModules.forEach(module => {
     if (module.event?.(name, value, payload) === true) consumed = true;
@@ -312,14 +168,6 @@ function event(name, payload) {
   if (consumed) return;
   switch (name) {
     case "backend_status_changed": setBackendStatus(value); break;
-    case "config_changed":
-      if (state.boot && value && typeof value === "object") {
-        state.boot.settings = {...state.boot.settings, ...value};
-        if (value.audio_source) state.source = normalizeSource(value.audio_source);
-        sourceUI();
-        refreshDevices();
-      }
-      break;
     case "audio_diagnostics": $("diagnostics-output").textContent = String(value); break;
     case "audio_diagnostics_error": $("diagnostics-output").textContent = String(value); showError(value); break;
   }
@@ -343,24 +191,9 @@ async function copyValue(value) {
   notice("Copiato negli appunti");
 }
 
-function startLive() {
-  const handler = lastUIHandler("startLive");
-  if (handler?.startLive() === true) return;
-  const input = selectedInputValue();
-  if (state.source === "application" && !input) return notice("Seleziona uno stream applicazione da trascrivere", true);
-  updateLiveSummary();
-  liveUI(state.source === "application" ? "Preparazione routing" : "Avvio");
-  call("startLive", [state.source, input, state.boot?.settings?.language || "auto"]);
-}
-
 function bind() {
   all(".nav").forEach(button => button.onclick = () => switchView(button.dataset.view));
-  all(".segment").forEach(button => button.onclick = () => { state.source = normalizeSource(button.dataset.source); sourceUI(); refreshDevices(); });
   $("notice-close").onclick = () => $("notice").hidden = true;
-  $("live-device").onchange = updateLiveSummary;
-  $("live-stream").onchange = updateSelectedStreamMeta;
-  $("stream-refresh").onclick = refreshStreams;
-  $("live-start").onclick = startLive;
   $("log-refresh").onclick = () => call("readLogTail", [300], result => { $("log-output").textContent = result || "Nessun log persistente disponibile."; });
   $("log-copy").onclick = () => copyValue($("log-output").textContent);
   $("diagnostics-run").onclick = () => { $("diagnostics-output").textContent = "Diagnostica in corso…"; call("runAudioDiagnostics"); };
