@@ -15,7 +15,6 @@ def _read(relative: str) -> str:
 
 def test_presentation_does_not_cross_application_boundary() -> None:
     sources = {
-        "main.py": _read("main.py"),
         "ui/bridge.py": _read("ui/bridge.py"),
         "ui/main_window.py": _read("ui/main_window.py"),
     }
@@ -27,27 +26,50 @@ def test_presentation_does_not_cross_application_boundary() -> None:
         "self._application.controller.",
         "self._application.file_batch.",
         "self._application.meeting.",
+        "AppController",
     )
     for path, source in sources.items():
         for token in forbidden:
             assert token not in source, f"{path} crosses ApplicationService via {token}"
 
 
-def test_bridge_depends_on_application_service_not_app_controller() -> None:
+def test_bridge_and_native_shell_depend_on_application_service() -> None:
     bridge = _read("ui/bridge.py")
+    window = _read("ui/main_window.py")
+    main = _read("main.py")
+
     assert "ApplicationService" in bridge
     assert "AppController" not in bridge
-    assert "BackendBridge(application" in _read("ui/main_window.py")
+    assert "ApplicationService" in window
+    assert "AppController" not in window
+    assert "BackendBridge(application" in window
+    assert "MainWindow(application=application)" in main
 
 
-def test_composition_root_does_not_recreate_internal_shutdown_order() -> None:
+def test_composition_root_owns_runtime_shutdown_order() -> None:
     main = _read("main.py")
     window = _read("ui/main_window.py")
+    application = _read("core/application_service.py")
 
     assert "application.close()" in main
-    assert "controller.shutdown()" not in main
-    assert "self._application.close()" in window
-    assert "self._controller.shutdown()" not in window
+    assert "controller.shutdown()" in main
+    assert main.index("application.close()") < main.index("controller.shutdown()")
+    assert "self._application.close()" not in window
+    assert "self.controller.shutdown()" not in application
+
+
+def test_native_shell_uses_narrow_application_surface_for_desktop_state() -> None:
+    application = _read("core/application_service.py")
+    window = _read("ui/main_window.py")
+
+    for method in ("desktop_state", "persist_window_geometry", "live_active"):
+        assert f"def {method}" in application
+
+    assert "self._application.desktop_state()" in window
+    assert "self._application.persist_window_geometry(" in window
+    assert "self._application.live_active()" in window
+    assert "update_settings(" not in window
+    assert ".settings" not in window
 
 
 def test_application_service_remains_the_only_presentation_workflow_boundary() -> None:
