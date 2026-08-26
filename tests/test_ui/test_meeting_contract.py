@@ -28,8 +28,9 @@ def test_live_microphone_recording_is_opt_in_and_application_owned() -> None:
     assert 'row.hidden = state.source !== "microphone"' in source
     assert "startLiveWithRecording" in source
     assert "live_microphone_recording: bool = False" in settings
-    assert "record_audio=bool(" in bridge
     assert "self._application.start_live(" in bridge
+    assert "record_audio and source == AudioSource.MICROPHONE.value" in application
+    assert "record_audio=bool(" in application
     assert "self.controller.start_live_session(" in application
 
 
