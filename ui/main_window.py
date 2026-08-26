@@ -141,15 +141,16 @@ class MainWindow(QMainWindow):
 
     def on_start(self) -> None:
         desktop = self._application.desktop_state()
-        self._bridge.startLive(
+        self._application.start_live(
             str(desktop["audio_source"]),
             str(desktop["sink_name"] or ""),
             str(desktop["language"]),
+            False,
         )
 
     def on_stop(self) -> None:
-        self._bridge.stopAllLive()
-        self._bridge.cancelFileQueue()
+        self._application.stop_all_live(drain=False)
+        self._application.cancel_file_queue()
 
     def force_quit(self) -> None:
         if self._closing:
