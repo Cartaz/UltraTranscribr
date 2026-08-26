@@ -1,6 +1,11 @@
 "use strict";
 
 state.liveSessions = new Map();
+state.source = "system";
+state.live = false;
+state.draining = false;
+state.streams = [];
+state.selectedStreamId = null;
 
 const multiLivePanel = document.querySelector('[data-panel="live"]');
 const multiLiveTranscript = multiLivePanel?.querySelector('.transcript-card');
@@ -61,6 +66,106 @@ if (sourceUxInputCard && !$("source-health")) {
   health.innerHTML = '<span class="orb" aria-hidden="true"></span><div><strong id="source-health-label">Verifica sorgente</strong><small id="source-health-detail">Aggiorna per controllare la disponibilità.</small></div>';
   const actions = sourceUxInputCard.querySelector(".actions");
   sourceUxInputCard.insertBefore(health, actions || null);
+}
+
+function normalizeSource(source) {
+  return ["system", "application", "microphone"].includes(source) ? source : "system";
+}
+
+function sourceLabel(source) {
+  if (source === "microphone") return "Microfono";
+  if (source === "application") return "Applicazione";
+  return "Audio di sistema";
+}
+
+function selectedDeviceLabel() {
+  const select = $("live-device");
+  if (!select?.value) return "Automatico";
+  return select.options[select.selectedIndex]?.textContent || select.value;
+}
+
+function devices(source, items) {
+  const select = $("live-device");
+  if (!select) return;
+  const current = select.value;
+  select.replaceChildren(new Option("Rilevamento automatico", ""));
+  const flag = source === "system" ? "is_monitor" : "is_mic";
+  (items || []).filter(device => !!device[flag]).forEach(device => {
+    select.append(new Option(device.name + (device.hostapi_name ? ` · ${device.hostapi_name}` : ""), device.name));
+  });
+  if ([...select.options].some(option => option.value === current)) select.value = current;
+  updateLiveSummary();
+}
+
+function streamMeta(stream) {
+  if (!stream) return "Seleziona uno stream PipeWire/PulseAudio. Verrà isolato e ripristinato automaticamente al termine.";
+  return `${stream.process_id ? `PID ${stream.process_id}` : "PID —"} · ${stream.process_binary || "binario —"} · ${stream.sink_name || "sink —"} · ${stream.state === "paused" ? "in pausa" : "in riproduzione"}`;
+}
+
+function selectedStream() {
+  const id = Number($("live-stream")?.value);
+  if (!Number.isFinite(id)) return null;
+  return state.streams.find(stream => Number(stream.id) === id) || null;
+}
+
+function selectedInputValue() {
+  return state.source === "application" ? $("live-stream")?.value || "" : $("live-device")?.value || "";
+}
+
+function selectedInputLabel() {
+  return state.source === "application" ? selectedStream()?.display_name || "Nessuno stream" : selectedDeviceLabel();
+}
+
+function updateLiveSummary(runtime = null) {
+  const settings = state.boot?.settings || {};
+  const source = normalizeSource(runtime?.source || state.source || settings.audio_source || "system");
+  if ($("live-source-value")) $("live-source-value").textContent = sourceLabel(source);
+  if ($("live-device-value")) {
+    if (runtime?.stream) $("live-device-value").textContent = runtime.stream.display_name || `Stream #${runtime.stream.id}`;
+    else if (source === "application") $("live-device-value").textContent = selectedInputLabel();
+    else $("live-device-value").textContent = runtime?.sink || selectedDeviceLabel();
+  }
+  if ($("live-model-value")) $("live-model-value").textContent = modelLabels[settings.model_size] || settings.model_size || "—";
+  if ($("live-language-value")) $("live-language-value").textContent = settings.language || "auto";
+}
+
+function updateSelectedStreamMeta() {
+  const stream = selectedStream();
+  state.selectedStreamId = stream ? Number(stream.id) : null;
+  if ($("live-stream-meta")) $("live-stream-meta").textContent = streamMeta(stream);
+  updateLiveSummary();
+  multiLiveSyncAggregate();
+  probeSelectedAudioSource();
+}
+
+function renderPlaybackStreams(items) {
+  const streams = Array.isArray(items) ? items : [];
+  const select = $("live-stream");
+  if (!select) return;
+  const previous = select.value || (state.selectedStreamId == null ? "" : String(state.selectedStreamId));
+  state.streams = streams;
+  select.replaceChildren(new Option(streams.length ? "Seleziona uno stream" : "Nessuno stream in riproduzione", ""));
+  streams.forEach(stream => {
+    const pid = stream.process_id ? `PID ${stream.process_id}` : "PID —";
+    const option = new Option(`${stream.display_name || `Stream #${stream.id}`} · ${pid} · ${stream.state === "paused" ? "pausa" : "playing"}`, String(stream.id));
+    option.title = `${stream.process_binary || ""} · ${stream.sink_name || ""}`;
+    select.append(option);
+  });
+  select.value = [...select.options].some(option => option.value === previous) ? previous : "";
+  updateSelectedStreamMeta();
+}
+
+function sourceUI() {
+  all(".segment").forEach(button => {
+    const active = button.dataset.source === state.source;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  if ($("live-device-field")) $("live-device-field").hidden = state.source === "application";
+  if ($("live-stream-field")) $("live-stream-field").hidden = state.source !== "application";
+  updateLiveSummary();
+  multiLiveSyncAggregate();
+  if (backend) probeSelectedAudioSource();
 }
 
 function multiLiveActiveSessions() {
@@ -241,7 +346,7 @@ function multiLiveSyncAggregate() {
   }
   setOrb("live-orb", active.length > 0);
   const missingStream = state.source === "application" && !$("live-stream")?.value;
-  if ($("live-start")) $("live-start").disabled = !!state.file || missingStream || sessionBusy() && !active.length;
+  if ($("live-start")) $("live-start").disabled = !!state.file || missingStream;
   if ($("live-stop-all")) $("live-stop-all").disabled = active.length === 0;
   if ($("live-drain-all")) $("live-drain-all").disabled = capturing.length === 0;
   if ($("file-start")) $("file-start").disabled = active.length > 0 || !!state.file;
@@ -291,7 +396,7 @@ function multiLiveRefreshDevices() {
 }
 
 function refreshAllAudioSources() {
-  refreshDevices();
+  multiLiveRefreshDevices();
 }
 
 function multiLiveHandleRoute(value) {
@@ -311,18 +416,12 @@ function multiLiveHandleRoute(value) {
 }
 
 const liveSessionsModule = {
-  transformBootstrap(bootstrap) {
-    return {
-      ...bootstrap,
-      runtime: {
-        ...(bootstrap.runtime || {}),
-        liveRunning: false,
-        liveDraining: false,
-        bufferLevel: 0,
-      },
-    };
-  },
   hydrate(bootstrap) {
+    state.source = normalizeSource(bootstrap.settings?.audio_source || "system");
+    state.streams = Array.isArray(bootstrap.playbackStreams) ? bootstrap.playbackStreams : [];
+    devices(state.source === "application" ? "system" : state.source, bootstrap.devices || []);
+    renderPlaybackStreams(state.streams);
+    sourceUI();
     state.liveSessions.clear();
     (bootstrap.liveSessions || []).forEach(multiLiveUpsert);
     multiLiveRender();
@@ -330,6 +429,14 @@ const liveSessionsModule = {
     refreshAllAudioSources();
   },
   bind() {
+    all(".segment").forEach(button => {
+      button.onclick = () => {
+        state.source = normalizeSource(button.dataset.source);
+        sourceUI();
+        refreshAllAudioSources();
+      };
+    });
+    if ($("live-start")) $("live-start").onclick = () => liveSessionsModule.startLive();
     if ($("live-stop-all")) $("live-stop-all").onclick = () => call("stopAllLive");
     if ($("live-drain-all")) $("live-drain-all").onclick = () => call("drainAllLive");
     if ($("source-refresh-all")) $("source-refresh-all").onclick = refreshAllAudioSources;
@@ -338,24 +445,13 @@ const liveSessionsModule = {
       probeSelectedAudioSource();
     };
     if ($("live-stream")) $("live-stream").onchange = updateSelectedStreamMeta;
-    if ($("stream-refresh")) $("stream-refresh").onclick = refreshStreams;
+    if ($("stream-refresh")) $("stream-refresh").onclick = multiLiveRefreshStreams;
   },
   isBusy() {
-    return multiLiveActiveSessions().length > 0 || !!state.file;
+    return multiLiveActiveSessions().length > 0;
   },
-  liveUI(statusText) {
-    if (!multiLiveActiveSessions().length && statusText && $("live-status")) {
-      $("live-status").textContent = statusText;
-    }
+  lockSettings() {
     multiLiveSyncAggregate();
-  },
-  refreshStreams() {
-    multiLiveRefreshStreams();
-    return true;
-  },
-  refreshDevices() {
-    multiLiveRefreshDevices();
-    return true;
   },
   startLive() {
     const settings = state.boot?.settings || {};
@@ -375,14 +471,17 @@ const liveSessionsModule = {
   view(name) {
     if (name === "live") refreshAllAudioSources();
   },
-  sourceUI() {
-    if (backend) probeSelectedAudioSource();
-  },
-  streamMeta() {
-    probeSelectedAudioSource();
-  },
   event(name, value) {
     switch (name) {
+      case "config_changed":
+        if (value?.audio_source) {
+          state.source = normalizeSource(value.audio_source);
+          sourceUI();
+          refreshAllAudioSources();
+        } else if (value && typeof value === "object") {
+          updateLiveSummary();
+        }
+        return false;
       case "live_session_created":
       case "live_session_updated":
         multiLiveUpsert(value);
