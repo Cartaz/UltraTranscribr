@@ -87,7 +87,7 @@ def main() -> None:
         sys.exit(1)
 
     application = ApplicationService(controller)
-    window = MainWindow(controller=controller, application=application)
+    window = MainWindow(application=application)
 
     icon_path = Path(__file__).parent / "assets" / "icons" / "icon.png"
     if not icon_path.exists():
@@ -119,7 +119,10 @@ def main() -> None:
     try:
         exit_code = app.exec()
     finally:
-        application.close()
+        try:
+            application.close()
+        finally:
+            controller.shutdown()
     sys.exit(exit_code)
 
 
