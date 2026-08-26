@@ -74,10 +74,6 @@ class ApplicationService:
         if subscription in self._subscriptions:
             self._subscriptions.remove(subscription)
 
-    @property
-    def settings(self) -> Settings:
-        return self.controller.settings
-
     def desktop_state(self) -> dict[str, Any]:
         """Return the small native-shell state surface without leaking AppController."""
         settings = self.controller.settings
@@ -225,14 +221,39 @@ class ApplicationService:
 
     def start_live(
         self,
-        *,
-        sink_name: str | None,
         audio_source: str,
+        selected_input: str,
         language: str,
-        stream_id: int | None,
         record_audio: bool,
     ) -> None:
+        """Interpret a presentation Live request and start it outside the GUI thread."""
+
         def operation() -> None:
+            settings = self.controller.settings
+            source = (
+                audio_source
+                if audio_source in AudioSource.choices()
+                else settings.audio_source
+            )
+            selection = str(selected_input or "").strip()
+            resolved_language = str(language or "").strip() or settings.language
+            sink_name: str | None = None
+            stream_id: int | None = None
+
+            if source == AudioSource.APPLICATION.value:
+                if not selection:
+                    raise ValueError(
+                        "Seleziona uno stream applicazione prima di avviare la sessione"
+                    )
+                try:
+                    stream_id = int(selection)
+                except ValueError as exc:
+                    raise ValueError(
+                        "Identificatore dello stream applicazione non valido"
+                    ) from exc
+            else:
+                sink_name = selection or None
+
             if self.meeting.is_busy():
                 raise RuntimeError(
                     "Termina la riunione prima di avviare una sessione Live"
@@ -241,10 +262,12 @@ class ApplicationService:
                 raise RuntimeError("Ferma la trascrizione File prima di avviare Live")
             self.controller.start_live_session(
                 sink_name=sink_name,
-                audio_source=audio_source,
-                language=language,
+                audio_source=source,
+                language=resolved_language,
                 stream_id=stream_id,
-                record_audio=record_audio,
+                record_audio=bool(
+                    record_audio and source == AudioSource.MICROPHONE.value
+                ),
             )
 
         self.submit("start-live", operation, "live_session_start_error")
@@ -279,6 +302,11 @@ class ApplicationService:
         song_mode: bool,
         isolate_vocals: bool,
     ) -> None:
+        settings = self.controller.settings
+        resolved_language = str(language or "").strip() or settings.language
+        resolved_model = (
+            model_size if model_size in ModelSize.choices() else settings.model_size
+        )
         source = Path(path).expanduser()
         if not source.is_file():
             raise FileNotFoundError("Seleziona un file esistente")
@@ -288,8 +316,8 @@ class ApplicationService:
             )
         self.controller.start_file_transcription(
             str(source),
-            language=language,
-            model_size=model_size,
+            language=resolved_language,
+            model_size=resolved_model,
             song_mode=song_mode,
             isolate_vocals_flag=bool(isolate_vocals and song_mode),
         )
@@ -310,12 +338,17 @@ class ApplicationService:
         song_mode: bool,
         isolate_vocals: bool,
     ) -> list[dict[str, Any]]:
+        settings = self.controller.settings
+        resolved_language = str(language or "").strip() or settings.language
+        resolved_model = (
+            model_size if model_size in ModelSize.choices() else settings.model_size
+        )
         if self.meeting.is_busy():
             raise RuntimeError("Termina la riunione prima di accodare file")
         return self.file_batch.enqueue(
             paths,
-            language=language,
-            model_size=model_size,
+            language=resolved_language,
+            model_size=resolved_model,
             song_mode=song_mode,
             isolate_vocals=isolate_vocals,
         )
