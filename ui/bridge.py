@@ -11,7 +11,6 @@ from PySide6.QtCore import QObject, QTimer, QUrl, Signal, Slot
 from PySide6.QtWidgets import QFileDialog
 
 from config.constants import AppMeta
-from config.settings import AudioSource, ModelSize
 from core.application_service import ApplicationService
 
 logger = logging.getLogger(__name__)
@@ -161,41 +160,11 @@ class BackendBridge(QObject):
         language: str,
         record_audio: bool,
     ) -> None:
-        settings = self._application.settings
-        source = (
-            audio_source
-            if audio_source in AudioSource.choices()
-            else settings.audio_source
-        )
-        selection = str(selected_input or "").strip()
-        language = str(language or "").strip() or settings.language
-        sink_name: str | None = None
-        stream_id: int | None = None
-        if source == AudioSource.APPLICATION.value:
-            if not selection:
-                self._emit_event(
-                    "live_session_start_error",
-                    "Seleziona uno stream applicazione prima di avviare la sessione",
-                )
-                return
-            try:
-                stream_id = int(selection)
-            except ValueError:
-                self._emit_event(
-                    "live_session_start_error",
-                    "Identificatore dello stream applicazione non valido",
-                )
-                return
-        else:
-            sink_name = selection or None
         self._application.start_live(
-            sink_name=sink_name,
-            audio_source=source,
-            language=language,
-            stream_id=stream_id,
-            record_audio=bool(
-                record_audio and source == AudioSource.MICROPHONE.value
-            ),
+            audio_source,
+            selected_input,
+            language,
+            bool(record_audio),
         )
 
     @Slot(str, str, str)
@@ -335,13 +304,6 @@ class BackendBridge(QObject):
         song_mode: bool,
         isolate_vocals: bool,
     ) -> None:
-        settings = self._application.settings
-        language = language.strip() or settings.language
-        model_size = (
-            model_size
-            if model_size in ModelSize.choices()
-            else settings.model_size
-        )
         try:
             self._application.start_file(
                 file_path,
@@ -371,11 +333,10 @@ class BackendBridge(QObject):
             if not isinstance(decoded, list):
                 raise ValueError("elenco file non valido")
             paths = [str(path) for path in decoded if str(path).strip()]
-            settings = self._application.settings
             jobs = self._application.enqueue_files(
                 paths,
-                language=language.strip() or settings.language,
-                model_size=model_size.strip() or settings.model_size,
+                language=language,
+                model_size=model_size,
                 song_mode=bool(song_mode),
                 isolate_vocals=bool(isolate_vocals),
             )
@@ -565,11 +526,11 @@ class BackendBridge(QObject):
             if not isinstance(payload, dict):
                 raise ValueError("payload impostazioni non valido")
             overrides = self._application.filter_settings_overrides(payload)
-            before = self._application.settings
+            before = self._application.desktop_state()
             current = self._application.apply_settings(overrides)
             if (
-                current.window_width != before.window_width
-                or current.window_height != before.window_height
+                current.window_width != int(before["window_width"])
+                or current.window_height != int(before["window_height"])
             ):
                 self.windowResizeRequested.emit(
                     current.window_width, current.window_height
