@@ -26,6 +26,8 @@ def test_presentation_does_not_cross_application_boundary() -> None:
         "self._application.controller.",
         "self._application.file_batch.",
         "self._application.meeting.",
+        "self._application.settings",
+        "application.settings",
         "AppController",
     )
     for path, source in sources.items():
@@ -71,6 +73,35 @@ def test_native_shell_uses_narrow_application_surface_for_desktop_state() -> Non
     assert "update_settings(" not in window
     assert "self._application.settings" not in window
     assert "application.settings" not in window
+
+
+def test_native_shell_and_webchannel_are_peer_presentation_adapters() -> None:
+    window = _read("ui/main_window.py")
+
+    assert "self._application.start_live(" in window
+    assert "self._application.stop_all_live(" in window
+    assert "self._application.cancel_file_queue()" in window
+    assert "self._bridge.startLive(" not in window
+    assert "self._bridge.stopAllLive(" not in window
+    assert "self._bridge.cancelFileQueue(" not in window
+
+
+def test_webchannel_bridge_contains_transport_not_application_policy() -> None:
+    application = _read("core/application_service.py")
+    bridge = _read("ui/bridge.py")
+
+    assert "from config.settings import AudioSource" not in bridge
+    assert "from config.settings import ModelSize" not in bridge
+    assert "AudioSource." not in bridge
+    assert "ModelSize." not in bridge
+    assert "stream_id = int(" not in bridge
+    assert "record_audio and source" not in bridge
+    assert "self._application.settings" not in bridge
+
+    assert "AudioSource.APPLICATION.value" in application
+    assert "stream_id = int(selection)" in application
+    assert "record_audio and source == AudioSource.MICROPHONE.value" in application
+    assert "ModelSize.choices()" in application
 
 
 def test_application_service_remains_the_only_presentation_workflow_boundary() -> None:
