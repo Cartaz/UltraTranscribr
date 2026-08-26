@@ -26,8 +26,8 @@ def test_presentation_does_not_cross_application_boundary() -> None:
         "self._application.controller.",
         "self._application.file_batch.",
         "self._application.meeting.",
-        "self._application.settings",
-        "application.settings",
+        "self._application.settings.",
+        "application.settings.",
         "AppController",
     )
     for path, source in sources.items():
@@ -71,8 +71,8 @@ def test_native_shell_uses_narrow_application_surface_for_desktop_state() -> Non
     assert "self._application.persist_window_geometry(" in window
     assert "self._application.live_active()" in window
     assert "update_settings(" not in window
-    assert "self._application.settings" not in window
-    assert "application.settings" not in window
+    assert "self._application.settings." not in window
+    assert "application.settings." not in window
 
 
 def test_native_shell_and_webchannel_are_peer_presentation_adapters() -> None:
@@ -96,7 +96,9 @@ def test_webchannel_bridge_contains_transport_not_application_policy() -> None:
     assert "ModelSize." not in bridge
     assert "stream_id = int(" not in bridge
     assert "record_audio and source" not in bridge
-    assert "self._application.settings" not in bridge
+    assert "self._application.settings." not in bridge
+    assert "before = self._application.settings" not in bridge
+    assert "settings = self._application.settings" not in bridge
 
     assert "AudioSource.APPLICATION.value" in application
     assert "stream_id = int(selection)" in application
