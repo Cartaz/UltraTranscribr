@@ -450,9 +450,6 @@ const liveSessionsModule = {
   isBusy() {
     return multiLiveActiveSessions().length > 0;
   },
-  lockSettings() {
-    multiLiveSyncAggregate();
-  },
   startLive() {
     const settings = state.boot?.settings || {};
     const input = selectedInputValue();
