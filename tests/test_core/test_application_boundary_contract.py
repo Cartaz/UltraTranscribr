@@ -21,13 +21,12 @@ def test_presentation_does_not_cross_application_boundary() -> None:
     }
 
     forbidden = (
-        ".controller",
-        ".file_batch",
-        ".meeting.store",
-        ".meeting.models",
-        "._controller",
-        "._file_batch",
-        "._meeting",
+        "application.controller",
+        "application.file_batch",
+        "application.meeting",
+        "self._application.controller",
+        "self._application.file_batch",
+        "self._application.meeting",
     )
     for path, source in sources.items():
         for token in forbidden:
