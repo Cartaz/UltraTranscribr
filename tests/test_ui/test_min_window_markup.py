@@ -17,14 +17,17 @@ def test_window_geometry_is_not_manually_editable() -> None:
 
 
 def test_qt_shell_enforces_and_persists_shared_window_constraints() -> None:
-    source = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
+    shell = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
+    application = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
 
     assert UIConstraints.MIN_WINDOW_WIDTH == 1200
     assert UIConstraints.MIN_WINDOW_HEIGHT == 800
-    assert "UIConstraints.MIN_WINDOW_WIDTH" in source
-    assert "UIConstraints.MIN_WINDOW_HEIGHT" in source
-    assert "self.setMinimumSize(" in source
-    assert "def resizeEvent" in source
-    assert "_persist_window_geometry" in source
-    assert "window_width=width" in source
-    assert "window_height=height" in source
+    assert "UIConstraints.MIN_WINDOW_WIDTH" in shell
+    assert "UIConstraints.MIN_WINDOW_HEIGHT" in shell
+    assert "self.setMinimumSize(" in shell
+    assert "def resizeEvent" in shell
+    assert "_persist_window_geometry" in shell
+    assert "self._application.persist_window_geometry(width, height)" in shell
+    assert "def persist_window_geometry" in application
+    assert "window_width=width" in application
+    assert "window_height=height" in application
