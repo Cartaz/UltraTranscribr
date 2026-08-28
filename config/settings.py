@@ -51,6 +51,24 @@ class AudioSource(str, Enum):
         return [m.value for m in cls]
 
 
+class DictationActivationMode(str, Enum):
+    PUSH_TO_TALK = "push_to_talk"
+    TOGGLE = "toggle"
+
+    @classmethod
+    def choices(cls) -> list[str]:
+        return [item.value for item in cls]
+
+
+class DictationInsertionMode(str, Enum):
+    LIVE = "live"
+    FINAL = "final"
+
+    @classmethod
+    def choices(cls) -> list[str]:
+        return [item.value for item in cls]
+
+
 _LANG_RE = re.compile(r"^(?:auto|[a-z]{2,3}(?:-[a-z0-9]{2,8})?)$")
 
 
@@ -82,6 +100,8 @@ class Settings:
     backend_instances: int = 1
     preload_model: bool = False
 
+    dictation_activation_mode: str = DictationActivationMode.PUSH_TO_TALK.value
+    dictation_insertion_mode: str = DictationInsertionMode.LIVE.value
     window_width: int = UIConstraints.WINDOW_WIDTH
     window_height: int = UIConstraints.WINDOW_HEIGHT
 
@@ -119,6 +139,10 @@ class Settings:
             errors.append("backend_instances deve essere tra 1 e 4")
         if self.server_port + int(self.backend_instances) - 1 > 65535:
             errors.append("le porte delle istanze backend superano 65535")
+        if self.dictation_activation_mode not in DictationActivationMode.choices():
+            errors.append(f"dictation_activation_mode non valido: {self.dictation_activation_mode}")
+        if self.dictation_insertion_mode not in DictationInsertionMode.choices():
+            errors.append(f"dictation_insertion_mode non valido: {self.dictation_insertion_mode}")
         if self.window_width < UIConstraints.MIN_WINDOW_WIDTH:
             errors.append(f"window_width deve essere >= {UIConstraints.MIN_WINDOW_WIDTH}")
         if self.window_height < UIConstraints.MIN_WINDOW_HEIGHT:
@@ -144,7 +168,6 @@ class Settings:
         return Settings(**current)
 
     def save(self) -> None:
-        """Salva atomicamente settings.json per evitare file troncati."""
         AppMeta.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         data = asdict(self)
         fd, tmp_name = tempfile.mkstemp(prefix="settings.", suffix=".tmp", dir=AppMeta.CONFIG_DIR)

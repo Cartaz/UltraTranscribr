@@ -1,0 +1,30 @@
+:root {
+  --surface: rgb(20, 20, 20);
+  --accent: rgb(255, 102, 0);
+  --text: rgb(225, 225, 225);
+  --muted: rgb(135, 135, 135);
+}
+
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
+body { padding: 10px; font-family: "Noto Sans", system-ui, sans-serif; }
+.overlay {
+  height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 18px;
+  border: 1px solid rgba(255, 102, 0, .58);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 8px 8px 20px rgba(0,0,0,.58), -5px -5px 14px rgba(54,54,54,.18), 0 0 18px rgba(255,102,0,.13);
+}
+.status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px rgba(255,102,0,.72); }
+.copy { min-width: 0; flex: 1; display: grid; gap: 1px; }
+.copy strong { color: var(--accent); font-size: 13px; font-weight: 700; }
+.copy small { color: var(--text); font-size: 12px; }
+.activity { height: 24px; display: flex; align-items: center; gap: 4px; }
+.activity i { width: 3px; height: 8px; border-radius: 3px; background: var(--accent); opacity: .8; animation: pulse .9s ease-in-out infinite alternate; }
+.activity i:nth-child(2), .activity i:nth-child(4) { animation-delay: -.22s; }
+.activity i:nth-child(3) { animation-delay: -.44s; }
+@keyframes pulse { from { height: 7px; opacity: .45; } to { height: 22px; opacity: 1; } }

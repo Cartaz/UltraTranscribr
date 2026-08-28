@@ -1,0 +1,21 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_qapplication_stays_alive_when_window_closes():
+    source = (ROOT / "main.py").read_text(encoding="utf-8")
+    assert "setQuitOnLastWindowClosed(False)" in source
+
+
+def test_close_event_hides_to_available_tray():
+    source = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
+    assert "isSystemTrayAvailable" in source
+    assert "self.hide()" in source
+    assert "event.ignore()" in source
+
+
+def test_explicit_quit_still_calls_application_quit():
+    source = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
+    assert "def force_quit" in source
+    assert "app.quit()" in source

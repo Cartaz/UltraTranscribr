@@ -1,13 +1,15 @@
 # UltraTranscribr
 
-UltraTranscribr è un'applicazione desktop Linux per trascrizione **Live**, **File** e **Riunione** basata su `whisper.cpp`, con accelerazione **Intel SYCL / Level Zero** e interfaccia PySide6 + WebEngine.
+UltraTranscribr è un'applicazione desktop Linux per trascrizione **Live**, **File**, **Riunione** e **Dettatura globale** basata su `whisper.cpp`, con accelerazione **Intel SYCL / Level Zero** e interfaccia PySide6 + WebEngine.
 
 Il progetto è pensato principalmente per **CachyOS / Arch Linux** con GPU Intel compatibile con Compute Runtime/Level Zero.
 
 ## Funzioni principali
 
 - Trascrizione Live da audio di sistema, microfono o singolo stream/applicazione.
-- Più sessioni Live indipendenti con inferenza serializzata su un singolo `whisper-server`.
+- **Dettatura globale** a bassa latenza: hotkey desktop, microfono e inserimento nel campo di testo attualmente focalizzato tramite XDG Desktop Portal su Wayland.
+- Modalità dettatura push-to-talk o toggle e inserimento progressivo stabile o finale in un unico paste.
+- Più sessioni Live indipendenti con inferenza condivisa e scheduling prioritario.
 - Registrazione opzionale delle sole Live da microfono, per singola sessione e con default OFF.
 - Modalità **Riunione** con registrazione microfono obbligatoria, trascrizione finale timestampata, diarizzazione locale e revisione manuale.
 - Assegnazione manuale dei nomi agli speaker senza riconoscimento biometrico dell'identità.
@@ -35,6 +37,7 @@ Configurazione di riferimento:
 - GPU Intel visibile al runtime Level Zero/SYCL.
 - `git`, `cmake`, `ffmpeg`.
 - PipeWire-Pulse o PulseAudio con `pactl` per audio di sistema e routing per-applicazione.
+- Per Dettatura globale su Wayland: `xdg-desktop-portal` e backend KDE `xdg-desktop-portal-kde` con GlobalShortcuts e RemoteDesktop.
 
 Pacchetti Arch/CachyOS tipici:
 
@@ -42,7 +45,7 @@ Pacchetti Arch/CachyOS tipici:
 sudo pacman -S --needed \
   python git cmake ffmpeg \
   intel-oneapi-basekit intel-compute-runtime level-zero \
-  libpulse pipewire-pulse
+  libpulse pipewire-pulse xdg-desktop-portal xdg-desktop-portal-kde
 ```
 
 I nomi dei pacchetti possono cambiare nei repository Arch/CachyOS. L'installer verifica comunque i componenti effettivamente disponibili prima di procedere.
@@ -74,7 +77,7 @@ L'installer:
 8. crea il launcher desktop locale;
 9. esegue un self-check completo dell'ambiente.
 
-I modelli ONNX di diarizzazione vengono invece scaricati **solo al primo processamento di una Riunione**. Non sono necessari per Live o File e non richiedono servizi cloud durante l'uso.
+I modelli ONNX di diarizzazione vengono invece scaricati **solo al primo processamento di una Riunione**. Non sono necessari per Live, File o Dettatura e non richiedono servizi cloud durante l'uso.
 
 ### Reinstallazioni veloci / idempotenza
 
@@ -104,7 +107,7 @@ Per saltarlo esplicitamente:
 ULTRATRANSCRIBR_INSTALL_DEMUCS=0 ./install.sh
 ```
 
-Demucs non è richiesto per la trascrizione normale o per Riunione.
+Demucs non è richiesto per la trascrizione normale, per Riunione o per Dettatura.
 
 ## Self-check dell'ambiente
 
@@ -131,6 +134,14 @@ Il report verifica:
 
 Un requisito obbligatorio mancante produce exit code diverso da zero.
 
+Per i prerequisiti specifici della Dettatura globale usare anche:
+
+```bash
+.venv/bin/python tools/dictation_doctor.py
+```
+
+Il doctor è read-only e verifica Wayland/KDE, D-Bus, XDG Portal, GlobalShortcuts e RemoteDesktop.
+
 ## Modelli
 
 La UI espone soltanto:
@@ -152,6 +163,41 @@ I download interrotti usano file `.part` riprendibili e, una volta completati, v
 I modelli per la diarizzazione sherpa-onnx vengono mantenuti separatamente nella cache di UltraTranscribr e sono usati soltanto dal workflow Riunione.
 
 ## Uso
+
+### Dettatura globale
+
+La Dettatura è separata dalla normale pipeline Live e resta disponibile anche quando la finestra principale è nascosta nel tray.
+
+Flusso:
+
+```text
+hotkey globale XDG
+    ↓
+microfono 16 kHz
+    ↓
+Whisper rolling-window a bassa latenza
+    ↓
+stable-prefix
+    ↓
+clipboard temporanea + XDG RemoteDesktop
+    ↓
+campo di testo focalizzato
+```
+
+Sono disponibili:
+
+- **Push-to-talk**: tieni premuta la hotkey e rilascia per finalizzare.
+- **Toggle**: una pressione avvia e la successiva termina.
+- **Live insertion**: inserisce progressivamente solo le parole considerate stabili; la coda revisionabile resta interna finché non diventa stabile.
+- **Final insertion**: inserisce l'intero testo una sola volta al termine.
+
+L'inserimento usa `Shift+Insert` tramite `org.freedesktop.portal.RemoteDesktop`: non vengono usati `xdotool`, `pynput` o hook X11 globali. Prima del paste UltraTranscribr salva il clipboard corrente e lo ripristina solo se il contenuto non è stato cambiato dall'utente nel frattempo.
+
+L'overlay di stato è non-focusable e non deve sottrarre il focus all'applicazione target.
+
+L'inferenza condivisa segue la priorità `Dictation > Live > File`; una richiesta Whisper già attiva non viene interrotta. Il lavoro in attesa riceve aging per evitare starvation delle trascrizioni File.
+
+La documentazione tecnica completa è in `docs/DICTATION.md`. I test cross-app reali da eseguire su CachyOS/KDE Wayland sono in `docs/DICTATION_VALIDATION.md`.
 
 ### Live
 
@@ -188,7 +234,7 @@ Durante la registrazione:
 4. il journal viene sincronizzato periodicamente su disco per ridurre la perdita possibile in caso di crash;
 5. a chiusura normale viene finalizzato in FLAC lossless senza caricare l'intera registrazione in RAM.
 
-Una Riunione è mutuamente esclusiva con Live e File. Durante il workflow non vengono avviate altre trascrizioni, recovery o operazioni distruttive sui modelli/impostazioni.
+Una Riunione è mutuamente esclusiva con Live, File e Dettatura. Durante il workflow non vengono avviate altre trascrizioni, recovery o operazioni distruttive sui modelli/impostazioni.
 
 Dopo **Termina riunione**:
 
@@ -273,12 +319,12 @@ Il transcript raw rimane sempre la fonte di verità: i risultati del post-proces
 
 Le impostazioni sono divise in:
 
-- **Normali**: modello, lingua, sorgente e VAD.
+- **Normali**: modello, lingua, sorgente, VAD e modalità Dettatura (attivazione/inserimento).
 - **Avanzate**: beam size, chunking, override sink, porta server e parametri tecnici SYCL/backend.
 
 La retention audio delle Riunioni è separata dalla retention della cronologia. `0` disabilita la cancellazione automatica dell'audio.
 
-La geometria della finestra viene salvata automaticamente. La dimensione minima resta 1200×800.
+La geometria della finestra viene salvata automaticamente. La dimensione minima resta 1200×800. Chiudere la finestra nasconde l'app nel tray; **Esci** dal tray termina realmente il processo e le risorse possedute.
 
 ## Percorsi dati
 
@@ -288,22 +334,16 @@ UltraTranscribr segue le directory XDG:
 Configurazione:      ~/.config/ultratranscribr/
 Log app:             ~/.config/ultratranscribr/ultratranscribr.log
 Dati/storico:        ~/.local/share/ultratranscribr/
+Metriche dettatura:  ~/.local/share/ultratranscribr/dictation-metrics.jsonl
 Registrazioni:       ~/.local/share/ultratranscribr/recordings/
 Metadata riunioni:   ~/.local/share/ultratranscribr/meetings/
 Cache/modelli:       ~/.cache/ultratranscribr/
 Log whisper-server:  ~/.cache/ultratranscribr/logs/
 ```
 
-I log applicativi ruotano automaticamente a circa **5 MiB** mantenendo fino a **4 backup**:
+I log applicativi ruotano automaticamente a circa **5 MiB** mantenendo fino a **4 backup**.
 
-```text
-ultratranscribr.log
-ultratranscribr.log.1
-...
-ultratranscribr.log.4
-```
-
-Il processo `whisper-server` usa invece log runtime nella cache XDG, ad esempio:
+Il processo `whisper-server` usa log runtime nella cache XDG, ad esempio:
 
 ```text
 ~/.cache/ultratranscribr/logs/whisper-server.log
@@ -313,32 +353,32 @@ Il processo `whisper-server` usa invece log runtime nella cache XDG, ad esempio:
 
 ### `GPU SYCL non disponibile`
 
-Eseguire:
-
 ```bash
 source /opt/intel/oneapi/setvars.sh
 .venv/bin/python -m core.environment_check
 ```
 
-Controllare in particolare le righe Level Zero, Compute Runtime e Intel GPU.
+Controllare in particolare Level Zero, Compute Runtime e Intel GPU.
 
 ### `whisper-server non trovato` o non SYCL
-
-Forzare una nuova build:
 
 ```bash
 ULTRATRANSCRIBR_FORCE_REBUILD=1 ./install.sh
 ```
 
-Controllare inoltre:
+Controllare inoltre `~/.cache/ultratranscribr/logs/whisper-server.log`.
 
-```text
-~/.cache/ultratranscribr/logs/whisper-server.log
+### Dettatura globale non attiva o testo non inserito
+
+Eseguire:
+
+```bash
+.venv/bin/python tools/dictation_doctor.py
 ```
 
-### Audio di sistema non rilevato
+Verificare che la sessione sia Wayland/KDE e che `org.freedesktop.portal.Desktop` esponga GlobalShortcuts e RemoteDesktop. I permessi della tastiera vengono richiesti dal compositor/portal e non vengono aggirati da UltraTranscribr.
 
-Verificare PipeWire/PulseAudio:
+### Audio di sistema non rilevato
 
 ```bash
 pactl info
@@ -380,7 +420,7 @@ L'ambiente di sviluppo usa la stessa `.venv` dell'applicazione.
 
 ```bash
 .venv/bin/pip install pytest
-.venv/bin/python -m compileall -q main.py config core ui tests
+.venv/bin/python -m compileall -q main.py config core ui tests tools
 .venv/bin/python -m pytest -q
 bash -n install.sh
 node --check ui/web/app.js
@@ -389,9 +429,10 @@ node --check ui/web/multi_live.js
 node --check ui/web/settings_cleanup.js
 node --check ui/web/file_history.js
 node --check ui/web/meeting.js
+.venv/bin/python tools/dictation_doctor.py
 ```
 
-La CI GitHub esegue questi controlli ad ogni push sui branch supportati e ad ogni pull request. Include inoltre uno smoke test Qt/WebEngine headless che costruisce la shell desktop reale senza richiedere GPU SYCL, dispositivi audio o modelli Whisper.
+La CI GitHub esegue i controlli automatici ad ogni push sui branch supportati e ad ogni pull request. I controlli che dipendono da una sessione KDE/Wayland reale sono documentati separatamente e non vengono dichiarati verificati dalla CI headless.
 
 ## Licenza
 

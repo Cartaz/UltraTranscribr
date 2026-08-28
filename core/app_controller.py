@@ -1,4 +1,4 @@
-"""Application controller coordinating live sessions, files and shared backend."""
+"""Application controller coordinating live, file, meeting and dictation workflows."""
 from __future__ import annotations
 
 import logging
@@ -6,20 +6,25 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from config.constants import AppMeta
 from config.settings import AudioSource, Settings
 from core.audio_discovery import AudioDiscoveryService
 from core.audio_routing import PulseAudioRouter
+from core.dictation_activation import DictationActivationService
+from core.dictation_metrics import DictationMetricsStore, DictationMetricsTracker
+from core.dictation_session import DictationService
 from core.event_bus import EventBus
 from core.exceptions import GPUNotAvailableError, SinkNotFoundError
 from core.file_batch import FileBatchCoordinator
 from core.file_transcriber import FileTranscriberThread
+from core.inference_scheduler import InferencePriority
 from core.live_sessions import LiveSessionManager
 from core.meeting_manager import MeetingManager
 from core.models import StatusEnum
 from core.pactl import PactlRunner
+from core.prioritized_whisper_backend import PrioritizedWhisperBackend
 from core.sink_finder import find_source
 from core.transcript_history import TranscriptHistoryStore
-from core.whisper_backend import WhisperBackend
 from core.whisper_gpu_detect import detect_gpu_backend
 from core.whisper_models import WhisperModelManager
 
@@ -53,11 +58,12 @@ class _MeetingControllerView:
         return self._controller.history
 
     @property
-    def backend(self) -> WhisperBackend:
+    def backend(self) -> PrioritizedWhisperBackend:
         return self._controller.backend
 
     def active_live_count(self) -> int:
-        return self._controller.active_live_count()
+        # Meeting is exclusive with Dictation as well as ordinary Live.
+        return self._controller.active_live_count() + int(self._controller.dictation_busy())
 
     def is_file_busy(self) -> bool:
         return self._controller.is_file_busy()
@@ -116,6 +122,19 @@ class _FileBatchControllerView:
 
 
 class AppController:
+    """Own application services and the canonical runtime state."""
+
+    _BACKEND_RUNTIME_KEYS = {
+        "model_size",
+        "beam_size",
+        "vad_filter",
+        "vad_min_silence_ms",
+        "server_port",
+        "gpu_layers",
+        "compute_type",
+        "backend_instances",
+    }
+
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._project_root = Path(__file__).resolve().parent.parent
@@ -127,7 +146,7 @@ class AppController:
             )
 
         self._model_manager = WhisperModelManager()
-        self._backend = WhisperBackend(settings, self._project_root)
+        self._backend = PrioritizedWhisperBackend(settings, self._project_root)
         self._history = TranscriptHistoryStore()
         self._pactl = PactlRunner()
         self._audio_router = PulseAudioRouter(pactl_runner=self._pactl)
@@ -143,12 +162,13 @@ class AppController:
         self._file_thread: Optional[FileTranscriberThread] = None
         self._startup_thread: Optional[threading.Thread] = None
         self._backend_started = False
+        self._backend_model_size: str | None = None
         self._file_history_id: Optional[str] = None
         self._history_subscriptions: list[tuple[str, Callable[[Any], None]]] = []
         self._shutdown_started = False
 
         self._live_sessions = LiveSessionManager(
-            backend=self._backend,
+            backend=self._backend.with_priority(InferencePriority.LIVE),
             router=self._audio_router,
             history=self._history,
             backend_initializer=self._ensure_backend_for_live_session,
@@ -162,6 +182,17 @@ class AppController:
             event_sink=self._bus.emit,
             pactl_runner=self._pactl,
         )
+        self._dictation_metrics = DictationMetricsTracker()
+        self._dictation_metrics_store = DictationMetricsStore(AppMeta.DICTATION_METRICS_PATH)
+        self._dictation = DictationService(
+            backend=self._backend.with_priority(InferencePriority.INTERACTIVE),
+            backend_initializer=self._ensure_backend_for_dictation,
+            event_sink=self._handle_dictation_event,
+        )
+        self._dictation_activation = DictationActivationService(
+            settings.dictation_activation_mode,
+            event_sink=self._handle_dictation_event,
+        )
         self._subscribe_history_events()
         self._audio_discovery.request_refresh()
 
@@ -174,7 +205,7 @@ class AppController:
         return self._buffer_view
 
     @property
-    def backend(self) -> WhisperBackend:
+    def backend(self) -> PrioritizedWhisperBackend:
         return self._backend
 
     @property
@@ -193,6 +224,56 @@ class AppController:
     def file_batch(self) -> FileBatchCoordinator:
         return self._file_batch
 
+    def dictation_session_snapshot(self) -> dict[str, Any]:
+        return self._dictation.snapshot()
+
+    def dictation_activation_snapshot(self) -> dict[str, Any]:
+        return self._dictation_activation.snapshot()
+
+    def dictation_shortcut_pressed(self) -> None:
+        self._dictation_activation.press()
+
+    def dictation_shortcut_released(self) -> None:
+        self._dictation_activation.release()
+
+    def dictation_text_inserted(self, text: str) -> None:
+        self._handle_dictation_event("dictation_text_inserted", str(text or ""))
+
+    def dictation_busy(self) -> bool:
+        snapshot = self._dictation.snapshot()
+        return bool(snapshot.get("requested")) or str(snapshot.get("status")) in {
+            "starting",
+            "listening",
+            "finalizing",
+        }
+
+    def _handle_dictation_event(self, event: str, payload: Any) -> None:
+        sample = None
+        try:
+            sample = self._dictation_metrics.observe(event, payload)
+        except Exception:
+            logger.exception("Telemetria dettatura fallita")
+
+        self._bus.emit(event, payload)
+        if sample is not None:
+            try:
+                self._dictation_metrics_store.append(sample)
+            except Exception:
+                logger.exception("Persistenza telemetria dettatura fallita")
+            self._bus.emit("dictation_metric_sample", sample.to_dict())
+
+        if event != "dictation_activation_changed":
+            return
+        active = bool((payload or {}).get("active"))
+        if active and self._meeting.is_busy():
+            self._bus.emit(
+                "dictation_error",
+                "Termina la riunione prima di avviare la dettatura",
+            )
+            self._dictation_activation.cancel()
+            return
+        self._dictation.set_active(active, self._settings)
+
     def _next_generation(self) -> int:
         with self._lock:
             self._generation += 1
@@ -207,12 +288,25 @@ class AppController:
         *,
         vad: Optional[bool] = None,
         settings: Optional[Settings] = None,
+        preserve_runtime_mode_if_running: bool = False,
     ) -> None:
         cfg = settings or self._settings
         wanted = cfg.vad_filter if vad is None else bool(vad)
         with self._backend_init_lock:
             with self._lock:
                 already = self._backend_started and self._backend.is_running
+                loaded_model = self._backend_model_size
+
+            if already and preserve_runtime_mode_if_running:
+                self._bus.emit("backend_status_changed", "ready")
+                return
+            if already and loaded_model != cfg.model_size:
+                self._bus.emit("backend_status_changed", "switching_model")
+                self._backend.stop()
+                with self._lock:
+                    self._backend_started = False
+                    self._backend_model_size = None
+                already = False
 
             vad_path = None
             if wanted:
@@ -261,16 +355,25 @@ class AppController:
             self._backend.ensure_vad_mode(wanted, vad_path)
             with self._lock:
                 self._backend_started = True
+                self._backend_model_size = cfg.model_size
             self._bus.emit("backend_status_changed", "ready")
 
     def _ensure_backend_for_live_session(self, settings: Settings) -> None:
         self.ensure_backend_started(vad=settings.vad_filter, settings=settings)
+
+    def _ensure_backend_for_dictation(self, settings: Settings) -> None:
+        self.ensure_backend_started(
+            vad=settings.vad_filter,
+            settings=settings,
+            preserve_runtime_mode_if_running=True,
+        )
 
     def stop_backend(self) -> None:
         with self._backend_init_lock:
             with self._lock:
                 self._backend.stop()
                 self._backend_started = False
+                self._backend_model_size = None
         self._bus.emit("backend_status_changed", "standby")
 
     def _run_async(
@@ -400,14 +503,27 @@ class AppController:
             raise RuntimeError(
                 "Ferma le sessioni Live prima di avviare una trascrizione file"
             )
-        self.stop_file_transcription()
-        generation = self._next_generation()
         lang = language or self._settings.language
         cfg = (
             self._settings.with_(model_size=model_size)
             if model_size and model_size != self._settings.model_size
             else self._settings
         )
+        wanted_vad = False if song_mode else cfg.vad_filter
+        if self.dictation_busy():
+            with self._lock:
+                loaded_model = self._backend_model_size
+            compatible = (
+                self._backend.is_running
+                and loaded_model == cfg.model_size
+                and self._backend.server_vad_enabled == bool(wanted_vad)
+            )
+            if not compatible:
+                raise RuntimeError(
+                    "Il File richiederebbe di riconfigurare Whisper: termina la dettatura prima di avviarlo"
+                )
+        self.stop_file_transcription()
+        generation = self._next_generation()
         self._start_history_session(
             model=cfg.model_size,
             language=lang,
@@ -419,14 +535,15 @@ class AppController:
             if not self._is_current(generation):
                 return
             self.ensure_backend_started(
-                vad=False if song_mode else cfg.vad_filter,
+                vad=wanted_vad,
                 settings=cfg,
+                preserve_runtime_mode_if_running=self.dictation_busy(),
             )
             if not self._is_current(generation):
                 return
             worker = FileTranscriberThread(
                 file_path,
-                self._backend,
+                self._backend.with_priority(InferencePriority.BATCH),
                 cfg,
                 song_mode=song_mode,
                 isolate_vocals_flag=isolate_vocals_flag,
@@ -441,7 +558,11 @@ class AppController:
         self._run_async(generation, start, "file_transcriber_error")
 
     def start_recovery_transcription(self, recovery_path: str) -> None:
-        if self._live_sessions.has_active_sessions() or self.is_file_busy():
+        if (
+            self._live_sessions.has_active_sessions()
+            or self.is_file_busy()
+            or self.dictation_busy()
+        ):
             raise RuntimeError(
                 "Ferma la trascrizione attiva prima di recuperare l'audio"
             )
@@ -459,14 +580,29 @@ class AppController:
         self._next_generation()
         with self._lock:
             worker = self._file_thread
-            self._file_thread = None
         if worker:
             worker.stop()
+            if worker.is_alive() and self.dictation_busy():
+                # The legacy urllib request cannot be cancelled independently of
+                # the shared server. Let only the in-flight request finish; the
+                # worker stop flag prevents a following File chunk.
+                if worker is not threading.current_thread():
+                    worker.join(timeout=0.2)
+                if worker.is_alive():
+                    logger.info(
+                        "Stop File differito: richiesta attiva lasciata terminare "
+                        "per non interrompere Dictation"
+                    )
+                    return
             if worker.is_alive():
                 self._backend.abort_active_request()
                 self._backend_started = False
+                self._backend_model_size = None
             if worker is not threading.current_thread():
                 worker.join(timeout=5.0)
+            with self._lock:
+                if self._file_thread is worker and not worker.is_alive():
+                    self._file_thread = None
         self._finish_history_session(StatusEnum.STOPPED.value)
 
     def is_file_transcribing(self) -> bool:
@@ -480,8 +616,16 @@ class AppController:
         return bool(startup and startup.is_alive())
 
     def update_settings(self, **overrides: object) -> None:
+        if self.dictation_busy() and self._BACKEND_RUNTIME_KEYS.intersection(overrides):
+            raise RuntimeError(
+                "Termina la dettatura prima di modificare il backend"
+            )
         self._settings = self._settings.with_(**overrides)
         self._settings.save()
+        if "dictation_activation_mode" in overrides:
+            self._dictation_activation.set_mode(
+                self._settings.dictation_activation_mode
+            )
         self._bus.emit("config_changed", overrides)
         if "history_retention_days" in overrides:
             deleted = self.prune_history()
@@ -563,14 +707,22 @@ class AppController:
             deleted = self._model_manager.delete_model(model_size)
             self._bus.emit(
                 "model_status_changed",
-                {"model": model_size, "action": "deleted", "deleted": deleted},
+                {
+                    "model": model_size,
+                    "action": "deleted",
+                    "deleted": deleted,
+                },
             )
             return deleted
         finally:
             self._model_operation_lock.release()
 
     def _require_idle_for_model_operation(self) -> None:
-        if self._live_sessions.has_active_sessions() or self.is_file_busy():
+        if (
+            self._live_sessions.has_active_sessions()
+            or self.is_file_busy()
+            or self.dictation_busy()
+        ):
             raise RuntimeError(
                 "Ferma la trascrizione attiva prima di gestire i modelli"
             )
@@ -632,6 +784,8 @@ class AppController:
         self._next_generation()
 
         steps = (
+            ("DictationActivation", self._dictation_activation.shutdown),
+            ("Dictation", self._dictation.shutdown),
             ("FileBatch", self._file_batch.close),
             ("Meeting", self._meeting.shutdown),
             ("File", self.stop_file_transcription),
@@ -649,10 +803,16 @@ class AppController:
 
         with self._lock:
             startup = self._startup_thread
-        if startup and startup.is_alive() and startup is not threading.current_thread():
+        if (
+            startup
+            and startup.is_alive()
+            and startup is not threading.current_thread()
+        ):
             startup.join(timeout=5.0)
             if startup.is_alive():
-                logger.warning("ControllerStartup ancora attivo dopo shutdown bounded")
+                logger.warning(
+                    "ControllerStartup ancora attivo dopo shutdown bounded"
+                )
 
         for event, handler in self._history_subscriptions:
             self._bus.unsubscribe(event, handler)
@@ -696,11 +856,15 @@ class AppController:
             ("file_transcriber_status_changed", self._on_file_history_status),
             (
                 "file_transcriber_error",
-                lambda _payload: self._finish_history_session(StatusEnum.ERROR.value),
+                lambda _payload: self._finish_history_session(
+                    StatusEnum.ERROR.value
+                ),
             ),
             (
                 "file_transcriber_completed",
-                lambda _payload: self._finish_history_session(StatusEnum.COMPLETED.value),
+                lambda _payload: self._finish_history_session(
+                    StatusEnum.COMPLETED.value
+                ),
             ),
         )
         for event, handler in handlers:

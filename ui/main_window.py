@@ -5,14 +5,7 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, QUrl, Signal
-from PySide6.QtGui import (
-    QCloseEvent,
-    QDesktopServices,
-    QDragEnterEvent,
-    QDragMoveEvent,
-    QDropEvent,
-    QResizeEvent,
-)
+from PySide6.QtGui import QCloseEvent, QDesktopServices, QDragEnterEvent, QDragMoveEvent, QDropEvent, QResizeEvent
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -26,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class LocalOnlyWebPage(QWebEnginePage):
-    """Keep application content local and hand external web links to the OS."""
+    """Keep application content local and hand external HTTP(S) links to the OS."""
 
     _LOCAL_SCHEMES = {"about", "file", "qrc"}
     _EXTERNAL_SCHEMES = {"http", "https"}
@@ -39,16 +32,29 @@ class LocalOnlyWebPage(QWebEnginePage):
             logger.info("Apertura URL esterno nel browser di sistema: %s", url.toString())
             QDesktopServices.openUrl(url)
             return False
-        logger.warning("Navigazione WebEngine bloccata per schema non consentito: %s", scheme or "<vuoto>")
+        logger.warning(
+            "Navigazione WebEngine bloccata per schema non consentito: %s",
+            scheme or "<vuoto>",
+        )
         return False
 
     def createWindow(self, _window_type):
         return self
 
 
-class DropAwareWebView(QWebEngineView):
-    """Capture local file URLs before Chromium attempts to navigate to them."""
+def configure_local_web_settings(settings: QWebEngineSettings) -> None:
+    """Apply the local-only policy shared by the main window and native overlays."""
+    settings.setAttribute(
+        QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls,
+        False,
+    )
+    settings.setAttribute(
+        QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls,
+        True,
+    )
 
+
+class DropAwareWebView(QWebEngineView):
     filesDropped = Signal(list)
 
     def __init__(self, parent=None) -> None:
@@ -93,44 +99,27 @@ class MainWindow(QMainWindow):
         self._geometry_save_timer = QTimer(self)
         self._geometry_save_timer.setSingleShot(True)
         self._geometry_save_timer.timeout.connect(self._persist_window_geometry)
-
         self.setWindowTitle(AppMeta.NAME)
-        self.setMinimumSize(
-            UIConstraints.MIN_WINDOW_WIDTH,
-            UIConstraints.MIN_WINDOW_HEIGHT,
-        )
+        self.setMinimumSize(UIConstraints.MIN_WINDOW_WIDTH, UIConstraints.MIN_WINDOW_HEIGHT)
         desktop = application.desktop_state()
         self.resize(
             max(UIConstraints.MIN_WINDOW_WIDTH, int(desktop["window_width"])),
             max(UIConstraints.MIN_WINDOW_HEIGHT, int(desktop["window_height"])),
         )
-
         self._bridge = BackendBridge(application, self)
         self._bridge.eventReceived.connect(self._observe_backend_event)
-
         self._log_handler = BridgeLogHandler(self._bridge)
         logging.getLogger().addHandler(self._log_handler)
-
         self._web_view = DropAwareWebView(self)
         self._web_page = LocalOnlyWebPage(self._web_view)
         self._web_view.setPage(self._web_page)
-        web_settings = self._web_page.settings()
-        web_settings.setAttribute(
-            QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls,
-            False,
-        )
-        web_settings.setAttribute(
-            QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls,
-            True,
-        )
+        configure_local_web_settings(self._web_page.settings())
         self._web_view.filesDropped.connect(self._bridge.emitDroppedFiles)
         self.setCentralWidget(self._web_view)
-
         channel = QWebChannel(self._web_page)
         channel.registerObject("backend", self._bridge)
         self._web_page.setWebChannel(channel)
         self._channel = channel
-
         index_path = Path(__file__).resolve().parent / "web" / "index.html"
         self._web_view.setUrl(QUrl.fromLocalFile(str(index_path)))
         self._geometry_tracking_ready = True
@@ -141,12 +130,7 @@ class MainWindow(QMainWindow):
 
     def on_start(self) -> None:
         desktop = self._application.desktop_state()
-        self._application.start_live(
-            str(desktop["audio_source"]),
-            str(desktop["sink_name"] or ""),
-            str(desktop["language"]),
-            False,
-        )
+        self._application.start_live(str(desktop["audio_source"]), str(desktop["sink_name"] or ""), str(desktop["language"]), False)
 
     def on_stop(self) -> None:
         self._application.stop_all_live(drain=False)
@@ -164,12 +148,24 @@ class MainWindow(QMainWindow):
             app.quit()
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if not self._closing:
-            self._closing = True
+        if self._closing:
+            event.accept()
+            return
+        tray_available = self._tray_icon is not None and self._tray_icon.isSystemTrayAvailable()
+        if tray_available:
             self._geometry_save_timer.stop()
             self._persist_window_geometry()
-            logging.getLogger().removeHandler(self._log_handler)
+            self.hide()
+            event.ignore()
+            return
+        self._closing = True
+        self._geometry_save_timer.stop()
+        self._persist_window_geometry()
+        logging.getLogger().removeHandler(self._log_handler)
         event.accept()
+        app = QApplication.instance()
+        if app is not None:
+            QTimer.singleShot(0, app.quit)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)

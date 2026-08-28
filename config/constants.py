@@ -19,7 +19,7 @@ def _xdg_data_home() -> Path:
 
 class AppMeta:
     NAME = "UltraTranscribr"
-    VERSION = "5.4.0"
+    VERSION = "5.5.0"
     ID = "com.ultratranscribr.app"
     DESCRIPTION = "Trascrizione audio accelerata GPU Intel Arc (SYCL)"
     LICENSE = "MIT"
@@ -33,6 +33,8 @@ class AppMeta:
     CACHE_DIR = _xdg_cache_home() / "ultratranscribr"
     MODELS_DIR = CACHE_DIR / "models" / "gguf"
     DIARIZATION_MODELS_DIR = CACHE_DIR / "models" / "diarization"
+    DICTATION_METRICS_PATH = DATA_DIR / "dictation-metrics.jsonl"
+    DICTATION_PORTAL_STATE_PATH = CONFIG_DIR / "dictation-portal.json"
 
 
 class ProcessDefaults:
@@ -51,11 +53,7 @@ class ProcessDefaults:
     BUFFER_WARN_THRESHOLD = 20
     HISTORY_RETENTION_DAYS = 90
     MEETING_AUDIO_RETENTION_DAYS = 30
-    # Mantiene in RAM ~6 minuti con chunk da 3 s; oltre questa soglia
-    # BufferManager fa spill su un file temporaneo preservando l'ordine.
     BUFFER_MAX_MEMORY_CHUNKS = 120
-    # La sorgente di sistema usa il monitor dell'output predefinito e quindi
-    # non richiede una keyword. Il campo resta disponibile per override manuali.
     SINK_SEARCH_KEYWORD = ""
     LEGACY_FIREFOX_KEYWORD = "Firefox"
     SINK_SEARCH_KEYWORD_MIC = "HDA Intel PCH"
@@ -70,6 +68,18 @@ class ProcessDefaults:
     TRANSCRIBE_RETRY_DELAY_S = 2.0
 
 
+class DictationDefaults:
+    """Initial low-latency profile; tune from measured KDE/Wayland runs."""
+
+    CAPTURE_CHUNK_MS = 250
+    STEP_MS = 750
+    WINDOW_MS = 5000
+    MIN_AUDIO_MS = 1000
+    REQUEST_TIMEOUT_S = 60.0
+    PROMPT_CHARS = 500
+    SCHEDULER_AGING_S = 30.0
+
+
 class SYCLDefaults:
     ONEAPI_DEVICE_SELECTOR = "level_zero:0"
     GPU_LAYERS = 99
@@ -77,11 +87,7 @@ class SYCLDefaults:
     HOST = "127.0.0.1"
     HEALTH_TIMEOUT_S = 90.0
     HEALTH_POLL_INTERVAL_S = 0.5
-    # Il timeout live e volutamente separato da quello file. Le richieste
-    # live contengono ~10-12 s di audio e non devono restare bloccate per ore.
     LIVE_REQUEST_TIMEOUT_S = 180.0
-    # La trascrizione file e ora segmentata in chunk da 30 s, quindi non usa
-    # piu una singola POST lunga ore. Lasciamo comunque margine alle iGPU lente.
     FILE_CHUNK_REQUEST_TIMEOUT_S = 600.0
     ENDPOINT_PROBE_TIMEOUT_S = 15.0
     CONTEXT_SIZE = 2048
@@ -96,8 +102,6 @@ class WhisperServerDefaults:
     VAD_REPO_ID = "ggml-org/whisper-vad"
     VAD_MODEL_NAME = "silero-v6.2.0"
     VAD_MODEL_FILENAME = "ggml-silero-v6.2.0.bin"
-    # Pin verificato il 2026-08-20. Evita che install.sh cambi comportamento
-    # da un giorno all'altro seguendo master di whisper.cpp.
     WHISPER_CPP_COMMIT = "339f2b4e27d7c3b52f44a124a854abba507acff3"
     SERVER_BINARY_NAME = "whisper-server"
     SYCL_LIBS = (

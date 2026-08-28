@@ -162,3 +162,38 @@ Only after the safety/session architecture is stable:
 - [x] Export reviewed meetings as speaker-aware `.txt`, `.srt` and `.vtt`.
 - [x] Fall back to `Speaker N` wherever no manual name has been assigned.
 - [x] Test crash recovery, long-recording streaming behavior, diarization alignment, speaker renaming, manual transcript edits, audio deletion/retention and exports.
+
+## Phase 11 — System-wide low-latency dictation
+
+### 11.1 Background lifecycle
+- [x] Keep UltraTranscribr alive in the tray when the main window is closed.
+- [x] Preserve explicit tray Quit as the deterministic shutdown path.
+
+### 11.2 Global activation
+- [x] Add XDG Desktop Portal GlobalShortcuts integration for KDE/Wayland.
+- [x] Support push-to-talk and toggle activation with Python-owned canonical state.
+- [x] Keep global shortcut handling out of QWebChannel and business logic out of the native adapter.
+
+### 11.3 Low-latency Dictation pipeline
+- [x] Add a dedicated microphone Dictation pipeline outside normal Live sessions.
+- [x] Use a rolling 5 s window with 750 ms inference cadence and stable-prefix commits.
+- [x] Keep revisable hypotheses separate from committed text.
+- [x] Support safe final-only insertion as well as progressive stable insertion.
+
+### 11.4 Wayland-safe text insertion and overlay
+- [x] Request keyboard-only XDG RemoteDesktop access; no xdotool/pynput fallback.
+- [x] Preserve and conditionally restore clipboard MIME data around paste transactions.
+- [x] Use a non-focusable dark-neumorphic status overlay without adding a second QWebChannel.
+
+### 11.5 Scheduling, diagnostics and hardening
+- [x] Schedule shared inference as Dictation/INTERACTIVE > Live > File/BATCH without preempting active work.
+- [x] Add aging so lower-priority File work cannot starve indefinitely.
+- [x] Prevent File cancellation from killing the shared backend while Dictation is active by draining only the already-active File request.
+- [x] Record activation/listening/first-commit/first-insert/finalization/queue-wait metrics.
+- [x] Add a read-only Dictation Doctor and deterministic validation report tooling.
+- [x] Add unit/contract coverage for activation, stability, scheduling, settings, metrics and native boundaries.
+- [ ] Validate QtDBus portal marshalling and permission lifecycle on the target CachyOS/KDE Wayland system.
+- [ ] Test focused-field insertion in Firefox/Chromium, LibreOffice, Konsole and an IDE/editor.
+- [ ] Record real end-to-end latency, clipboard/focus behavior and portal recovery using `docs/DICTATION_VALIDATION.md`.
+
+Strategic review: Phase 11 keeps canonical operational state in Python, confines desktop permissions/injection to `ui/native/`, shares one inference-capacity owner, does not alter normal Live segmentation, and deliberately defers only behavior that cannot be verified without a real KDE/Wayland compositor and external target applications.

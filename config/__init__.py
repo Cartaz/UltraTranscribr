@@ -6,15 +6,24 @@ persistent Settings model. Presentation styling lives exclusively in ui/web/.
 
 from config.constants import (
     AppMeta,
+    DictationDefaults,
     ProcessDefaults,
     SYCLDefaults,
     UIConstraints,
     WhisperServerDefaults,
 )
-from config.settings import AudioSource, ComputeDevice, ModelSize, Settings
+from config.settings import (
+    AudioSource,
+    ComputeDevice,
+    DictationActivationMode,
+    DictationInsertionMode,
+    ModelSize,
+    Settings,
+)
 
 __all__ = [
     "AppMeta",
+    "DictationDefaults",
     "ProcessDefaults",
     "UIConstraints",
     "SYCLDefaults",
@@ -23,4 +32,6 @@ __all__ = [
     "ModelSize",
     "ComputeDevice",
     "AudioSource",
+    "DictationActivationMode",
+    "DictationInsertionMode",
 ]

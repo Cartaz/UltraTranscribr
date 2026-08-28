@@ -6,6 +6,7 @@ const settingSections = {
   tuning: ["beam_size", "vad_min_silence_ms", "buffer_warn_threshold"],
   audio: ["chunk_ms", "channels", "sink_name", "sink_search_keyword"],
   backend: ["server_port", "gpu_layers", "compute_type", "backend_instances", "preload_model"],
+  dictation: ["dictation_activation_mode", "dictation_insertion_mode"],
 };
 
 let settingsDefaults = null;
@@ -18,6 +19,19 @@ function settingsEnsureUI() {
     fields?.insertAdjacentHTML('beforeend', `
       <div><label for="s-instances">Istanze backend</label><input id="s-instances" name="backend_instances" type="number" min="1" max="4"></div>
       <div><label class="toggle-row compact-toggle" for="s-preload"><span><strong>Preload all'avvio</strong><small>Carica il modello installato all'apertura.</small></span><input id="s-preload" name="preload_model" type="checkbox"><i></i></label></div>`);
+  }
+
+  const normalGrid = document.querySelector('[data-settings-pane="normal"] .settings-grid');
+  if (normalGrid && !document.querySelector('[name="dictation_activation_mode"]')) {
+    normalGrid.insertAdjacentHTML('beforeend', `
+      <section class="card" data-dictation-settings>
+        <div class="card-head"><div><h3>Dettatura globale</h3><p>Hotkey di sistema e modalità di inserimento nel campo attivo.</p></div></div>
+        <div class="fields">
+          <div><label for="s-dictation-activation">Attivazione</label><select id="s-dictation-activation" name="dictation_activation_mode"><option value="push_to_talk">Push-to-talk</option><option value="toggle">Toggle</option></select></div>
+          <div><label for="s-dictation-insertion">Inserimento</label><select id="s-dictation-insertion" name="dictation_insertion_mode"><option value="live">Live progressivo</option><option value="final">Solo testo finale</option></select></div>
+        </div>
+        <div class="card-actions"><button type="button" class="button settings-reset" data-reset-section="dictation">Ripristina dettatura</button></div>
+      </section>`);
   }
 }
 
@@ -58,9 +72,7 @@ function switchSettingsTab(name) {
     button.setAttribute("aria-selected", String(active));
     button.tabIndex = active ? 0 : -1;
   });
-  all("[data-settings-pane]").forEach(pane => {
-    pane.hidden = pane.dataset.settingsPane !== target;
-  });
+  all("[data-settings-pane]").forEach(pane => { pane.hidden = pane.dataset.settingsPane !== target; });
 }
 
 function settingsFormatBytes(value) {
@@ -220,10 +232,7 @@ function applySettingsPayload(payload, successMessage) {
 }
 
 function loadSettingsDefaults(callback) {
-  if (settingsDefaults) {
-    callback(settingsDefaults);
-    return;
-  }
+  if (settingsDefaults) { callback(settingsDefaults); return; }
   call("getSettingsDefaults", [], result => {
     const defaults = json(result);
     if (!defaults || typeof defaults !== "object") {
@@ -265,12 +274,8 @@ function settingsSave(eventObject) {
 const settingsModule = {
   bind() {
     settingsEnsureUI();
-    all("[data-settings-tab]").forEach(button => {
-      button.onclick = () => switchSettingsTab(button.dataset.settingsTab);
-    });
-    all("[data-reset-section]").forEach(button => {
-      button.onclick = () => resetSettingsSection(button.dataset.resetSection);
-    });
+    all("[data-settings-tab]").forEach(button => { button.onclick = () => switchSettingsTab(button.dataset.settingsTab); });
+    all("[data-reset-section]").forEach(button => { button.onclick = () => resetSettingsSection(button.dataset.resetSection); });
     $("settings-form").onsubmit = settingsSave;
     $("models-refresh").onclick = settingsRefreshModels;
   },
@@ -283,9 +288,7 @@ const settingsModule = {
     switchSettingsTab("normal");
     lockSettings();
   },
-  view(name) {
-    if (name === "settings") settingsRefreshModels();
-  },
+  view(name) { if (name === "settings") settingsRefreshModels(); },
   lockSettings() {
     const disabled = sessionBusy() || !!state.modelBusy;
     $("settings-save").disabled = disabled;
