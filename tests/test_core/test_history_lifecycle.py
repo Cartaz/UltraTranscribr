@@ -16,7 +16,7 @@ from core.transcript_history import TranscriptHistoryStore
 def controller(tmp_path: Path) -> AppController:
     with patch("core.app_controller.detect_gpu_backend", return_value="sycl"), \
          patch("core.app_controller.WhisperModelManager"), \
-         patch("core.app_controller.WhisperBackend"):
+         patch("core.app_controller.PrioritizedWhisperBackend"):
         instance = AppController(settings=Settings(history_retention_days=0))
     history = TranscriptHistoryStore(tmp_path / "history")
     instance._history = history

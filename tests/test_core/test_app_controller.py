@@ -15,7 +15,7 @@ from core.exceptions import SinkNotFoundError
 def controller() -> AppController:
     with patch("core.app_controller.detect_gpu_backend", return_value="sycl"), \
          patch("core.app_controller.WhisperModelManager"), \
-         patch("core.app_controller.WhisperBackend"), \
+         patch("core.app_controller.PrioritizedWhisperBackend"), \
          patch("core.app_controller.PulseAudioRouter"), \
          patch("core.app_controller.MeetingManager"), \
          patch("core.app_controller.FileBatchCoordinator"), \

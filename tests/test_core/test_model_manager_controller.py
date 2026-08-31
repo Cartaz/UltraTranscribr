@@ -15,7 +15,7 @@ from core.event_bus import EventBus
 def controller() -> AppController:
     with patch("core.app_controller.detect_gpu_backend", return_value="sycl"), \
          patch("core.app_controller.WhisperModelManager"), \
-         patch("core.app_controller.WhisperBackend"):
+         patch("core.app_controller.PrioritizedWhisperBackend"):
         instance = AppController(settings=Settings())
     manager = MagicMock()
     manager.ui_model_choices.return_value = ("large-v3", "large-v3-turbo", "medium")
@@ -54,8 +54,6 @@ def test_download_model_emits_real_progress_events(controller: AppController) ->
 
 
 def test_model_operations_are_rejected_while_transcribing(controller: AppController) -> None:
-    # Phase 4 uses the session manager as the source of truth so even a Live
-    # session still preparing its workers blocks model mutation.
     with patch.object(controller._live_sessions, "has_active_sessions", return_value=True):
         with pytest.raises(RuntimeError):
             controller.download_model("medium")

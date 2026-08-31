@@ -13,7 +13,7 @@ from core.app_controller import AppController
 def _controller(settings: Settings | None = None) -> AppController:
     with patch("core.app_controller.detect_gpu_backend", return_value="sycl"), \
          patch("core.app_controller.WhisperModelManager"), \
-         patch("core.app_controller.WhisperBackend"), \
+         patch("core.app_controller.PrioritizedWhisperBackend"), \
          patch("core.app_controller.TranscriptHistoryStore"), \
          patch("core.app_controller.PulseAudioRouter"):
         controller = AppController(settings or Settings(vad_filter=False))
@@ -73,8 +73,6 @@ def test_rapid_file_start_stop_start_only_launches_latest_generation(monkeypatch
     first_target()
     second_target()
 
-    # The stale first target is discarded before creating a worker, therefore
-    # the first factory result is actually used by the latest generation.
     assert factory.call_count == 1
     assert factory.call_args.args[0] == "second.wav"
     first_worker.start.assert_called_once_with()
@@ -107,8 +105,6 @@ def test_stop_backend_waits_for_inflight_backend_start() -> None:
     stopper = threading.Thread(target=controller.stop_backend, daemon=True)
     stopper.start()
 
-    # stop_backend must share the initialization lock, so it cannot stop a
-    # process that is only half-started.
     time.sleep(0.05)
     assert controller._backend.stop.call_count == 0
 

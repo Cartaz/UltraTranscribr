@@ -1,6 +1,6 @@
 """Behavioral tests for explicit backend runtime states."""
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from config.settings import Settings
 from core.app_controller import AppController
@@ -9,7 +9,7 @@ from core.app_controller import AppController
 def _controller() -> AppController:
     with patch("core.app_controller.detect_gpu_backend", return_value="sycl"), \
          patch("core.app_controller.WhisperModelManager"), \
-         patch("core.app_controller.WhisperBackend"):
+         patch("core.app_controller.PrioritizedWhisperBackend"):
         controller = AppController(Settings(vad_filter=False))
     controller._backend.is_running = False
     return controller
