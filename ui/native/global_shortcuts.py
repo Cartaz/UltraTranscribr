@@ -59,8 +59,8 @@ class GlobalShortcutsPortal(PortalClient):
         if not self._session:
             self._fail(RuntimeError("GlobalShortcuts non ha restituito una sessione"))
             return
-        self._connect_signals()
         try:
+            self._connect_signals()
             self.call_request(
                 INTERFACE,
                 "BindShortcuts",
@@ -155,6 +155,10 @@ class GlobalShortcutsPortal(PortalClient):
             self.released.emit()
 
     def close(self) -> None:
+        self._reset()
+
+    def _reset(self) -> None:
+        """Release every resource that may exist after a partial portal startup."""
         self.close_requests()
         if self._signals_connected:
             self.bus.disconnect(
@@ -178,13 +182,12 @@ class GlobalShortcutsPortal(PortalClient):
             self._signals_connected = False
         self.close_session(self._session)
         self._session = None
+        self._starting = False
         if self._ready:
             self._ready = False
             self.readyChanged.emit(False)
-        self._starting = False
 
     def _fail(self, exc: Exception) -> None:
         logger.error("GlobalShortcuts portal: %s", exc)
-        self._starting = False
-        self._ready = False
+        self._reset()
         self.errorOccurred.emit(str(exc))

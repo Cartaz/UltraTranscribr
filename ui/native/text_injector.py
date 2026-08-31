@@ -21,15 +21,16 @@ class SystemTextInjector(QObject):
 
     insertionCompleted = Signal(str)
     errorOccurred = Signal(str)
-    _enqueueSignal = Signal(str)
+    _enqueueSignal = Signal(int, str)
 
     def __init__(self, remote: RemoteDesktopKeyboardPortal, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._remote = remote
-        self._queue: deque[str] = deque()
+        self._queue: deque[tuple[int, str]] = deque()
         self._busy = False
         self._closed = False
         self._has_inserted = False
+        self._generation = 0
         self._enqueueSignal.connect(self._enqueue_on_gui)
         self._remote.readyChanged.connect(self._on_ready_changed)
         self._remote.errorOccurred.connect(self._on_remote_error)
@@ -37,6 +38,7 @@ class SystemTextInjector(QObject):
     def begin_session(self) -> None:
         if self._closed:
             return
+        self._generation += 1
         self._has_inserted = False
         self._queue.clear()
         self._remote.ensure_ready()
@@ -50,33 +52,39 @@ class SystemTextInjector(QObject):
         if self._has_inserted and value[0] not in _NO_SPACE_BEFORE:
             value = " " + value
         self._has_inserted = True
-        self._enqueueSignal.emit(value)
+        self._enqueueSignal.emit(self._generation, value)
 
     def insert_final(self, text: str) -> None:
         if self._closed:
             return
         value = str(text or "").strip()
         if value:
-            self._enqueueSignal.emit(value)
+            self._enqueueSignal.emit(self._generation, value)
 
-    @Slot(str)
-    def _enqueue_on_gui(self, text: str) -> None:
-        if self._closed:
+    @Slot(int, str)
+    def _enqueue_on_gui(self, generation: int, text: str) -> None:
+        if self._closed or generation != self._generation:
             return
-        self._queue.append(text)
+        self._queue.append((generation, text))
         self._process_next()
 
     def _process_next(self) -> None:
-        if self._closed or self._busy or not self._queue:
+        if self._closed or self._busy:
+            return
+        while self._queue:
+            generation, text = self._queue.popleft()
+            if generation == self._generation:
+                break
+        else:
             return
         if not self._remote.ready:
+            self._queue.appendleft((generation, text))
             self._remote.ensure_ready()
             return
         clipboard = QGuiApplication.clipboard()
         if clipboard is None:
             self._fail("Clipboard Qt non disponibile")
             return
-        text = self._queue.popleft()
         previous = self._clone_mime(clipboard.mimeData())
         marker = uuid.uuid4().hex.encode("ascii")
         temporary = QMimeData()
@@ -95,7 +103,8 @@ class SystemTextInjector(QObject):
             self._busy = False
             if self._closed:
                 return
-            self.insertionCompleted.emit(text)
+            if generation == self._generation:
+                self.insertionCompleted.emit(text)
             self._process_next()
 
         QTimer.singleShot(_RESTORE_DELAY_MS, restore)

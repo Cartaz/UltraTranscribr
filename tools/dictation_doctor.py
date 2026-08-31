@@ -41,6 +41,14 @@ def _module_available(name: str) -> bool:
         return False
 
 
+def _portal_registration_state(service: str, active: str, activatable: str) -> str:
+    if service in active:
+        return "attivo"
+    if service in activatable:
+        return "attivabile"
+    return "non elencato"
+
+
 def collect(env: Mapping[str, str] | None = None) -> list[Check]:
     environment = os.environ if env is None else env
     checks: list[Check] = []
@@ -63,10 +71,11 @@ def collect(env: Mapping[str, str] | None = None) -> list[Check]:
         "ok" if session_bus else "fail",
         "configurato" if session_bus else "DBUS_SESSION_BUS_ADDRESS assente",
     ))
+    qtdbus_available = _module_available("PySide6.QtDBus")
     checks.append(Check(
         "pyside6-qtdbus",
-        "ok" if _module_available("PySide6.QtDBus") else "fail",
-        "PySide6.QtDBus importabile" if _module_available("PySide6.QtDBus") else "PySide6.QtDBus non disponibile",
+        "ok" if qtdbus_available else "fail",
+        "PySide6.QtDBus importabile" if qtdbus_available else "PySide6.QtDBus non disponibile",
     ))
 
     busctl = shutil.which("busctl")
@@ -79,9 +88,19 @@ def collect(env: Mapping[str, str] | None = None) -> list[Check]:
     if code != 0:
         checks.append(Check("portal-service", "fail", listing or "bus di sessione non interrogabile"))
         return checks
-    service = "org.freedesktop.portal.Desktop"
-    checks.append(Check("portal-service", "ok" if service in listing else "fail", service))
 
+    code, activatable = run([
+        busctl,
+        "--user",
+        "--no-pager",
+        "--activatable",
+        "--list",
+    ])
+    if code != 0:
+        activatable = ""
+
+    service = "org.freedesktop.portal.Desktop"
+    registration = _portal_registration_state(service, listing, activatable)
     code, introspection = run([
         busctl,
         "--user",
@@ -91,8 +110,11 @@ def collect(env: Mapping[str, str] | None = None) -> list[Check]:
         "/org/freedesktop/portal/desktop",
     ])
     if code != 0:
+        checks.append(Check("portal-service", "fail", registration))
         checks.append(Check("portal-introspection", "fail", introspection or "introspection fallita"))
         return checks
+    checks.append(Check("portal-service", "ok", registration))
+    checks.append(Check("portal-introspection", "ok", "interfacce portal interrogabili"))
     checks.append(Check(
         "global-shortcuts",
         "ok" if "org.freedesktop.portal.GlobalShortcuts" in introspection else "fail",
