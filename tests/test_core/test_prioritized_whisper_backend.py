@@ -1,11 +1,5 @@
 import threading
 import time
-import sys
-import types
-
-_stub = types.ModuleType("core.whisper_backend")
-_stub.WhisperBackend = type("WhisperBackend", (), {})
-sys.modules["core.whisper_backend"] = _stub
 
 from core.inference_scheduler import InferencePriority
 from core.prioritized_whisper_backend import PrioritizedWhisperBackend
@@ -62,7 +56,9 @@ def test_facade_prioritizes_interactive_before_queued_batch():
     interactive.start()
     time.sleep(0.02)
     fake.release_holder.set()
-    holder.join(1); batch.join(1); interactive.join(1)
+    holder.join(1)
+    batch.join(1)
+    interactive.join(1)
 
     assert fake.calls == ["holder", "interactive", "batch"]
     assert done == ["interactive", "batch"]
