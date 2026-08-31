@@ -6,7 +6,7 @@ from typing import Any
 
 from PySide6.QtCore import QObject, Signal, Slot
 
-from core.app_controller import AppController
+from core.application_service import ApplicationService
 from core.dictation_portal_state import DictationPortalStateStore
 from ui.native.dictation_overlay import DictationOverlay
 from ui.native.global_shortcuts import GlobalShortcutsPortal
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class DictationNativeIntegration(QObject):
-    """Bridge internal dictation events to desktop-native capabilities only."""
+    """Bridge application dictation events to desktop-native capabilities only."""
 
     _eventArrived = Signal(str, object)
     _EVENTS = (
@@ -29,9 +29,13 @@ class DictationNativeIntegration(QObject):
         "dictation_error",
     )
 
-    def __init__(self, controller: AppController, parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        application: ApplicationService,
+        parent: QObject | None = None,
+    ) -> None:
         super().__init__(parent)
-        self._controller = controller
+        self._application = application
         self._portal_state = DictationPortalStateStore()
         self._shortcut = GlobalShortcutsPortal(self)
         self._remote = RemoteDesktopKeyboardPortal(
@@ -42,17 +46,18 @@ class DictationNativeIntegration(QObject):
         self._overlay = DictationOverlay()
         self._subscriptions: list[tuple[str, object]] = []
         self._closed = False
-        self._session_insertion_mode = controller.settings.dictation_insertion_mode
+        self._session_status = "idle"
+        self._session_insertion_mode = application.dictation_insertion_mode()
         self._eventArrived.connect(self._handle_event)
-        self._shortcut.pressed.connect(self._controller.dictation_shortcut_pressed)
-        self._shortcut.released.connect(self._controller.dictation_shortcut_released)
+        self._shortcut.pressed.connect(self._application.dictation_shortcut_pressed)
+        self._shortcut.released.connect(self._application.dictation_shortcut_released)
         self._shortcut.errorOccurred.connect(self._native_error)
         self._injector.errorOccurred.connect(self._native_error)
-        self._injector.insertionCompleted.connect(self._controller.dictation_text_inserted)
+        self._injector.insertionCompleted.connect(self._application.dictation_text_inserted)
         self._remote.restoreTokenChanged.connect(self._persist_restore_token)
         for event in self._EVENTS:
             handler = self._make_handler(event)
-            controller.subscribe(event, handler)
+            application.subscribe(event, handler)
             self._subscriptions.append((event, handler))
 
     def start(self) -> None:
@@ -67,7 +72,7 @@ class DictationNativeIntegration(QObject):
             return
         self._closed = True
         for event, handler in self._subscriptions:
-            self._controller.unsubscribe(event, handler)
+            self._application.unsubscribe(event, handler)
         self._subscriptions.clear()
         self._injector.close()
         self._remote.close()
@@ -78,6 +83,7 @@ class DictationNativeIntegration(QObject):
     def _make_handler(self, event: str):
         def handler(payload: Any) -> None:
             self._eventArrived.emit(event, payload)
+
         return handler
 
     @Slot(str, object)
@@ -88,14 +94,17 @@ class DictationNativeIntegration(QObject):
             return
         if event == "dictation_session_changed":
             status = str((payload or {}).get("status") or "idle")
+            self._session_status = status
             if status == "starting":
-                self._session_insertion_mode = self._controller.settings.dictation_insertion_mode
+                self._session_insertion_mode = self._application.dictation_insertion_mode()
                 self._injector.begin_session()
             self._overlay.update_state(status)
             return
         if event == "dictation_preview_changed":
-            current = str(self._controller.dictation_session_snapshot().get("status", "idle"))
-            self._overlay.update_state(current, str((payload or {}).get("pending") or ""))
+            self._overlay.update_state(
+                self._session_status,
+                str((payload or {}).get("pending") or ""),
+            )
             return
         if event == "dictation_text_committed":
             if self._session_insertion_mode == "live":
@@ -106,6 +115,7 @@ class DictationNativeIntegration(QObject):
                 self._injector.insert_final(str(payload or ""))
             return
         if event == "dictation_error":
+            self._session_status = "error"
             self._overlay.update_state("error", str(payload or ""))
 
     @Slot(str)
@@ -118,4 +128,5 @@ class DictationNativeIntegration(QObject):
     @Slot(str)
     def _native_error(self, message: str) -> None:
         logger.error("Integrazione nativa dettatura: %s", message)
+        self._session_status = "error"
         self._overlay.update_state("error", message)

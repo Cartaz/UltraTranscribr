@@ -76,7 +76,7 @@ def main() -> None:
 
     application = ApplicationService(controller)
     window = MainWindow(application=application)
-    dictation_native = DictationNativeIntegration(controller, app)
+    dictation_native = DictationNativeIntegration(application, app)
 
     icon_path = Path(__file__).parent / "assets" / "icons" / "icon.png"
     if not icon_path.exists():

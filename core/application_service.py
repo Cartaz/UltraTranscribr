@@ -97,6 +97,22 @@ class ApplicationService:
         """Expose the tray's coarse runtime indicator without leaking controller state."""
         return self.controller.active_live_count() > 0
 
+    def dictation_insertion_mode(self) -> str:
+        """Return the canonical insertion policy for the next dictation session."""
+        return self.controller.settings.dictation_insertion_mode
+
+    def dictation_shortcut_pressed(self) -> None:
+        """Forward one native global-shortcut press into the canonical dictation state."""
+        self.controller.dictation_shortcut_pressed()
+
+    def dictation_shortcut_released(self) -> None:
+        """Forward one native global-shortcut release into the canonical dictation state."""
+        self.controller.dictation_shortcut_released()
+
+    def dictation_text_inserted(self, text: str) -> None:
+        """Report text inserted by the native adapter for dictation telemetry."""
+        self.controller.dictation_text_inserted(text)
+
     def submit(
         self,
         name: str,
