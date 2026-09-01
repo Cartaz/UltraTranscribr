@@ -122,6 +122,8 @@ class LiveSessionManager:
                 raise RuntimeError("gestore Live chiuso")
         lang = language or settings.language
         session_settings = settings.with_(language=lang)
+        if audio_source == "application" and stream_id is None:
+            raise RuntimeError("Seleziona uno stream applicazione")
         selection = AudioInputSelection(
             source=audio_source,
             selected_input=str(sink_name or ""),
