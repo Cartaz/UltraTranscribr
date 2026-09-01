@@ -4,17 +4,19 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from PySide6.QtCore import SLOT, Signal, Slot
-from PySide6.QtDBus import QDBusObjectPath
+from PySide6.QtCore import Signal
 
-from ui.native.xdg_portal import PORTAL_PATH, PORTAL_SERVICE, PortalClient, object_path, token
+from ui.native.xdg_portal import (
+    PortalClient,
+    PortalTransport,
+    object_path,
+    string_variant,
+    token,
+)
 
 logger = logging.getLogger(__name__)
 INTERFACE = "org.freedesktop.portal.GlobalShortcuts"
 SHORTCUT_ID = "dictation"
-_SHORTCUT_SIGNAL_SIGNATURE = "osta{sv}"
-_ACTIVATED_SLOT = SLOT("_activated(QDBusObjectPath,QString,qulonglong,QVariantMap)")
-_DEACTIVATED_SLOT = SLOT("_deactivated(QDBusObjectPath,QString,qulonglong,QVariantMap)")
 
 
 class GlobalShortcutsPortal(PortalClient):
@@ -23,12 +25,17 @@ class GlobalShortcutsPortal(PortalClient):
     readyChanged = Signal(bool)
     errorOccurred = Signal(str)
 
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
+    def __init__(
+        self,
+        transport: PortalTransport | None = None,
+        parent=None,
+    ) -> None:
+        super().__init__(transport, parent)
         self._session: str | None = None
         self._ready = False
         self._starting = False
-        self._signals_connected = False
+        self._activated_subscription: str | None = None
+        self._deactivated_subscription: str | None = None
 
     @property
     def ready(self) -> bool:
@@ -38,18 +45,19 @@ class GlobalShortcutsPortal(PortalClient):
         if self._ready or self._starting:
             return
         self._starting = True
-        try:
-            self.call_request(
-                INTERFACE,
-                "CreateSession",
-                {
-                    "handle_token": token("ut_gs_request"),
-                    "session_handle_token": token("ut_gs_session"),
-                },
-                callback=self._created,
-            )
-        except Exception as exc:
-            self._fail(exc)
+        handle = token("ut_gs_request")
+        self.call_request(
+            INTERFACE,
+            "CreateSession",
+            "a{sv}",
+            [{
+                "handle_token": string_variant(handle),
+                "session_handle_token": string_variant(token("ut_gs_session")),
+            }],
+            handle_token=handle,
+            callback=self._created,
+            error_callback=self._fail,
+        )
 
     def _created(self, response: int, results: dict[str, Any]) -> None:
         if response != 0:
@@ -59,24 +67,26 @@ class GlobalShortcutsPortal(PortalClient):
         if not self._session:
             self._fail(RuntimeError("GlobalShortcuts non ha restituito una sessione"))
             return
-        try:
-            self._connect_signals()
-            self.call_request(
-                INTERFACE,
-                "BindShortcuts",
-                QDBusObjectPath(self._session),
-                [
-                    (
-                        SHORTCUT_ID,
-                        {"description": "Avvia o termina la dettatura globale"},
-                    )
-                ],
+        self._connect_signals()
+        handle = token("ut_gs_bind")
+        shortcuts = [[
+            SHORTCUT_ID,
+            {"description": string_variant("Avvia o termina la dettatura globale")},
+        ]]
+        self.call_request(
+            INTERFACE,
+            "BindShortcuts",
+            "oa(sa{sv})sa{sv}",
+            [
+                self._session,
+                shortcuts,
                 "",
-                {"handle_token": token("ut_gs_bind")},
-                callback=self._bound,
-            )
-        except Exception as exc:
-            self._fail(exc)
+                {"handle_token": string_variant(handle)},
+            ],
+            handle_token=handle,
+            callback=self._bound,
+            error_callback=self._fail,
+        )
 
     def _bound(self, response: int, _results: dict[str, Any]) -> None:
         self._starting = False
@@ -87,99 +97,46 @@ class GlobalShortcutsPortal(PortalClient):
         self.readyChanged.emit(True)
 
     def _connect_signals(self) -> None:
-        if self._signals_connected:
+        if self._activated_subscription or self._deactivated_subscription:
             return
-        assert self._session
-        ok_pressed = self.bus.connect(
-            PORTAL_SERVICE,
-            PORTAL_PATH,
+        self._activated_subscription = self.subscribe_signal(
             INTERFACE,
             "Activated",
-            _SHORTCUT_SIGNAL_SIGNATURE,
-            self,
-            _ACTIVATED_SLOT,
+            self._activated,
         )
-        ok_released = self.bus.connect(
-            PORTAL_SERVICE,
-            PORTAL_PATH,
+        self._deactivated_subscription = self.subscribe_signal(
             INTERFACE,
             "Deactivated",
-            _SHORTCUT_SIGNAL_SIGNATURE,
-            self,
-            _DEACTIVATED_SLOT,
+            self._deactivated,
         )
-        if not (ok_pressed and ok_released):
-            if ok_pressed:
-                self.bus.disconnect(
-                    PORTAL_SERVICE,
-                    PORTAL_PATH,
-                    INTERFACE,
-                    "Activated",
-                    _SHORTCUT_SIGNAL_SIGNATURE,
-                    self,
-                    _ACTIVATED_SLOT,
-                )
-            if ok_released:
-                self.bus.disconnect(
-                    PORTAL_SERVICE,
-                    PORTAL_PATH,
-                    INTERFACE,
-                    "Deactivated",
-                    _SHORTCUT_SIGNAL_SIGNATURE,
-                    self,
-                    _DEACTIVATED_SLOT,
-                )
-            raise RuntimeError("Impossibile ascoltare i segnali GlobalShortcuts")
-        self._signals_connected = True
 
-    @Slot(QDBusObjectPath, str, "qulonglong", "QVariantMap")
-    def _activated(
-        self,
-        session: QDBusObjectPath,
-        shortcut_id: str,
-        _timestamp: int,
-        _options: dict,
-    ) -> None:
-        if shortcut_id == SHORTCUT_ID and object_path(session) == self._session:
+    def _activated(self, body: list[Any]) -> None:
+        if len(body) < 2:
+            return
+        session = object_path(body[0])
+        shortcut_id = str(body[1] or "")
+        if shortcut_id == SHORTCUT_ID and session == self._session:
             self.pressed.emit()
 
-    @Slot(QDBusObjectPath, str, "qulonglong", "QVariantMap")
-    def _deactivated(
-        self,
-        session: QDBusObjectPath,
-        shortcut_id: str,
-        _timestamp: int,
-        _options: dict,
-    ) -> None:
-        if shortcut_id == SHORTCUT_ID and object_path(session) == self._session:
+    def _deactivated(self, body: list[Any]) -> None:
+        if len(body) < 2:
+            return
+        session = object_path(body[0])
+        shortcut_id = str(body[1] or "")
+        if shortcut_id == SHORTCUT_ID and session == self._session:
             self.released.emit()
 
     def close(self) -> None:
         self._reset()
+        self.close_owned_transport()
 
     def _reset(self) -> None:
         """Release every resource that may exist after a partial portal startup."""
         self.close_requests()
-        if self._signals_connected:
-            self.bus.disconnect(
-                PORTAL_SERVICE,
-                PORTAL_PATH,
-                INTERFACE,
-                "Activated",
-                _SHORTCUT_SIGNAL_SIGNATURE,
-                self,
-                _ACTIVATED_SLOT,
-            )
-            self.bus.disconnect(
-                PORTAL_SERVICE,
-                PORTAL_PATH,
-                INTERFACE,
-                "Deactivated",
-                _SHORTCUT_SIGNAL_SIGNATURE,
-                self,
-                _DEACTIVATED_SLOT,
-            )
-            self._signals_connected = False
+        self.unsubscribe_signal(self._activated_subscription)
+        self.unsubscribe_signal(self._deactivated_subscription)
+        self._activated_subscription = None
+        self._deactivated_subscription = None
         self.close_session(self._session)
         self._session = None
         self._starting = False
