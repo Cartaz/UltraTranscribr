@@ -10,6 +10,28 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 logger = logging.getLogger(__name__)
 
+TRAY_ICON_NAME = "ultratranscribr"
+
+
+def _resolve_tray_icon(icon_path: str | None) -> QIcon:
+    """Prefer a desktop-resolvable icon name, then fall back to local assets."""
+    icon = QIcon.fromTheme(TRAY_ICON_NAME)
+    if not icon.isNull():
+        return icon
+
+    if icon_path:
+        icon = QIcon(icon_path)
+        if not icon.isNull():
+            return icon
+
+    app = QApplication.instance()
+    if app is not None:
+        icon = app.windowIcon()
+        if not icon.isNull():
+            return icon
+
+    return QIcon.fromTheme("audio-input-microphone")
+
 
 class TrayIcon(QSystemTrayIcon):
     """Own the complete tray surface and expose a narrow lifecycle contract."""
@@ -18,15 +40,7 @@ class TrayIcon(QSystemTrayIcon):
     quit_requested = Signal()
 
     def __init__(self, parent: QObject | None = None, icon_path: str | None = None) -> None:
-        icon = QIcon(icon_path) if icon_path else QIcon()
-        if icon.isNull():
-            app = QApplication.instance()
-            if app is not None:
-                icon = app.windowIcon()
-        if icon.isNull():
-            icon = QIcon.fromTheme("audio-input-microphone")
-
-        super().__init__(icon, parent)
+        super().__init__(_resolve_tray_icon(icon_path), parent)
         self.setToolTip("UltraTranscribr")
 
         # QSystemTrayIcon does not take ownership of its context menu. Keep a
@@ -72,11 +86,21 @@ class TrayIcon(QSystemTrayIcon):
         )
 
     def log_readiness(self) -> None:
+        icon = self.icon()
+        geometry = self.geometry()
+        sizes = [f"{size.width()}x{size.height()}" for size in icon.availableSizes()]
         logger.info(
-            "System tray — available=%s visible=%s icon=%s menu=%s ready=%s",
+            "System tray — available=%s visible=%s icon=%s iconName=%s sizes=%s "
+            "geometry=%d,%d %dx%d menu=%s ready=%s",
             self.isSystemTrayAvailable(),
             self.isVisible(),
-            not self.icon().isNull(),
+            not icon.isNull(),
+            icon.name() or "<pixmap>",
+            sizes or ["dynamic"],
+            geometry.x(),
+            geometry.y(),
+            geometry.width(),
+            geometry.height(),
             self.contextMenu() is self._menu,
             self.ready_for_background(),
         )

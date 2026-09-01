@@ -110,7 +110,10 @@ def main() -> None:
 
     tray = TrayIcon(parent=app, icon_path=str(icon_path) if icon_path.exists() else None)
     tray.show()
-    tray.log_readiness()
+    # StatusNotifier registration is asynchronous on KDE/Wayland. Log after the
+    # host has had time to resolve IconName and geometry instead of reporting only
+    # the local QSystemTrayIcon object's visible flag.
+    QTimer.singleShot(750, tray.log_readiness)
     tray.show_window_requested.connect(window.show)
     tray.show_window_requested.connect(window.raise_)
     tray.show_window_requested.connect(window.activateWindow)
