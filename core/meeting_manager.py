@@ -117,25 +117,6 @@ class MeetingManager:
                 return None
             return self._snapshot(runtime)
 
-    def start(
-        self,
-        *,
-        microphone: Optional[str] = None,
-        language: Optional[str] = None,
-        num_speakers: int = 0,
-    ) -> dict[str, Any]:
-        """Backward-compatible single-microphone Meeting entry point."""
-        return self.start_realtime(
-            [
-                AudioInputSelection(
-                    source=AudioSource.MICROPHONE.value,
-                    selected_input=str(microphone or ""),
-                )
-            ],
-            language=language,
-            num_speakers=num_speakers,
-        )
-
     def start_realtime(
         self,
         sources: list[AudioInputSelection | dict[str, Any]],
