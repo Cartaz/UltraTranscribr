@@ -1,8 +1,8 @@
 """Multi-source Meeting acquisition and canonical recording preparation.
 
-Meeting analysis consumes exactly one canonical mono 16 kHz FLAC.  Realtime
+Meeting analysis consumes exactly one canonical mono 16 kHz FLAC. Realtime
 capture may have several independent inputs: each source is retained as its own
-track and the tracks are time-aligned into the canonical recording.  Imported
+track and the tracks are time-aligned into the canonical recording. Imported
 media is normalized directly to the same canonical representation.
 """
 from __future__ import annotations
@@ -11,7 +11,6 @@ import logging
 import os
 import shutil
 import subprocess
-import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -314,6 +313,8 @@ def normalize_media_to_flac(
             "-hide_banner",
             "-loglevel",
             "error",
+            "-f",
+            "flac",
             str(temp),
         ]
         proc = subprocess.Popen(
