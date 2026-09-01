@@ -399,6 +399,12 @@ class ApplicationService:
             for job in self.file_batch.list_jobs()
         )
 
+    def _require_meeting_start_available(self) -> None:
+        if self.batch_busy():
+            raise RuntimeError(
+                "Annulla o completa la coda File prima di avviare una riunione"
+            )
+
     def start_meeting(
         self,
         *,
@@ -406,12 +412,38 @@ class ApplicationService:
         language: str | None,
         num_speakers: int,
     ) -> dict[str, Any]:
-        if self.batch_busy():
-            raise RuntimeError(
-                "Annulla o completa la coda File prima di avviare una riunione"
-            )
+        """Backward-compatible single-microphone Meeting entry point."""
+        self._require_meeting_start_available()
         return self.meeting.start(
             microphone=microphone,
+            language=language,
+            num_speakers=num_speakers,
+        )
+
+    def start_meeting_realtime(
+        self,
+        sources: list[dict[str, Any]],
+        *,
+        language: str | None,
+        num_speakers: int,
+    ) -> dict[str, Any]:
+        self._require_meeting_start_available()
+        return self.meeting.start_realtime(
+            sources,
+            language=language,
+            num_speakers=num_speakers,
+        )
+
+    def start_meeting_file(
+        self,
+        file_path: str,
+        *,
+        language: str | None,
+        num_speakers: int,
+    ) -> dict[str, Any]:
+        self._require_meeting_start_available()
+        return self.meeting.start_file(
+            file_path,
             language=language,
             num_speakers=num_speakers,
         )
