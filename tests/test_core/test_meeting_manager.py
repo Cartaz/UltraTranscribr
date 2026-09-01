@@ -149,6 +149,10 @@ def _manager(
     return controller, manager
 
 
+def _single_microphone() -> list[dict[str, object]]:
+    return [{"source": "microphone", "selected_input": "Test Mic"}]
+
+
 def _wait_until(predicate, timeout: float = 2.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -158,10 +162,17 @@ def _wait_until(predicate, timeout: float = 2.0) -> None:
     raise AssertionError("condition did not become true before timeout")
 
 
+def test_meeting_exposes_only_canonical_start_entrypoints(monkeypatch, tmp_path: Path) -> None:
+    _, manager = _manager(monkeypatch, tmp_path)
+    assert not hasattr(manager, "start")
+    assert callable(manager.start_realtime)
+    assert callable(manager.start_file)
+
+
 def test_meeting_start_finish_processes_to_reviewable_session(monkeypatch, tmp_path: Path) -> None:
     controller, manager = _manager(monkeypatch, tmp_path)
 
-    started = manager.start(microphone="Test Mic", language="it", num_speakers=1)
+    started = manager.start_realtime(_single_microphone(), language="it", num_speakers=1)
     assert started["status"] == "recording"
     assert started["mode"] == "realtime"
 
@@ -247,7 +258,7 @@ def test_duplicate_realtime_source_is_rejected(monkeypatch, tmp_path: Path) -> N
 
 def test_finish_returns_while_capture_join_is_still_blocked(monkeypatch, tmp_path: Path) -> None:
     _, manager = _manager(monkeypatch, tmp_path, capture_cls=_BlockingCapture)
-    manager.start(microphone="Test Mic")
+    manager.start_realtime(_single_microphone())
     runtime = manager._runtime
     assert runtime is not None and runtime.capture is not None
     capture = runtime.capture.tracks[0].capture
@@ -265,7 +276,7 @@ def test_finish_returns_while_capture_join_is_still_blocked(monkeypatch, tmp_pat
 
 def test_cancel_returns_while_capture_join_is_still_blocked(monkeypatch, tmp_path: Path) -> None:
     _, manager = _manager(monkeypatch, tmp_path, capture_cls=_BlockingCapture)
-    manager.start(microphone="Test Mic")
+    manager.start_realtime(_single_microphone())
     runtime = manager._runtime
     assert runtime is not None and runtime.capture is not None
     capture = runtime.capture.tracks[0].capture
@@ -284,7 +295,7 @@ def test_meeting_is_exclusive_with_live_and_file(monkeypatch, tmp_path: Path) ->
     controller, manager = _manager(monkeypatch, tmp_path)
     controller.live_count = 1
     try:
-        manager.start(microphone="Test Mic")
+        manager.start_realtime(_single_microphone())
     except RuntimeError as exc:
         assert "Live/File" in str(exc)
     else:
@@ -293,7 +304,7 @@ def test_meeting_is_exclusive_with_live_and_file(monkeypatch, tmp_path: Path) ->
     controller.live_count = 0
     controller.file_busy = True
     try:
-        manager.start(microphone="Test Mic")
+        manager.start_realtime(_single_microphone())
     except RuntimeError as exc:
         assert "Live/File" in str(exc)
     else:
@@ -302,7 +313,7 @@ def test_meeting_is_exclusive_with_live_and_file(monkeypatch, tmp_path: Path) ->
 
 def test_shutdown_during_recording_preserves_audio_and_marks_interrupted(monkeypatch, tmp_path: Path) -> None:
     _, manager = _manager(monkeypatch, tmp_path)
-    started = manager.start(microphone="Test Mic")
+    started = manager.start_realtime(_single_microphone())
 
     manager.shutdown()
 
