@@ -1,4 +1,4 @@
-"""Meeting recording, final transcription, diarization and review lifecycle."""
+"""Meeting acquisition, final transcription, diarization and review lifecycle."""
 from __future__ import annotations
 
 import logging
@@ -7,13 +7,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
+from config.constants import AppMeta
 from config.settings import AudioSource, Settings
-from core.audio_capture import AudioCaptureThread
+from core.audio_inputs import AudioInputResolver, AudioInputSelection
 from core.event_bus import EventBus
 from core.file_transcriber import FileTranscriberThread
+from core.meeting_capture import (
+    MeetingCaptureSession,
+    MeetingRecordingBundle,
+    mix_recordings,
+    normalize_media_to_flac,
+)
 from core.meeting_store import MeetingStore
 from core.microphone_recording import MicrophoneRecorder, RecordingInfo
-from core.sink_finder import find_source
 from core.speaker_diarization import DiarizationModelManager, SpeakerDiarizer, align_speakers
 from core.transcript_history import TranscriptHistoryStore
 from core.whisper_backend import WhisperBackend
@@ -45,33 +51,21 @@ class MeetingController(Protocol):
     ) -> None: ...
 
 
-class _RecordingOnlyBuffer:
-    """AudioCaptureThread-compatible sink that discards Whisper chunks."""
-
-    buffer_level = 0
-
-    def put(self, _chunk) -> None:
-        return
-
-    def close_input(self) -> None:
-        return
-
-    def close(self) -> None:
-        return
-
-
 @dataclass
 class MeetingRuntime:
     id: str
-    microphone: str
+    mode: str
     settings: Settings
     num_speakers: int
-    recorder: MicrophoneRecorder
-    capture: AudioCaptureThread
+    sources: list[dict[str, Any]] = field(default_factory=list)
+    source_path: str = ""
+    capture: Optional[MeetingCaptureSession] = None
+    recording: Optional[RecordingInfo] = None
     status: str = "recording"
     progress: int = 0
     diarization_progress: int = 0
     transcriber: Optional[FileTranscriberThread] = None
+    preparation_thread: Optional[threading.Thread] = None
     processing_thread: Optional[threading.Thread] = None
     control_thread: Optional[threading.Thread] = None
     stop_event: threading.Event = field(default_factory=threading.Event)
@@ -79,17 +73,24 @@ class MeetingRuntime:
 
 
 class MeetingManager:
-    """Own at most one active Meeting while keeping review data persistent."""
+    """Own one Meeting workflow while acquisition remains replaceable."""
 
     _TERMINAL_STATUSES = {"completed", "error", "cancelled", "interrupted"}
+    _MAX_REALTIME_SOURCES = 8
     _RECOVERY_JOIN_TIMEOUT_S = 5.0
     _CONTROL_JOIN_TIMEOUT_S = 10.0
-    _CAPTURE_JOIN_TIMEOUT_S = 5.0
+    _CAPTURE_JOIN_TIMEOUT_S = 6.0
     _TRANSCRIBER_JOIN_TIMEOUT_S = 5.0
     _PROCESSING_JOIN_TIMEOUT_S = 5.0
+    _PREPARATION_JOIN_TIMEOUT_S = 5.0
 
-    def __init__(self, controller: MeetingController) -> None:
+    def __init__(
+        self,
+        controller: MeetingController,
+        input_resolver: AudioInputResolver,
+    ) -> None:
         self._controller = controller
+        self._inputs = input_resolver
         self.store = MeetingStore(controller.history)
         self.models = DiarizationModelManager()
         self.diarizer = SpeakerDiarizer(self.models)
@@ -124,61 +125,143 @@ class MeetingManager:
         language: Optional[str] = None,
         num_speakers: int = 0,
     ) -> dict[str, Any]:
-        with self._lock:
-            if self._closed:
-                raise RuntimeError("gestore Meeting chiuso")
-        if self.is_busy():
-            raise RuntimeError("Una riunione è già in corso")
-        if self._controller.active_live_count() > 0 or self._controller.is_file_busy():
-            raise RuntimeError("Ferma Live/File prima di avviare una riunione")
+        """Backward-compatible single-microphone Meeting entry point."""
+        return self.start_realtime(
+            [
+                AudioInputSelection(
+                    source=AudioSource.MICROPHONE.value,
+                    selected_input=str(microphone or ""),
+                )
+            ],
+            language=language,
+            num_speakers=num_speakers,
+        )
+
+    def start_realtime(
+        self,
+        sources: list[AudioInputSelection | dict[str, Any]],
+        *,
+        language: Optional[str] = None,
+        num_speakers: int = 0,
+    ) -> dict[str, Any]:
+        self._require_start_available()
+        selections = self._normalize_sources(sources)
         settings = self._controller.settings.with_(
-            audio_source=AudioSource.MICROPHONE.value,
             language=language or self._controller.settings.language,
             live_microphone_recording=False,
         )
-        selected = str(microphone or "").strip()
-        if not selected:
-            selected = str(find_source(settings, audio_source=AudioSource.MICROPHONE.value) or "")
-        if not selected:
-            raise RuntimeError("Nessun microfono disponibile")
+        source_name = selections[0].source if len(selections) == 1 else "multisource"
+        source_path = "; ".join(self._selection_label(item) for item in selections)
         session_id = self.store.create(
             model=settings.model_size,
             language=settings.language,
-            microphone=selected,
+            source=source_name,
+            source_path=source_path,
+            acquisition_mode="realtime",
             num_speakers=max(0, int(num_speakers)),
         )
-        recorder = MicrophoneRecorder(session_id)
-        recorder.start()
-        capture = AudioCaptureThread(
-            _RecordingOnlyBuffer(),
+        planned_sources = [
+            {
+                "id": f"source-{index + 1}",
+                **selection.to_dict(),
+                "recording": {},
+            }
+            for index, selection in enumerate(selections)
+        ]
+        self.store.set_source_recordings(session_id, planned_sources)
+        capture = MeetingCaptureSession(
+            session_id,
             settings,
-            selected,
-            AudioSource.MICROPHONE.value,
-            session_id=f"meeting-{session_id}",
+            self._inputs,
             event_sink=lambda event, payload: self._capture_event(session_id, event, payload),
-            sample_sink=recorder.write,
         )
         runtime = MeetingRuntime(
             id=session_id,
-            microphone=selected,
+            mode="realtime",
             settings=settings,
             num_speakers=max(0, int(num_speakers)),
-            recorder=recorder,
+            sources=planned_sources,
+            source_path=source_path,
             capture=capture,
+            status="recording",
         )
         with self._lock:
             if self._closed:
-                recorder.abandon()
                 raise RuntimeError("gestore Meeting chiuso")
             self._runtime = runtime
-        capture.start()
+        try:
+            capture.start(selections)
+        except Exception as exc:
+            logger.exception("Avvio acquisizione Meeting fallito")
+            self._fail(runtime, str(exc))
+            raise RuntimeError(str(exc)) from exc
         self._emit("meeting_started", self._snapshot(runtime))
         self._emit("meeting_updated", self._snapshot(runtime))
+        return self._snapshot(runtime)
+
+    def start_file(
+        self,
+        file_path: Path | str,
+        *,
+        language: Optional[str] = None,
+        num_speakers: int = 0,
+    ) -> dict[str, Any]:
+        self._require_start_available()
+        source = Path(file_path).expanduser()
+        if not source.is_file():
+            raise FileNotFoundError("Seleziona una registrazione esistente")
+        settings = self._controller.settings.with_(
+            language=language or self._controller.settings.language,
+            live_microphone_recording=False,
+        )
+        session_id = self.store.create(
+            model=settings.model_size,
+            language=settings.language,
+            source="file",
+            source_path=str(source),
+            acquisition_mode="file",
+            num_speakers=max(0, int(num_speakers)),
+        )
+        planned = [
+            {
+                "id": "source-1",
+                "source": "file",
+                "source_path": str(source),
+                "label": source.name,
+                "recording": {},
+            }
+        ]
+        self.store.set_source_recordings(session_id, planned)
+        runtime = MeetingRuntime(
+            id=session_id,
+            mode="file",
+            settings=settings,
+            num_speakers=max(0, int(num_speakers)),
+            sources=planned,
+            source_path=str(source),
+            status="preparing_file",
+        )
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("gestore Meeting chiuso")
+            self._runtime = runtime
+        worker = threading.Thread(
+            target=self._prepare_file,
+            args=(runtime, source),
+            daemon=True,
+            name=f"MeetingFilePrepare-{session_id}",
+        )
+        runtime.preparation_thread = worker
+        self._emit("meeting_started", self._snapshot(runtime))
+        self._emit("meeting_updated", self._snapshot(runtime))
+        worker.start()
         return self._snapshot(runtime)
 
     def finish(self) -> dict[str, Any]:
         """Request finalization without blocking the caller on audio shutdown."""
         runtime = self._require_runtime("recording")
+        if runtime.mode != "realtime" or runtime.capture is None:
+            raise RuntimeError("La riunione corrente non è un'acquisizione realtime")
         with self._lock:
             if self._closed:
                 raise RuntimeError("gestore Meeting chiuso")
@@ -189,7 +272,7 @@ class MeetingManager:
             runtime.error = ""
             self.store.set_status(runtime.id, runtime.status)
             control = threading.Thread(
-                target=self._finish_recording,
+                target=self._finish_realtime,
                 args=(runtime,),
                 daemon=True,
                 name=f"MeetingFinalize-{runtime.id}",
@@ -200,42 +283,22 @@ class MeetingManager:
         control.start()
         return snapshot
 
-    def _finish_recording(self, runtime: MeetingRuntime) -> None:
+    def _finish_realtime(self, runtime: MeetingRuntime) -> None:
         try:
-            runtime.capture.stop()
-            if runtime.capture.is_alive() and runtime.capture is not threading.current_thread():
-                runtime.capture.join(timeout=8.0)
-            if runtime.capture.is_alive():
-                message = "Il microfono non si è arrestato in tempo; la registrazione resta aperta"
-                runtime.status = "recording"
-                runtime.error = message
-                self.store.set_status(runtime.id, runtime.status)
-                self._emit("meeting_error", {"session_id": runtime.id, "error": message})
-                self._emit("meeting_updated", self._snapshot(runtime))
-                return
-            info = self._finalize_recording(runtime)
-            if info is None:
-                self._fail(runtime, "Registrazione riunione vuota")
-                return
-            self._emit("meeting_recording_saved", {"session_id": runtime.id, **info.to_dict()})
+            assert runtime.capture is not None
+            bundle = runtime.capture.stop_and_finalize()
+            self._store_bundle(runtime, bundle)
+            self._emit(
+                "meeting_recording_saved",
+                {"session_id": runtime.id, **bundle.recording.to_dict()},
+            )
             if runtime.stop_event.is_set() or self._shutdown_event.is_set():
                 runtime.status = "interrupted"
                 self.store.set_status(runtime.id, runtime.status, terminal=True)
                 self._emit("meeting_updated", self._snapshot(runtime))
                 self._emit("history_changed", runtime.id)
                 return
-            runtime.status = "transcribing"
-            runtime.progress = 0
-            self.store.set_status(runtime.id, runtime.status)
-            self._emit("meeting_updated", self._snapshot(runtime))
-            worker = threading.Thread(
-                target=self._process,
-                args=(runtime, info),
-                daemon=True,
-                name=f"MeetingProcessing-{runtime.id}",
-            )
-            runtime.processing_thread = worker
-            worker.start()
+            self._begin_analysis(runtime, bundle.recording)
         except Exception as exc:
             logger.exception("Finalizzazione registrazione Meeting fallita")
             self._fail(runtime, str(exc))
@@ -243,6 +306,60 @@ class MeetingManager:
             with self._lock:
                 if runtime.control_thread is threading.current_thread():
                     runtime.control_thread = None
+
+    def _prepare_file(self, runtime: MeetingRuntime, source: Path) -> None:
+        try:
+            info = normalize_media_to_flac(
+                source,
+                AppMeta.RECORDINGS_DIR / f"{runtime.id}.flac",
+                stop_event=runtime.stop_event,
+            )
+            if runtime.stop_event.is_set() or self._shutdown_event.is_set():
+                return
+            runtime.recording = info
+            runtime.sources = [
+                {
+                    "id": "source-1",
+                    "source": "file",
+                    "source_path": str(source),
+                    "label": source.name,
+                    "offset_s": 0.0,
+                    "recording": info.to_dict(),
+                }
+            ]
+            self.store.set_recording(runtime.id, info.to_dict())
+            self.store.set_source_recordings(runtime.id, runtime.sources)
+            self._emit(
+                "meeting_recording_saved",
+                {"session_id": runtime.id, **info.to_dict()},
+            )
+            self._begin_analysis(runtime, info)
+        except Exception as exc:
+            if runtime.stop_event.is_set() or self._shutdown_event.is_set():
+                return
+            logger.exception("Preparazione file Meeting fallita")
+            self._fail(runtime, str(exc))
+        finally:
+            with self._lock:
+                if runtime.preparation_thread is threading.current_thread():
+                    runtime.preparation_thread = None
+
+    def _begin_analysis(self, runtime: MeetingRuntime, info: RecordingInfo) -> None:
+        if runtime.stop_event.is_set() or self._shutdown_event.is_set():
+            return
+        runtime.recording = info
+        runtime.status = "transcribing"
+        runtime.progress = 0
+        self.store.set_status(runtime.id, runtime.status)
+        self._emit("meeting_updated", self._snapshot(runtime))
+        worker = threading.Thread(
+            target=self._process,
+            args=(runtime, info),
+            daemon=True,
+            name=f"MeetingProcessing-{runtime.id}",
+        )
+        runtime.processing_thread = worker
+        worker.start()
 
     def cancel(self) -> None:
         """Request cancellation without blocking the caller on worker joins."""
@@ -273,9 +390,14 @@ class MeetingManager:
 
     def _cancel_runtime(self, runtime: MeetingRuntime, previous_status: str) -> None:
         try:
-            runtime.capture.stop()
-            if runtime.capture.is_alive() and runtime.capture is not threading.current_thread():
-                runtime.capture.join(timeout=self._CAPTURE_JOIN_TIMEOUT_S)
+            if runtime.capture is not None and previous_status in {"recording", "finishing"}:
+                try:
+                    bundle = runtime.capture.stop_and_finalize()
+                    self._store_bundle(runtime, bundle)
+                except Exception:
+                    logger.exception("Finalizzazione acquisizione Meeting annullata fallita")
+                    runtime.capture.abandon()
+
             transcriber = runtime.transcriber
             if transcriber is not None:
                 transcriber.stop()
@@ -283,12 +405,13 @@ class MeetingManager:
                     self._controller.backend.abort_active_request()
                 if transcriber.is_alive() and transcriber is not threading.current_thread():
                     transcriber.join(timeout=self._TRANSCRIBER_JOIN_TIMEOUT_S)
-            if previous_status == "recording" and not runtime.capture.is_alive():
-                try:
-                    self._finalize_recording(runtime)
-                except Exception:
-                    logger.exception("Finalizzazione registrazione riunione annullata fallita")
-                    runtime.recorder.abandon()
+
+            preparation = runtime.preparation_thread
+            if preparation and preparation.is_alive() and preparation is not threading.current_thread():
+                preparation.join(timeout=self._PREPARATION_JOIN_TIMEOUT_S)
+                if preparation.is_alive():
+                    logger.warning("Preparazione Meeting %s ancora attiva dopo cancel", runtime.id)
+
             runtime.status = "cancelled"
             self.store.set_status(runtime.id, runtime.status, terminal=True)
             self._emit("meeting_updated", self._snapshot(runtime))
@@ -345,19 +468,24 @@ class MeetingManager:
 
         if runtime is None:
             return
-
         runtime.stop_event.set()
+
         control = runtime.control_thread
         if control and control.is_alive() and control is not current:
             control.join(timeout=self._CONTROL_JOIN_TIMEOUT_S)
             if control.is_alive():
                 logger.warning("Control Meeting %s ancora attivo dopo shutdown bounded", runtime.id)
 
-        runtime.capture.stop()
-        if runtime.capture.is_alive() and runtime.capture is not current:
-            runtime.capture.join(timeout=self._CAPTURE_JOIN_TIMEOUT_S)
-            if runtime.capture.is_alive():
-                logger.warning("Capture Meeting %s ancora attivo dopo shutdown bounded", runtime.id)
+        if runtime.capture is not None and runtime.status in {"recording", "finishing", "cancelling"}:
+            try:
+                bundle = runtime.capture.stop_and_finalize()
+                self._store_bundle(runtime, bundle)
+                runtime.status = "interrupted"
+                self.store.set_status(runtime.id, "interrupted", terminal=True)
+                self._emit("history_changed", runtime.id)
+            except Exception:
+                logger.exception("Shutdown acquisizione Meeting fallito")
+                runtime.capture.abandon()
 
         transcriber = runtime.transcriber
         if transcriber is not None:
@@ -369,18 +497,11 @@ class MeetingManager:
                 if transcriber.is_alive():
                     logger.warning("Transcriber Meeting %s ancora attivo dopo shutdown bounded", runtime.id)
 
-        if runtime.status in {"recording", "finishing"}:
-            try:
-                if runtime.capture.is_alive():
-                    runtime.recorder.abandon()
-                else:
-                    self._finalize_recording(runtime)
-                runtime.status = "interrupted"
-                self.store.set_status(runtime.id, "interrupted", terminal=True)
-                self._emit("history_changed", runtime.id)
-            except Exception:
-                logger.exception("Shutdown registrazione Meeting fallito")
-                runtime.recorder.abandon()
+        preparation = runtime.preparation_thread
+        if preparation and preparation.is_alive() and preparation is not current:
+            preparation.join(timeout=self._PREPARATION_JOIN_TIMEOUT_S)
+            if preparation.is_alive():
+                logger.warning("Preparazione Meeting %s ancora attiva dopo shutdown bounded", runtime.id)
 
         processing = runtime.processing_thread
         if processing and processing.is_alive() and processing is not current:
@@ -392,7 +513,10 @@ class MeetingManager:
         try:
             if runtime.stop_event.is_set() or self._shutdown_event.is_set():
                 return
-            self._controller.ensure_backend_started(vad=runtime.settings.vad_filter, settings=runtime.settings)
+            self._controller.ensure_backend_started(
+                vad=runtime.settings.vad_filter,
+                settings=runtime.settings,
+            )
             if runtime.stop_event.is_set() or self._shutdown_event.is_set():
                 return
             worker = FileTranscriberThread(
@@ -415,7 +539,11 @@ class MeetingManager:
             if not raw_segments:
                 raise RuntimeError("Whisper non ha prodotto segmenti timestampati")
 
-            runtime.status = "downloading_diarization" if not self.models.status()["ready"] else "diarizing"
+            runtime.status = (
+                "downloading_diarization"
+                if not self.models.status()["ready"]
+                else "diarizing"
+            )
             self.store.set_status(runtime.id, runtime.status)
             self._emit("meeting_updated", self._snapshot(runtime))
             self.models.ensure_models(
@@ -474,12 +602,20 @@ class MeetingManager:
             self._fail(runtime, str(payload or "Errore trascrizione riunione"))
 
     def _capture_event(self, session_id: str, event: str, payload: Any) -> None:
-        if event != "transcriber_error":
+        if event not in {"transcriber_error", "route_status"}:
             return
         with self._lock:
             runtime = self._runtime
-        if runtime is not None and runtime.id == session_id:
-            self._fail(runtime, str(payload or "Errore cattura microfono"))
+        if runtime is None or runtime.id != session_id:
+            return
+        if event == "route_status":
+            self._emit(
+                "meeting_source_status",
+                {"session_id": session_id, **dict(payload or {})},
+            )
+            return
+        detail = payload.get("payload") if isinstance(payload, dict) else payload
+        self._fail(runtime, str(detail or "Errore cattura sorgente riunione"))
 
     def _model_progress(self, runtime: MeetingRuntime, label: str, percent: int) -> None:
         if runtime.stop_event.is_set() or self._shutdown_event.is_set():
@@ -496,18 +632,15 @@ class MeetingManager:
         self._emit("meeting_updated", self._snapshot(runtime))
 
     def _fail(self, runtime: MeetingRuntime, error: str) -> None:
-        if runtime.status in {"recording", "finishing"}:
-            runtime.capture.stop()
+        if runtime.status in self._TERMINAL_STATUSES:
+            return
+        if runtime.capture is not None and runtime.status in {"recording", "finishing", "cancelling"}:
             try:
-                if runtime.capture is not threading.current_thread() and runtime.capture.is_alive():
-                    runtime.capture.join(timeout=2.0)
-                if not runtime.capture.is_alive():
-                    self._finalize_recording(runtime)
-                else:
-                    runtime.recorder.abandon()
+                bundle = runtime.capture.stop_and_finalize()
+                self._store_bundle(runtime, bundle)
             except Exception:
                 logger.exception("Salvataggio audio dopo errore Meeting fallito")
-                runtime.recorder.abandon()
+                runtime.capture.abandon()
         runtime.error = str(error)
         runtime.status = "error"
         try:
@@ -518,11 +651,24 @@ class MeetingManager:
         self._emit("meeting_updated", self._snapshot(runtime))
         self._emit("history_changed", runtime.id)
 
-    def _finalize_recording(self, runtime: MeetingRuntime) -> Optional[RecordingInfo]:
-        info = runtime.recorder.finalize()
-        if info is not None:
-            self.store.set_recording(runtime.id, info.to_dict())
-        return info
+    def _store_bundle(
+        self,
+        runtime: MeetingRuntime,
+        bundle: MeetingRecordingBundle,
+    ) -> None:
+        runtime.recording = bundle.recording
+        runtime.sources = list(bundle.sources)
+        self.store.set_recording(runtime.id, bundle.recording.to_dict())
+        self.store.set_source_recordings(runtime.id, bundle.sources)
+
+    def _require_start_available(self) -> None:
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("gestore Meeting chiuso")
+        if self.is_busy():
+            raise RuntimeError("Una riunione è già in corso")
+        if self._controller.active_live_count() > 0 or self._controller.is_file_busy():
+            raise RuntimeError("Ferma Live/File prima di avviare una riunione")
 
     def _require_runtime(self, status: str) -> MeetingRuntime:
         with self._lock:
@@ -531,33 +677,111 @@ class MeetingManager:
             raise RuntimeError("Nessuna riunione in registrazione")
         return runtime
 
+    def _normalize_sources(
+        self,
+        values: list[AudioInputSelection | dict[str, Any]],
+    ) -> list[AudioInputSelection]:
+        if not isinstance(values, list) or not values:
+            raise ValueError("Aggiungi almeno una sorgente alla riunione")
+        if len(values) > self._MAX_REALTIME_SOURCES:
+            raise ValueError(
+                f"Una riunione supporta al massimo {self._MAX_REALTIME_SOURCES} sorgenti"
+            )
+        selections = [
+            value if isinstance(value, AudioInputSelection) else AudioInputSelection.from_mapping(value)
+            for value in values
+        ]
+        keys: set[tuple[str, str, Optional[int]]] = set()
+        for selection in selections:
+            key = (selection.source, selection.selected_input, selection.stream_id)
+            if key in keys:
+                raise ValueError("La stessa sorgente non può essere aggiunta due volte")
+            keys.add(key)
+        return selections
+
+    @staticmethod
+    def _selection_label(selection: AudioInputSelection) -> str:
+        if selection.label:
+            return selection.label
+        if selection.source == AudioSource.APPLICATION.value:
+            return f"application:{selection.stream_id}"
+        return selection.selected_input or selection.source
+
     @staticmethod
     def _snapshot(runtime: MeetingRuntime) -> dict[str, Any]:
+        duration = runtime.recording.duration_s if runtime.recording is not None else 0.0
+        if runtime.capture is not None and runtime.status in {"recording", "finishing"}:
+            duration = runtime.capture.duration_s
+        microphone = ""
+        for source in runtime.sources:
+            if source.get("source") == AudioSource.MICROPHONE.value:
+                microphone = str(
+                    source.get("source_path")
+                    or source.get("selected_input")
+                    or source.get("label")
+                    or ""
+                )
+                break
         return {
             "id": runtime.id,
+            "mode": runtime.mode,
             "status": runtime.status,
-            "microphone": runtime.microphone,
+            "microphone": microphone,
+            "sources": [dict(item) for item in runtime.sources],
+            "source_path": runtime.source_path,
             "language": runtime.settings.language,
             "model": runtime.settings.model_size,
             "num_speakers": runtime.num_speakers,
-            "duration_s": round(runtime.recorder.duration_s, 1),
+            "duration_s": round(duration, 1),
             "progress": runtime.progress,
             "diarization_progress": runtime.diarization_progress,
             "error": runtime.error,
         }
 
     def _recover_orphans(self) -> None:
+        grouped: dict[str, list[RecordingInfo]] = {}
         for info in MicrophoneRecorder.recover_orphaned():
             if self._shutdown_event.is_set():
                 return
-            session_id = Path(info.path).stem
-            meeting = self.store.get(session_id)
-            if meeting is None:
-                continue
+            stem = Path(info.path).stem
+            session_id = stem.split("-source-", 1)[0] if "-source-" in stem else stem
+            if self.store.get(session_id) is not None:
+                grouped.setdefault(session_id, []).append(info)
+
+        for session_id, infos in grouped.items():
+            if self._shutdown_event.is_set():
+                return
             try:
-                self.store.set_recording(session_id, info.to_dict())
+                direct = next(
+                    (info for info in infos if Path(info.path).stem == session_id),
+                    None,
+                )
+                if direct is not None:
+                    canonical = direct
+                else:
+                    canonical = mix_recordings(
+                        [(info, 0.0) for info in infos],
+                        AppMeta.RECORDINGS_DIR / f"{session_id}.flac",
+                    )
+                meeting = self.store.get(session_id) or {}
+                planned = list((meeting.get("meeting") or {}).get("acquisition", {}).get("sources") or [])
+                source_records: list[dict[str, Any]] = []
+                for index, info in enumerate(infos):
+                    base = dict(planned[index]) if index < len(planned) else {
+                        "id": f"source-{index + 1}",
+                        "source": "recovered",
+                        "label": f"Recovered {index + 1}",
+                    }
+                    base["offset_s"] = 0.0
+                    base["recording"] = info.to_dict()
+                    source_records.append(base)
+                self.store.set_recording(session_id, canonical.to_dict())
+                self.store.set_source_recordings(session_id, source_records)
                 self.store.set_status(session_id, "interrupted", terminal=True)
-                self._emit("meeting_recording_saved", {"session_id": session_id, **info.to_dict()})
+                self._emit(
+                    "meeting_recording_saved",
+                    {"session_id": session_id, **canonical.to_dict()},
+                )
                 self._emit("history_changed", session_id)
             except Exception:
                 logger.exception("Associazione recovery Meeting fallita: %s", session_id)
