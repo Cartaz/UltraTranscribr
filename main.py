@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import signal
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -42,6 +43,25 @@ def setup_logging() -> None:
     )
 
 
+def install_process_signal_handlers(app: QApplication) -> QTimer:
+    """Route terminal/process stop signals through the normal Qt shutdown path."""
+
+    def request_quit(_signum, _frame) -> None:
+        app.quit()
+
+    signal.signal(signal.SIGINT, request_quit)
+    signal.signal(signal.SIGTERM, request_quit)
+
+    # Python dispatches signal handlers on the main interpreter thread. A small
+    # Qt timer regularly returns control to Python while app.exec() is running,
+    # so Ctrl+C remains reliable without a second event loop or polling thread.
+    timer = QTimer(app)
+    timer.setInterval(250)
+    timer.timeout.connect(lambda: None)
+    timer.start()
+    return timer
+
+
 def main() -> None:
     setup_logging()
     logger = logging.getLogger("UltraTranscribr")
@@ -61,6 +81,7 @@ def main() -> None:
     app.setApplicationDisplayName(AppMeta.NAME)
     app.setDesktopFileName(AppMeta.ID)
     app.setQuitOnLastWindowClosed(False)
+    interrupt_timer = install_process_signal_handlers(app)
 
     try:
         controller = AppController(settings=settings)
@@ -89,6 +110,7 @@ def main() -> None:
 
     tray = TrayIcon(parent=app, icon_path=str(icon_path) if icon_path.exists() else None)
     tray.show()
+    tray.log_readiness()
     tray.show_window_requested.connect(window.show)
     tray.show_window_requested.connect(window.raise_)
     tray.show_window_requested.connect(window.activateWindow)
@@ -105,6 +127,9 @@ def main() -> None:
     try:
         exit_code = app.exec()
     finally:
+        # Keep the Python wrapper alive for the entire Qt loop; its QObject parent
+        # owns the C++ timer, while this reference makes the lifetime explicit.
+        del interrupt_timer
         try:
             dictation_native.close()
         finally:

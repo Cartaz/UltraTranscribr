@@ -102,6 +102,8 @@ class Settings:
 
     dictation_activation_mode: str = DictationActivationMode.PUSH_TO_TALK.value
     dictation_insertion_mode: str = DictationInsertionMode.LIVE.value
+    window_x: Optional[int] = None
+    window_y: Optional[int] = None
     window_width: int = UIConstraints.WINDOW_WIDTH
     window_height: int = UIConstraints.WINDOW_HEIGHT
 
@@ -143,6 +145,12 @@ class Settings:
             errors.append(f"dictation_activation_mode non valido: {self.dictation_activation_mode}")
         if self.dictation_insertion_mode not in DictationInsertionMode.choices():
             errors.append(f"dictation_insertion_mode non valido: {self.dictation_insertion_mode}")
+        for coordinate_name in ("window_x", "window_y"):
+            coordinate = getattr(self, coordinate_name)
+            if coordinate is not None and (
+                isinstance(coordinate, bool) or not isinstance(coordinate, int)
+            ):
+                errors.append(f"{coordinate_name} deve essere un intero o null")
         if self.window_width < UIConstraints.MIN_WINDOW_WIDTH:
             errors.append(f"window_width deve essere >= {UIConstraints.MIN_WINDOW_WIDTH}")
         if self.window_height < UIConstraints.MIN_WINDOW_HEIGHT:
@@ -203,6 +211,18 @@ class Settings:
             if keyword.casefold() == ProcessDefaults.LEGACY_FIREFOX_KEYWORD.casefold():
                 filtered["sink_search_keyword"] = ProcessDefaults.SINK_SEARCH_KEYWORD
                 logger.info("Keyword Firefox legacy rimossa dalla configurazione audio")
+
+            for coordinate_name in ("window_x", "window_y"):
+                coordinate = filtered.get(coordinate_name)
+                if coordinate is None:
+                    continue
+                try:
+                    if isinstance(coordinate, bool):
+                        raise ValueError
+                    filtered[coordinate_name] = int(coordinate)
+                except (TypeError, ValueError):
+                    filtered[coordinate_name] = None
+                    logger.info("Coordinata finestra %s non valida: ripristino automatico", coordinate_name)
 
             old_width = filtered.get("window_width", UIConstraints.WINDOW_WIDTH)
             old_height = filtered.get("window_height", UIConstraints.WINDOW_HEIGHT)

@@ -4,8 +4,16 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, QUrl, Signal
-from PySide6.QtGui import QCloseEvent, QDesktopServices, QDragEnterEvent, QDragMoveEvent, QDropEvent, QResizeEvent
+from PySide6.QtCore import QRect, QTimer, QUrl, Signal
+from PySide6.QtGui import (
+    QCloseEvent,
+    QDesktopServices,
+    QDragEnterEvent,
+    QDragMoveEvent,
+    QDropEvent,
+    QMoveEvent,
+    QResizeEvent,
+)
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -16,6 +24,38 @@ from core.application_service import ApplicationService
 from ui.bridge import BackendBridge, BridgeLogHandler
 
 logger = logging.getLogger(__name__)
+
+
+def clamp_window_geometry(desired: QRect, available_rects: list[QRect]) -> QRect:
+    """Clamp a persisted geometry to a usable screen while respecting minimum size."""
+    width = max(UIConstraints.MIN_WINDOW_WIDTH, int(desired.width()))
+    height = max(UIConstraints.MIN_WINDOW_HEIGHT, int(desired.height()))
+    normalized = QRect(int(desired.x()), int(desired.y()), width, height)
+    if not available_rects:
+        return normalized
+
+    def intersection_area(screen_rect: QRect) -> int:
+        intersection = normalized.intersected(screen_rect)
+        return max(0, intersection.width()) * max(0, intersection.height())
+
+    target = max(available_rects, key=intersection_area)
+    if intersection_area(target) == 0:
+        # Callers provide the primary screen first, so monitor removal or a stale
+        # off-screen position recovers deterministically to the primary display.
+        target = available_rects[0]
+
+    max_width = max(UIConstraints.MIN_WINDOW_WIDTH, int(target.width()))
+    max_height = max(UIConstraints.MIN_WINDOW_HEIGHT, int(target.height()))
+    width = min(width, max_width)
+    height = min(height, max_height)
+
+    min_x = int(target.x())
+    min_y = int(target.y())
+    max_x = int(target.x() + target.width() - width)
+    max_y = int(target.y() + target.height() - height)
+    x = min_x if max_x < min_x else min(max(normalized.x(), min_x), max_x)
+    y = min_y if max_y < min_y else min(max(normalized.y(), min_y), max_y)
+    return QRect(x, y, width, height)
 
 
 class LocalOnlyWebPage(QWebEnginePage):
@@ -101,11 +141,7 @@ class MainWindow(QMainWindow):
         self._geometry_save_timer.timeout.connect(self._persist_window_geometry)
         self.setWindowTitle(AppMeta.NAME)
         self.setMinimumSize(UIConstraints.MIN_WINDOW_WIDTH, UIConstraints.MIN_WINDOW_HEIGHT)
-        desktop = application.desktop_state()
-        self.resize(
-            max(UIConstraints.MIN_WINDOW_WIDTH, int(desktop["window_width"])),
-            max(UIConstraints.MIN_WINDOW_HEIGHT, int(desktop["window_height"])),
-        )
+        self._restore_window_geometry(application.desktop_state())
         self._bridge = BackendBridge(application, self)
         self._bridge.eventReceived.connect(self._observe_backend_event)
         self._log_handler = BridgeLogHandler(self._bridge)
@@ -124,25 +160,55 @@ class MainWindow(QMainWindow):
         self._web_view.setUrl(QUrl.fromLocalFile(str(index_path)))
         self._geometry_tracking_ready = True
 
+    @staticmethod
+    def _available_screen_rects() -> list[QRect]:
+        primary = QApplication.primaryScreen()
+        screens = QApplication.screens()
+        if primary in screens:
+            screens = [primary, *[screen for screen in screens if screen is not primary]]
+        return [screen.availableGeometry() for screen in screens]
+
+    def _restore_window_geometry(self, desktop: dict) -> None:
+        width = max(UIConstraints.MIN_WINDOW_WIDTH, int(desktop["window_width"]))
+        height = max(UIConstraints.MIN_WINDOW_HEIGHT, int(desktop["window_height"]))
+        x = desktop.get("window_x")
+        y = desktop.get("window_y")
+        if x is None or y is None:
+            self.resize(width, height)
+            return
+        desired = QRect(int(x), int(y), width, height)
+        restored = clamp_window_geometry(desired, self._available_screen_rects())
+        self.setGeometry(restored)
+
     def set_tray_icon(self, tray_icon) -> None:
         self._tray_icon = tray_icon
         self._tray_icon.set_running(self._application.live_active())
 
     def on_start(self) -> None:
         desktop = self._application.desktop_state()
-        self._application.start_live(str(desktop["audio_source"]), str(desktop["sink_name"] or ""), str(desktop["language"]), False)
+        self._application.start_live(
+            str(desktop["audio_source"]),
+            str(desktop["sink_name"] or ""),
+            str(desktop["language"]),
+            False,
+        )
 
     def on_stop(self) -> None:
         self._application.stop_all_live(drain=False)
         self._application.cancel_file_queue()
 
-    def force_quit(self) -> None:
+    def _prepare_shutdown(self) -> None:
         if self._closing:
             return
         self._closing = True
         self._geometry_save_timer.stop()
         self._persist_window_geometry()
         logging.getLogger().removeHandler(self._log_handler)
+
+    def force_quit(self) -> None:
+        if self._closing:
+            return
+        self._prepare_shutdown()
         app = QApplication.instance()
         if app is not None:
             app.quit()
@@ -151,32 +217,54 @@ class MainWindow(QMainWindow):
         if self._closing:
             event.accept()
             return
-        tray_available = self._tray_icon is not None and self._tray_icon.isSystemTrayAvailable()
-        if tray_available:
+        tray_ready = bool(
+            self._tray_icon is not None and self._tray_icon.ready_for_background()
+        )
+        if tray_ready:
             self._geometry_save_timer.stop()
             self._persist_window_geometry()
             self.hide()
             event.ignore()
             return
-        self._closing = True
-        self._geometry_save_timer.stop()
-        self._persist_window_geometry()
-        logging.getLogger().removeHandler(self._log_handler)
+
+        if self._tray_icon is not None:
+            logger.warning(
+                "System tray non utilizzabile: chiusura finestra esegue lo shutdown "
+                "invece di lasciare un processo nascosto"
+            )
+        self._prepare_shutdown()
         event.accept()
         app = QApplication.instance()
         if app is not None:
             QTimer.singleShot(0, app.quit)
 
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
+    def _schedule_geometry_save(self) -> None:
         if self._geometry_tracking_ready and not self._closing:
             self._geometry_save_timer.start(350)
 
+    def moveEvent(self, event: QMoveEvent) -> None:
+        super().moveEvent(event)
+        self._schedule_geometry_save()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._schedule_geometry_save()
+
     def _persist_window_geometry(self) -> None:
-        width = max(UIConstraints.MIN_WINDOW_WIDTH, int(self.width()))
-        height = max(UIConstraints.MIN_WINDOW_HEIGHT, int(self.height()))
+        rect = (
+            self.normalGeometry()
+            if self.isMaximized() or self.isFullScreen()
+            else self.geometry()
+        )
+        width = max(UIConstraints.MIN_WINDOW_WIDTH, int(rect.width()))
+        height = max(UIConstraints.MIN_WINDOW_HEIGHT, int(rect.height()))
         try:
-            self._application.persist_window_geometry(width, height)
+            self._application.persist_window_geometry(
+                int(rect.x()),
+                int(rect.y()),
+                width,
+                height,
+            )
         except Exception:
             logger.exception("Salvataggio automatico geometria finestra fallito")
 
