@@ -9,6 +9,7 @@ from typing import Any, Callable, Optional
 from config.constants import AppMeta
 from config.settings import AudioSource, Settings
 from core.audio_discovery import AudioDiscoveryService
+from core.audio_inputs import AudioInputResolver
 from core.audio_routing import PulseAudioRouter
 from core.dictation_activation import DictationActivationService
 from core.dictation_metrics import DictationMetricsStore, DictationMetricsTracker
@@ -167,15 +168,18 @@ class AppController:
         self._history_subscriptions: list[tuple[str, Callable[[Any], None]]] = []
         self._shutdown_started = False
 
+        self._audio_inputs = AudioInputResolver(self._audio_router, self._resolve_sink)
         self._live_sessions = LiveSessionManager(
             backend=self._backend.with_priority(InferencePriority.LIVE),
-            router=self._audio_router,
+            input_resolver=self._audio_inputs,
             history=self._history,
             backend_initializer=self._ensure_backend_for_live_session,
-            sink_resolver=self._resolve_sink,
         )
         self._buffer_view = _AggregateLiveBufferView(self._live_sessions)
-        self._meeting = MeetingManager(_MeetingControllerView(self))
+        self._meeting = MeetingManager(
+            _MeetingControllerView(self),
+            self._audio_inputs,
+        )
         self._file_batch = FileBatchCoordinator(_FileBatchControllerView(self))
         self._audio_discovery = AudioDiscoveryService(
             settings_provider=lambda: self._settings,
