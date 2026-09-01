@@ -79,7 +79,6 @@ class MeetingManager:
     _MAX_REALTIME_SOURCES = 8
     _RECOVERY_JOIN_TIMEOUT_S = 5.0
     _CONTROL_JOIN_TIMEOUT_S = 10.0
-    _CAPTURE_JOIN_TIMEOUT_S = 6.0
     _TRANSCRIBER_JOIN_TIMEOUT_S = 5.0
     _PROCESSING_JOIN_TIMEOUT_S = 5.0
     _PREPARATION_JOIN_TIMEOUT_S = 5.0
@@ -509,6 +508,12 @@ class MeetingManager:
             if processing.is_alive():
                 logger.warning("Processing Meeting %s ancora attivo dopo shutdown bounded", runtime.id)
 
+        if runtime.status not in self._TERMINAL_STATUSES:
+            runtime.status = "interrupted"
+            self.store.set_status(runtime.id, "interrupted", terminal=True)
+            self._emit("meeting_updated", self._snapshot(runtime))
+            self._emit("history_changed", runtime.id)
+
     def _process(self, runtime: MeetingRuntime, info: RecordingInfo) -> None:
         try:
             if runtime.stop_event.is_set() or self._shutdown_event.is_set():
@@ -764,14 +769,23 @@ class MeetingManager:
                         AppMeta.RECORDINGS_DIR / f"{session_id}.flac",
                     )
                 meeting = self.store.get(session_id) or {}
-                planned = list((meeting.get("meeting") or {}).get("acquisition", {}).get("sources") or [])
+                planned = list(
+                    (meeting.get("meeting") or {})
+                    .get("acquisition", {})
+                    .get("sources")
+                    or []
+                )
                 source_records: list[dict[str, Any]] = []
                 for index, info in enumerate(infos):
-                    base = dict(planned[index]) if index < len(planned) else {
-                        "id": f"source-{index + 1}",
-                        "source": "recovered",
-                        "label": f"Recovered {index + 1}",
-                    }
+                    base = (
+                        dict(planned[index])
+                        if index < len(planned)
+                        else {
+                            "id": f"source-{index + 1}",
+                            "source": "recovered",
+                            "label": f"Recovered {index + 1}",
+                        }
+                    )
                     base["offset_s"] = 0.0
                     base["recording"] = info.to_dict()
                     source_records.append(base)
