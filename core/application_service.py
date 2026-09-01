@@ -405,21 +405,6 @@ class ApplicationService:
                 "Annulla o completa la coda File prima di avviare una riunione"
             )
 
-    def start_meeting(
-        self,
-        *,
-        microphone: str | None,
-        language: str | None,
-        num_speakers: int,
-    ) -> dict[str, Any]:
-        """Backward-compatible single-microphone Meeting entry point."""
-        self._require_meeting_start_available()
-        return self.meeting.start(
-            microphone=microphone,
-            language=language,
-            num_speakers=num_speakers,
-        )
-
     def start_meeting_realtime(
         self,
         sources: list[dict[str, Any]],
