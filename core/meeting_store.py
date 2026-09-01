@@ -30,22 +30,16 @@ class MeetingStore:
         *,
         model: str,
         language: str,
-        microphone: str = "",
-        source: str = "",
-        source_path: str = "",
+        source: str,
+        source_path: str,
         acquisition_mode: str = "realtime",
         num_speakers: int = 0,
     ) -> str:
-        """Create one canonical Meeting record independent of acquisition method.
-
-        ``microphone`` is retained as a compatibility input for older callers;
-        new workflows should provide ``source``/``source_path`` explicitly.
-        """
-        legacy_microphone = str(microphone or "").strip()
-        resolved_source = str(source or "").strip() or (
-            "microphone" if legacy_microphone else "meeting"
-        )
-        resolved_path = str(source_path or "").strip() or legacy_microphone
+        """Create one canonical Meeting record independent of acquisition method."""
+        resolved_source = str(source or "").strip()
+        if not resolved_source:
+            raise ValueError("sorgente riunione non valida")
+        resolved_path = str(source_path or "").strip()
         mode = str(acquisition_mode or "realtime").strip().lower()
         if mode not in {"realtime", "file"}:
             raise ValueError("modalità acquisizione riunione non valida")
