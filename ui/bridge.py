@@ -211,19 +211,6 @@ class BackendBridge(QObject):
         self.drainAllLive()
 
     @Slot(str, str, int, result=str)
-    def startMeeting(self, microphone: str, language: str, num_speakers: int) -> str:
-        """Backward-compatible single-microphone Meeting slot."""
-        try:
-            meeting = self._application.start_meeting(
-                microphone=microphone.strip() or None,
-                language=language.strip() or None,
-                num_speakers=max(0, int(num_speakers)),
-            )
-            return self._ok(meeting=meeting)
-        except Exception as exc:
-            return self._error(exc)
-
-    @Slot(str, str, int, result=str)
     def startMeetingRealtime(
         self,
         sources_json: str,
