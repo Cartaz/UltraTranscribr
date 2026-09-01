@@ -3,9 +3,12 @@ import time
 from pathlib import Path
 
 import numpy as np
+import soundfile as sf
 
 from config.constants import AppMeta
 from config.settings import Settings
+from core.audio_inputs import AudioInputResolver
+import core.meeting_capture as capture_module
 import core.meeting_manager as meeting_module
 from core.meeting_manager import MeetingManager
 from core.transcript_history import TranscriptHistoryStore
@@ -48,8 +51,9 @@ class _FakeCapture:
 
     def start(self) -> None:
         self.alive = True
-        # Half a second of deterministic normalized microphone audio.
-        self.sample_sink(np.linspace(-0.1, 0.1, 8000, dtype=np.float32))
+        # Half a second of deterministic normalized audio per source.
+        amplitude = 0.1 if "mic" in str(self.device).lower() else 0.05
+        self.sample_sink(np.linspace(-amplitude, amplitude, 8000, dtype=np.float32))
 
     def stop(self) -> None:
         self.alive = False
@@ -132,13 +136,21 @@ def _manager(
     data = tmp_path / "data"
     monkeypatch.setattr(AppMeta, "RECORDINGS_DIR", recordings)
     monkeypatch.setattr(AppMeta, "DATA_DIR", data)
-    monkeypatch.setattr(meeting_module, "AudioCaptureThread", capture_cls)
+    monkeypatch.setattr(capture_module, "AudioCaptureThread", capture_cls)
     monkeypatch.setattr(meeting_module, "FileTranscriberThread", _FakeFileWorker)
     controller = _Controller(tmp_path)
-    manager = MeetingManager(controller)
+    resolver = AudioInputResolver(
+        router=type("Router", (), {})(),
+        sink_resolver=lambda selected, source: selected or f"{source}-auto",
+    )
+    manager = MeetingManager(controller, resolver)
     manager.models = _Models()
     manager.diarizer = _Diarizer()
     return controller, manager
+
+
+def _single_microphone() -> list[dict[str, object]]:
+    return [{"source": "microphone", "selected_input": "Test Mic"}]
 
 
 def _wait_until(predicate, timeout: float = 2.0) -> None:
@@ -150,11 +162,19 @@ def _wait_until(predicate, timeout: float = 2.0) -> None:
     raise AssertionError("condition did not become true before timeout")
 
 
+def test_meeting_exposes_only_canonical_start_entrypoints(monkeypatch, tmp_path: Path) -> None:
+    _, manager = _manager(monkeypatch, tmp_path)
+    assert not hasattr(manager, "start")
+    assert callable(manager.start_realtime)
+    assert callable(manager.start_file)
+
+
 def test_meeting_start_finish_processes_to_reviewable_session(monkeypatch, tmp_path: Path) -> None:
     controller, manager = _manager(monkeypatch, tmp_path)
 
-    started = manager.start(microphone="Test Mic", language="it", num_speakers=1)
+    started = manager.start_realtime(_single_microphone(), language="it", num_speakers=1)
     assert started["status"] == "recording"
+    assert started["mode"] == "realtime"
 
     finishing = manager.finish()
     assert finishing["status"] == "finishing"
@@ -178,12 +198,70 @@ def test_meeting_start_finish_processes_to_reviewable_session(monkeypatch, tmp_p
     assert Path(combined["meeting"]["recording"]["path"]).is_file()
 
 
+def test_realtime_meeting_records_multiple_sources_as_tracks(monkeypatch, tmp_path: Path) -> None:
+    _, manager = _manager(monkeypatch, tmp_path)
+
+    started = manager.start_realtime(
+        [
+            {"source": "microphone", "selected_input": "Test Mic", "label": "Locale"},
+            {"source": "system", "selected_input": "Test Monitor", "label": "Remoti"},
+        ],
+        language="it",
+        num_speakers=0,
+    )
+    assert len(started["sources"]) == 2
+
+    manager.finish()
+    _wait_until(lambda: manager.snapshot()["status"] == "completed")
+    combined = manager.get(started["id"])
+    assert combined is not None
+    acquisition = combined["meeting"]["acquisition"]
+    assert acquisition["mode"] == "realtime"
+    assert len(acquisition["sources"]) == 2
+    assert {item["source"] for item in acquisition["sources"]} == {"microphone", "system"}
+    assert all(Path(item["recording"]["path"]).is_file() for item in acquisition["sources"])
+    assert Path(combined["meeting"]["recording"]["path"]).is_file()
+
+
+def test_meeting_from_file_converges_on_same_analysis(monkeypatch, tmp_path: Path) -> None:
+    controller, manager = _manager(monkeypatch, tmp_path)
+    source = tmp_path / "phone-recording.wav"
+    sf.write(source, np.linspace(-0.1, 0.1, 8000, dtype=np.float32), 16000)
+
+    started = manager.start_file(source, language="it", num_speakers=1)
+    assert started["mode"] == "file"
+    assert started["status"] == "preparing_file"
+
+    _wait_until(lambda: manager.snapshot()["status"] == "completed")
+    combined = manager.get(started["id"])
+    assert combined is not None
+    assert combined["meeting"]["acquisition"]["mode"] == "file"
+    assert combined["text"] == "Ciao a tutti"
+    assert Path(combined["meeting"]["recording"]["path"]).is_file()
+    assert controller.backend_starts == 1
+
+
+def test_duplicate_realtime_source_is_rejected(monkeypatch, tmp_path: Path) -> None:
+    _, manager = _manager(monkeypatch, tmp_path)
+    try:
+        manager.start_realtime(
+            [
+                {"source": "microphone", "selected_input": "Test Mic"},
+                {"source": "microphone", "selected_input": "Test Mic"},
+            ]
+        )
+    except ValueError as exc:
+        assert "due volte" in str(exc)
+    else:
+        raise AssertionError("Meeting must reject duplicate sources")
+
+
 def test_finish_returns_while_capture_join_is_still_blocked(monkeypatch, tmp_path: Path) -> None:
     _, manager = _manager(monkeypatch, tmp_path, capture_cls=_BlockingCapture)
-    manager.start(microphone="Test Mic")
+    manager.start_realtime(_single_microphone())
     runtime = manager._runtime
-    assert runtime is not None
-    capture = runtime.capture
+    assert runtime is not None and runtime.capture is not None
+    capture = runtime.capture.tracks[0].capture
 
     result = manager.finish()
 
@@ -198,10 +276,10 @@ def test_finish_returns_while_capture_join_is_still_blocked(monkeypatch, tmp_pat
 
 def test_cancel_returns_while_capture_join_is_still_blocked(monkeypatch, tmp_path: Path) -> None:
     _, manager = _manager(monkeypatch, tmp_path, capture_cls=_BlockingCapture)
-    manager.start(microphone="Test Mic")
+    manager.start_realtime(_single_microphone())
     runtime = manager._runtime
-    assert runtime is not None
-    capture = runtime.capture
+    assert runtime is not None and runtime.capture is not None
+    capture = runtime.capture.tracks[0].capture
 
     manager.cancel()
 
@@ -217,7 +295,7 @@ def test_meeting_is_exclusive_with_live_and_file(monkeypatch, tmp_path: Path) ->
     controller, manager = _manager(monkeypatch, tmp_path)
     controller.live_count = 1
     try:
-        manager.start(microphone="Test Mic")
+        manager.start_realtime(_single_microphone())
     except RuntimeError as exc:
         assert "Live/File" in str(exc)
     else:
@@ -226,7 +304,7 @@ def test_meeting_is_exclusive_with_live_and_file(monkeypatch, tmp_path: Path) ->
     controller.live_count = 0
     controller.file_busy = True
     try:
-        manager.start(microphone="Test Mic")
+        manager.start_realtime(_single_microphone())
     except RuntimeError as exc:
         assert "Live/File" in str(exc)
     else:
@@ -235,7 +313,7 @@ def test_meeting_is_exclusive_with_live_and_file(monkeypatch, tmp_path: Path) ->
 
 def test_shutdown_during_recording_preserves_audio_and_marks_interrupted(monkeypatch, tmp_path: Path) -> None:
     _, manager = _manager(monkeypatch, tmp_path)
-    started = manager.start(microphone="Test Mic")
+    started = manager.start_realtime(_single_microphone())
 
     manager.shutdown()
 
@@ -245,6 +323,7 @@ def test_shutdown_during_recording_preserves_audio_and_marks_interrupted(monkeyp
     recording = combined["meeting"]["recording"]
     assert recording["path"].endswith(".flac")
     assert Path(recording["path"]).is_file()
+    assert len(combined["meeting"]["acquisition"]["sources"]) == 1
 
 
 def test_orphan_recovery_does_not_block_manager_construction(monkeypatch, tmp_path: Path) -> None:
@@ -269,9 +348,12 @@ def test_orphan_recovery_does_not_block_manager_construction(monkeypatch, tmp_pa
         classmethod(slow_recovery),
     )
 
-    manager = MeetingManager(controller)
+    resolver = AudioInputResolver(
+        router=type("Router", (), {})(),
+        sink_resolver=lambda selected, source: selected or f"{source}-auto",
+    )
+    manager = MeetingManager(controller, resolver)
     assert entered.wait(timeout=1.0)
-    # Construction returned while the recovery worker is intentionally blocked.
     assert manager._recovery_thread.is_alive()
 
     release.set()

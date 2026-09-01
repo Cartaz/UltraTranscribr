@@ -34,11 +34,14 @@ def test_live_microphone_recording_is_opt_in_and_application_owned() -> None:
     assert "self.controller.start_live_session(" in application
 
 
-def test_meeting_always_records_and_supports_review() -> None:
+def test_meeting_supports_realtime_multisource_file_and_review() -> None:
     source = (WEB / "meeting.js").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    application = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
     for token in (
         'button.textContent = "Riunione"',
-        "startMeeting",
+        "startMeetingRealtime",
+        "startMeetingFile",
         "finishMeeting",
         "getMeetingAudioUrl",
         "setMeetingSpeakerName",
@@ -47,8 +50,19 @@ def test_meeting_always_records_and_supports_review() -> None:
         "Transcript raw originale",
         "Salva correzione",
         "deleteMeetingAudio",
+        'meetingMode = "realtime"',
+        'source: "microphone"',
+        '["system", "Audio di sistema"]',
+        '["application", "Applicazione"]',
+        "meetingSources.length >= 8",
+        "meeting-review-sources",
     ):
         assert token in source
+    assert "def startMeetingRealtime" in bridge
+    assert "def startMeetingFile" in bridge
+    assert "def startMeeting(" not in bridge
+    assert "def start_meeting(" not in application
+    assert "len(decoded) > 8" in bridge
 
 
 def test_meeting_list_uses_text_content_for_persisted_data() -> None:

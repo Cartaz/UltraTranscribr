@@ -399,19 +399,36 @@ class ApplicationService:
             for job in self.file_batch.list_jobs()
         )
 
-    def start_meeting(
-        self,
-        *,
-        microphone: str | None,
-        language: str | None,
-        num_speakers: int,
-    ) -> dict[str, Any]:
+    def _require_meeting_start_available(self) -> None:
         if self.batch_busy():
             raise RuntimeError(
                 "Annulla o completa la coda File prima di avviare una riunione"
             )
-        return self.meeting.start(
-            microphone=microphone,
+
+    def start_meeting_realtime(
+        self,
+        sources: list[dict[str, Any]],
+        *,
+        language: str | None,
+        num_speakers: int,
+    ) -> dict[str, Any]:
+        self._require_meeting_start_available()
+        return self.meeting.start_realtime(
+            sources,
+            language=language,
+            num_speakers=num_speakers,
+        )
+
+    def start_meeting_file(
+        self,
+        file_path: str,
+        *,
+        language: str | None,
+        num_speakers: int,
+    ) -> dict[str, Any]:
+        self._require_meeting_start_available()
+        return self.meeting.start_file(
+            file_path,
             language=language,
             num_speakers=num_speakers,
         )

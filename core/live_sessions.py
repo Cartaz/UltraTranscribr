@@ -7,9 +7,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
-from config.settings import AudioSource, Settings
+from config.settings import Settings
 from core.audio_capture import AudioCaptureThread
-from core.audio_routing import PlaybackStream, PulseAudioRouter, StreamRouteLease
+from core.audio_inputs import AudioInputLease, AudioInputResolver, AudioInputSelection
+from core.audio_routing import PulseAudioRouter
 from core.buffer_manager import BufferManager
 from core.event_bus import EventBus
 from core.models import StatusEnum
@@ -39,6 +40,7 @@ class TranscriptionSession:
     stream_id: Optional[int]
     settings: Settings
     buffer: BufferManager
+    input_selection: AudioInputSelection
     status: str = "starting"
     queue_wait_ms: float = 0.0
     queue_peak_ms: float = 0.0
@@ -46,7 +48,7 @@ class TranscriptionSession:
     created_monotonic: float = field(default_factory=time.monotonic)
     capture: Optional[AudioCaptureThread] = None
     transcriber: Optional[TranscriberThread] = None
-    route: Optional[StreamRouteLease] = None
+    input_lease: Optional[AudioInputLease] = None
     startup_thread: Optional[threading.Thread] = None
     cleanup_thread: Optional[threading.Thread] = None
     cancel_event: threading.Event = field(default_factory=threading.Event)
@@ -87,16 +89,20 @@ class LiveSessionManager:
         self,
         *,
         backend: WhisperBackend,
-        router: PulseAudioRouter,
         history: TranscriptHistoryStore,
         backend_initializer: BackendInitializer,
-        sink_resolver: SinkResolver,
+        input_resolver: Optional[AudioInputResolver] = None,
+        router: Optional[PulseAudioRouter] = None,
+        sink_resolver: Optional[SinkResolver] = None,
     ) -> None:
+        if input_resolver is None:
+            if router is None or sink_resolver is None:
+                raise ValueError("Live richiede un AudioInputResolver o router+sink_resolver")
+            input_resolver = AudioInputResolver(router, sink_resolver)
         self._backend = backend
-        self._router = router
+        self._inputs = input_resolver
         self._history = history
         self._backend_initializer = backend_initializer
-        self._sink_resolver = sink_resolver
         self._bus = EventBus()
         self._lock = threading.RLock()
         self._sessions: dict[str, TranscriptionSession] = {}
@@ -114,37 +120,33 @@ class LiveSessionManager:
         with self._lock:
             if self._closed:
                 raise RuntimeError("gestore Live chiuso")
-        source = audio_source
         lang = language or settings.language
         session_settings = settings.with_(language=lang)
-        selected_stream: Optional[PlaybackStream] = None
-
-        if source == AudioSource.APPLICATION.value:
-            if stream_id is None:
-                raise RuntimeError("Seleziona uno stream applicazione da trascrivere")
-            selected_stream = self._router.get_stream(int(stream_id))
-            resolved_sink = None
-            source_path = selected_stream.display_name
-        else:
-            resolved_sink = self._sink_resolver(sink_name, source)
-            source_path = resolved_sink
-
+        if audio_source == "application" and stream_id is None:
+            raise RuntimeError("Seleziona uno stream applicazione")
+        selection = AudioInputSelection(
+            source=audio_source,
+            selected_input=str(sink_name or ""),
+            stream_id=stream_id,
+        )
+        description = self._inputs.describe(selection)
         session_id = self._history.create_session(
             kind="live",
             model=session_settings.model_size,
             language=session_settings.language,
-            source=source,
-            source_path=source_path or "",
+            source=selection.source,
+            source_path=description.source_path,
             status="starting",
         )
         session = TranscriptionSession(
             id=session_id,
-            source=source,
-            source_path=source_path or "",
-            sink_name=resolved_sink,
-            stream_id=int(stream_id) if stream_id is not None else None,
+            source=selection.source,
+            source_path=description.source_path,
+            sink_name=description.sink_name,
+            stream_id=selection.stream_id,
             settings=session_settings,
             buffer=BufferManager(warn_threshold=session_settings.buffer_warn_threshold),
+            input_selection=selection,
         )
         with self._lock:
             if self._closed:
@@ -155,7 +157,7 @@ class LiveSessionManager:
 
         startup = threading.Thread(
             target=self._start_session,
-            args=(session, selected_stream),
+            args=(session,),
             daemon=True,
             name=f"LiveSessionStartup-{session_id}",
         )
@@ -202,27 +204,33 @@ class LiveSessionManager:
             session.cancel_event.set()
             capture = session.capture
             transcriber = session.transcriber
-            route = session.route
-            session.route = None
+            lease = session.input_lease
+            session.input_lease = None
 
         if capture:
             capture.stop()
             if capture is not threading.current_thread() and capture.is_alive():
                 capture.join(timeout=5.0)
-        if route:
-            route.close()
+        if lease:
+            lease.close()
 
         if drain and transcriber and transcriber.is_alive():
             session.buffer.close_input()
             self._set_status(session, "draining")
-            self._emit("live_session_route_status", {"session_id": session.id, "status": "restored"})
+            self._emit(
+                "live_session_route_status",
+                {"session_id": session.id, "status": "restored"},
+            )
             return True
 
         if transcriber:
             transcriber.stop()
         session.buffer.close_input()
         self._finish(session, StatusEnum.STOPPED.value)
-        self._emit("live_session_route_status", {"session_id": session.id, "status": "restored"})
+        self._emit(
+            "live_session_route_status",
+            {"session_id": session.id, "status": "restored"},
+        )
         return True
 
     def stop_all(self, *, drain: bool = False) -> None:
@@ -270,44 +278,44 @@ class LiveSessionManager:
                 cleanup.join(timeout=self._CLEANUP_JOIN_TIMEOUT_S)
                 if cleanup.is_alive():
                     logger.warning("Cleanup Live %s ancora attivo dopo shutdown bounded", session.id)
+            lease = session.input_lease
+            session.input_lease = None
+            if lease is not None:
+                try:
+                    lease.close()
+                except Exception:
+                    logger.exception("Cleanup input Live %s fallito", session.id)
             if not transcriber or not transcriber.is_alive():
                 session.buffer.close()
 
-    def _start_session(
-        self,
-        session: TranscriptionSession,
-        selected_stream: Optional[PlaybackStream],
-    ) -> None:
-        route: Optional[StreamRouteLease] = None
+    def _start_session(self, session: TranscriptionSession) -> None:
+        lease: Optional[AudioInputLease] = None
         try:
             self._set_status(session, "preparing_backend")
             self._backend_initializer(session.settings)
             if session.cancel_event.is_set():
                 return
 
-            capture_sink = session.sink_name
-            if session.source == AudioSource.APPLICATION.value:
-                assert session.stream_id is not None
+            if session.source == "application":
                 self._set_status(session, "isolating")
-                route = self._router.isolate_stream(
-                    session.stream_id,
-                    status_callback=lambda payload: self._route_event(session, payload),
-                )
-                capture_sink = route.monitor_name
-                session.sink_name = capture_sink
-                session.route = route
+            lease = self._inputs.acquire(
+                session.input_selection,
+                status_callback=lambda payload: self._route_event(session, payload),
+            )
+            session.sink_name = lease.capture_sink
+            session.source_path = lease.descriptor.source_path
+            session.input_lease = lease
 
             if session.cancel_event.is_set():
-                if route:
-                    route.close()
-                    session.route = None
+                lease.close()
+                session.input_lease = None
                 return
 
             callback = lambda event, payload: self._worker_event(session, event, payload)
             capture = AudioCaptureThread(
                 session.buffer,
                 session.settings,
-                capture_sink,
+                lease.capture_sink,
                 session.source,
                 session_id=session.id,
                 event_sink=callback,
@@ -321,9 +329,8 @@ class LiveSessionManager:
             )
             with self._lock:
                 if session.cancel_event.is_set() or session.terminal or self._closed:
-                    if route:
-                        route.close()
-                        session.route = None
+                    lease.close()
+                    session.input_lease = None
                     return
                 session.capture = capture
                 session.transcriber = transcriber
@@ -332,12 +339,13 @@ class LiveSessionManager:
             self._set_status(session, StatusEnum.RUNNING.value)
         except Exception as exc:
             logger.exception("Avvio sessione Live %s fallito", session.id)
-            if route:
+            if lease is not None:
                 try:
-                    route.close()
+                    lease.close()
                 except Exception:
-                    logger.exception("Cleanup route sessione %s fallito", session.id)
-                session.route = None
+                    logger.exception("Cleanup input sessione %s fallito", session.id)
+                if session.input_lease is lease:
+                    session.input_lease = None
             if not session.terminal:
                 self._error(session, str(exc))
 
@@ -424,15 +432,15 @@ class LiveSessionManager:
 
     def _error(self, session: TranscriptionSession, error: str) -> None:
         capture = session.capture
-        route = session.route
+        lease = session.input_lease
+        session.input_lease = None
         if capture and capture.is_alive():
             capture.stop()
-        if route:
+        if lease:
             try:
-                route.close()
+                lease.close()
             except Exception:
-                logger.exception("Cleanup route dopo errore fallito")
-            session.route = None
+                logger.exception("Cleanup input dopo errore fallito")
         self._finish(session, StatusEnum.ERROR.value)
         self._emit(
             "live_session_error",

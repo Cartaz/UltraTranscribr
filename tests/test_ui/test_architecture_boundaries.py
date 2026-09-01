@@ -29,9 +29,13 @@ def test_meeting_manager_depends_on_narrow_application_contract() -> None:
     assert "self._controller._file_busy" not in source
     assert "self._controller.is_file_busy()" in source
     assert "class MeetingController(Protocol)" in source
-    assert "def __init__(self, controller: MeetingController)" in source
+    assert "controller: MeetingController" in source
+    assert "input_resolver: AudioInputResolver" in source
+    assert "self._inputs = input_resolver" in source
     assert "class _MeetingControllerView" in controller
-    assert "MeetingManager(_MeetingControllerView(self))" in controller
+    assert "self._audio_inputs = AudioInputResolver" in controller
+    assert "_MeetingControllerView(self)," in controller
+    assert "self._audio_inputs," in controller
 
 
 def test_application_controller_owns_runtime_services_and_shutdown() -> None:
@@ -40,7 +44,9 @@ def test_application_controller_owns_runtime_services_and_shutdown() -> None:
     application = _read("core/application_service.py")
     shell = _read("ui/main_window.py")
     main = _read("main.py")
-    assert "self._meeting = MeetingManager(_MeetingControllerView(self))" in controller
+    assert "self._audio_inputs = AudioInputResolver" in controller
+    assert "self._meeting = MeetingManager(" in controller
+    assert "_MeetingControllerView(self)," in controller
     assert "self._file_batch = FileBatchCoordinator(_FileBatchControllerView(self))" in controller
     assert "self._meeting.shutdown" in controller
     assert "self._file_batch.close" in controller
@@ -87,11 +93,13 @@ def test_application_service_uses_public_controller_api_only() -> None:
 
 def test_meeting_control_waits_are_owned_by_core_not_webchannel_bridge() -> None:
     meeting = _read("core/meeting_manager.py")
+    capture = _read("core/meeting_capture.py")
     bridge = _read("ui/bridge.py")
     assert "control_thread: Optional[threading.Thread]" in meeting
     assert 'name=f"MeetingFinalize-' in meeting
     assert 'name=f"MeetingCancel-' in meeting
-    assert "runtime.capture.join(timeout=8.0)" in meeting
+    assert "runtime.capture.stop_and_finalize()" in meeting
+    assert "track.capture.join(timeout=self._CAPTURE_JOIN_TIMEOUT_S)" in capture
     assert "self._shutdown_event.set()" in meeting
     assert "recovery.join(timeout=self._RECOVERY_JOIN_TIMEOUT_S)" in meeting
     assert "runtime.stop_event.is_set() or self._shutdown_event.is_set()" in meeting

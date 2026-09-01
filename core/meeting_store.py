@@ -30,23 +30,37 @@ class MeetingStore:
         *,
         model: str,
         language: str,
-        microphone: str,
+        source: str,
+        source_path: str,
+        acquisition_mode: str = "realtime",
         num_speakers: int = 0,
     ) -> str:
+        """Create one canonical Meeting record independent of acquisition method."""
+        resolved_source = str(source or "").strip()
+        if not resolved_source:
+            raise ValueError("sorgente riunione non valida")
+        resolved_path = str(source_path or "").strip()
+        mode = str(acquisition_mode or "realtime").strip().lower()
+        if mode not in {"realtime", "file"}:
+            raise ValueError("modalità acquisizione riunione non valida")
         session_id = self.history.create_session(
             kind="meeting",
             model=model,
             language=language,
-            source="microphone",
-            source_path=microphone,
-            status="recording",
+            source=resolved_source,
+            source_path=resolved_path,
+            status="recording" if mode == "realtime" else "preparing_file",
         )
         self._write(
             session_id,
             {
                 "id": session_id,
                 "recording": {},
-                "processing_status": "recording",
+                "acquisition": {
+                    "mode": mode,
+                    "sources": [],
+                },
+                "processing_status": "recording" if mode == "realtime" else "preparing_file",
                 "num_speakers": max(0, int(num_speakers)),
                 "diarization_segments": [],
                 "speaker_names": {},
@@ -61,6 +75,7 @@ class MeetingStore:
         history = self.history.get_session(session_id)
         if metadata is None or history is None:
             return None
+        metadata.setdefault("acquisition", {"mode": "realtime", "sources": []})
         return {**history, "meeting": metadata}
 
     def set_status(self, session_id: str, status: str, *, terminal: bool = False) -> None:
@@ -74,6 +89,19 @@ class MeetingStore:
         with self._lock:
             data = self._require(session_id)
             data["recording"] = dict(recording)
+            self._write(session_id, data)
+
+    def set_source_recordings(
+        self,
+        session_id: str,
+        sources: list[dict[str, Any]],
+    ) -> None:
+        with self._lock:
+            data = self._require(session_id)
+            acquisition = dict(data.get("acquisition") or {})
+            acquisition.setdefault("mode", "realtime")
+            acquisition["sources"] = [dict(item) for item in sources]
+            data["acquisition"] = acquisition
             self._write(session_id, data)
 
     def set_diarization(
@@ -120,17 +148,22 @@ class MeetingStore:
     def delete_audio(self, session_id: str) -> bool:
         with self._lock:
             data = self._require(session_id)
-            recording = dict(data.get("recording") or {})
-            raw = str(recording.get("path") or "")
             deleted = False
-            if raw:
+            for path in self._audio_paths(data, require_exists=False):
                 try:
-                    resolved = self._resolve_recording_path(raw, require_exists=True)
-                    resolved.unlink()
+                    path.unlink()
                     deleted = True
                 except FileNotFoundError:
-                    deleted = False
+                    continue
             data["recording"] = {}
+            acquisition = dict(data.get("acquisition") or {})
+            sources = []
+            for item in acquisition.get("sources") or []:
+                cleaned = dict(item)
+                cleaned["recording"] = {}
+                sources.append(cleaned)
+            acquisition["sources"] = sources
+            data["acquisition"] = acquisition
             self._write(session_id, data)
             return deleted
 
@@ -209,25 +242,65 @@ class MeetingStore:
         if days <= 0 or not self.root.is_dir():
             return 0
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-        deleted = 0
+        deleted_sessions = 0
         for path in self.root.glob("*.json"):
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
-                recording = dict(data.get("recording") or {})
-                raw = str(recording.get("path") or "")
-                if not raw:
+                audio_paths = self._audio_paths(data, require_exists=False)
+                existing = [item for item in audio_paths if item.is_file()]
+                if not existing:
                     continue
-                audio_path = self._resolve_recording_path(raw, require_exists=True)
-                modified = datetime.fromtimestamp(audio_path.stat().st_mtime, tz=timezone.utc)
-                if modified >= cutoff:
+                newest = max(
+                    datetime.fromtimestamp(item.stat().st_mtime, tz=timezone.utc)
+                    for item in existing
+                )
+                if newest >= cutoff:
                     continue
-                audio_path.unlink()
+                for audio_path in existing:
+                    audio_path.unlink()
                 data["recording"] = {}
+                acquisition = dict(data.get("acquisition") or {})
+                sources = []
+                for item in acquisition.get("sources") or []:
+                    cleaned = dict(item)
+                    cleaned["recording"] = {}
+                    sources.append(cleaned)
+                acquisition["sources"] = sources
+                data["acquisition"] = acquisition
                 self._atomic_json(path, data)
-                deleted += 1
+                deleted_sessions += 1
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 continue
-        return deleted
+        return deleted_sessions
+
+    def _audio_paths(
+        self,
+        data: dict[str, Any],
+        *,
+        require_exists: bool,
+    ) -> list[Path]:
+        raw_paths: list[str] = []
+        recording = dict(data.get("recording") or {})
+        if recording.get("path"):
+            raw_paths.append(str(recording["path"]))
+        acquisition = dict(data.get("acquisition") or {})
+        for item in acquisition.get("sources") or []:
+            source_recording = dict((item or {}).get("recording") or {})
+            if source_recording.get("path"):
+                raw_paths.append(str(source_recording["path"]))
+        result: list[Path] = []
+        seen: set[Path] = set()
+        for raw in raw_paths:
+            try:
+                resolved = self._resolve_recording_path(raw, require_exists=require_exists)
+            except FileNotFoundError:
+                if require_exists:
+                    raise
+                continue
+            if resolved not in seen:
+                seen.add(resolved)
+                result.append(resolved)
+        return result
 
     @staticmethod
     def _resolve_recording_path(raw: str, *, require_exists: bool) -> Path:

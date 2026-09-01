@@ -62,6 +62,7 @@ class BackendBridge(QObject):
         "meeting_started",
         "meeting_updated",
         "meeting_recording_saved",
+        "meeting_source_status",
         "meeting_model_progress",
         "meeting_completed",
         "meeting_error",
@@ -210,10 +211,49 @@ class BackendBridge(QObject):
         self.drainAllLive()
 
     @Slot(str, str, int, result=str)
-    def startMeeting(self, microphone: str, language: str, num_speakers: int) -> str:
+    def startMeetingRealtime(
+        self,
+        sources_json: str,
+        language: str,
+        num_speakers: int,
+    ) -> str:
         try:
-            meeting = self._application.start_meeting(
-                microphone=microphone.strip() or None,
+            decoded = json.loads(sources_json)
+            if not isinstance(decoded, list) or not decoded:
+                raise ValueError("Aggiungi almeno una sorgente alla riunione")
+            if len(decoded) > 8:
+                raise ValueError("Una riunione supporta al massimo 8 sorgenti")
+            sources: list[dict[str, Any]] = []
+            for item in decoded:
+                if not isinstance(item, dict):
+                    raise ValueError("sorgente riunione non valida")
+                sources.append(
+                    {
+                        "source": str(item.get("source") or "").strip(),
+                        "selected_input": str(item.get("selected_input") or "").strip(),
+                        "stream_id": item.get("stream_id"),
+                        "label": str(item.get("label") or "").strip(),
+                    }
+                )
+            meeting = self._application.start_meeting_realtime(
+                sources,
+                language=language.strip() or None,
+                num_speakers=max(0, int(num_speakers)),
+            )
+            return self._ok(meeting=meeting)
+        except Exception as exc:
+            return self._error(exc)
+
+    @Slot(str, str, int, result=str)
+    def startMeetingFile(
+        self,
+        file_path: str,
+        language: str,
+        num_speakers: int,
+    ) -> str:
+        try:
+            meeting = self._application.start_meeting_file(
+                file_path.strip(),
                 language=language.strip() or None,
                 num_speakers=max(0, int(num_speakers)),
             )

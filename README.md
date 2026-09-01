@@ -11,7 +11,7 @@ Il progetto è pensato principalmente per **CachyOS / Arch Linux** con GPU Intel
 - Modalità dettatura push-to-talk o toggle e inserimento progressivo stabile o finale in un unico paste.
 - Più sessioni Live indipendenti con inferenza condivisa e scheduling prioritario.
 - Registrazione opzionale delle sole Live da microfono, per singola sessione e con default OFF.
-- Modalità **Riunione** con registrazione microfono obbligatoria, trascrizione finale timestampata, diarizzazione locale e revisione manuale.
+- Modalità **Riunione** realtime multi-sorgente o da registrazione audio/video, con tracce separate, mix sincronizzato, trascrizione finale timestampata, diarizzazione locale e revisione manuale.
 - Assegnazione manuale dei nomi agli speaker senza riconoscimento biometrico dell'identità.
 - Correzione manuale del transcript di Riunione mantenendo separato il testo Whisper raw originale.
 - Player della registrazione con seek dai singoli interventi e export speaker-aware `.txt`, `.srt`, `.vtt`.
@@ -224,22 +224,27 @@ Una Live Microfono registrata resta una normale sessione Live: non viene automat
 
 ### Riunione
 
-La tab **Riunione** è pensata per riunioni, interviste e conversazioni con più interlocutori.
+La tab **Riunione** aggiunge diarizzazione, labeling e revisione a una registrazione acquisita in realtime oppure importata da file. Non possiede una pipeline microfono separata.
 
-Durante la registrazione:
+Sono disponibili due ingressi:
 
-1. viene usato esclusivamente il microfono selezionato;
-2. la registrazione è sempre attiva;
-3. l'audio viene journalizzato progressivamente in PCM16 mono 16 kHz;
-4. il journal viene sincronizzato periodicamente su disco per ridurre la perdita possibile in caso di crash;
-5. a chiusura normale viene finalizzato in FLAC lossless senza caricare l'intera registrazione in RAM.
+- **In tempo reale**: fino a 8 sorgenti contemporanee, scegliendo per ciascuna microfono, audio di sistema oppure singolo stream/applicazione.
+- **Da registrazione**: un file audio o video già esistente, per esempio una registrazione effettuata con il telefono.
 
-Una Riunione è mutuamente esclusiva con Live, File e Dettatura. Durante il workflow non vengono avviate altre trascrizioni, recovery o operazioni distruttive sui modelli/impostazioni.
+Nel realtime ogni sorgente viene catturata e conservata come traccia FLAC separata. Le tracce vengono sincronizzate tramite il primo campione ricevuto e combinate in streaming, senza caricare l'intera riunione in RAM, in una registrazione canonica FLAC mono 16 kHz. Le sorgenti applicazione usano lo stesso routing PipeWire/PulseAudio reversibile della modalità Live.
 
-Dopo **Termina riunione**:
+Un file importato viene invece normalizzato direttamente nella stessa rappresentazione canonica. Da quel punto i due ingressi convergono nella stessa pipeline:
 
 ```text
-registrazione completa
+realtime: microfono / sistema / applicazioni
+        ↓
+tracce FLAC separate
+        ↓
+mix sincronizzato ───────────────┐
+                                 │
+file audio/video                 │
+        ↓                        │
+normalizzazione FLAC 16 kHz ─────┘
         ↓
 trascrizione Whisper finale con timestamp
         ↓
@@ -249,6 +254,8 @@ allineamento speaker ↔ segmenti Whisper
         ↓
 review manuale
 ```
+
+Una Riunione è mutuamente esclusiva con Live, File e Dettatura. Durante il workflow non vengono avviate altre trascrizioni, recovery o operazioni distruttive sui modelli/impostazioni.
 
 La diarizzazione assegna identificatori tecnici stabili come `SPEAKER_00`, `SPEAKER_01`, ecc. UltraTranscribr **non tenta di riconoscere automaticamente l'identità delle persone**.
 
@@ -265,14 +272,15 @@ Nella review della Riunione è possibile:
 - correggere manualmente il testo di ogni intervento;
 - cliccare un intervento per portare il player al timestamp corrispondente;
 - ascoltare la registrazione completa;
-- eliminare soltanto l'audio conservando transcript e review;
+- vedere le sorgenti/tracce usate per l'acquisizione;
+- eliminare l'audio canonico e le tracce sorgente conservando transcript e review;
 - esportare la versione revisionata in `.txt`, `.srt` o `.vtt`.
 
 Il testo Whisper raw, i segmenti timestampati originali e i risultati della diarizzazione restano separati dai nomi e dalle correzioni manuali. La review non sovrascrive mai la fonte originale.
 
-### Recovery registrazioni microfono
+### Recovery registrazioni realtime
 
-Durante una registrazione persistente il file di lavoro è un journal append-only `.pcm.part`. Dopo un arresto anomalo, UltraTranscribr rileva i journal rimasti e li converte in FLAC in background, senza bloccare l'apertura della GUI. Per le Riunioni associate viene aggiornato lo stato a `interrupted`; l'audio recuperato resta disponibile per revisione o elaborazioni successive.
+Durante una registrazione persistente ogni sorgente realtime usa un journal append-only `.pcm.part`. Dopo un arresto anomalo, UltraTranscribr rileva i journal rimasti e li converte in FLAC in background, senza bloccare l'apertura della GUI. Per le Riunioni associate le tracce recuperate vengono riaggregate quando possibile e lo stato viene aggiornato a `interrupted`; l'audio recuperato resta disponibile nella cronologia.
 
 ### File e batch
 
