@@ -12,6 +12,7 @@ from ui.native.dictation_overlay import DictationOverlay
 from ui.native.global_shortcuts import GlobalShortcutsPortal
 from ui.native.remote_desktop import RemoteDesktopKeyboardPortal
 from ui.native.text_injector import SystemTextInjector
+from ui.native.xdg_portal import PortalTransport
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +38,11 @@ class DictationNativeIntegration(QObject):
         super().__init__(parent)
         self._application = application
         self._portal_state = DictationPortalStateStore()
-        self._shortcut = GlobalShortcutsPortal(self)
+        self._portal_transport = PortalTransport(self)
+        self._shortcut = GlobalShortcutsPortal(self._portal_transport, self)
         self._remote = RemoteDesktopKeyboardPortal(
             self._portal_state.restore_token(),
+            self._portal_transport,
             self,
         )
         self._injector = SystemTextInjector(self._remote, self)
@@ -61,9 +64,8 @@ class DictationNativeIntegration(QObject):
             self._subscriptions.append((event, handler))
 
     def start(self) -> None:
-        # Ask for RemoteDesktop while UltraTranscribr owns focus. Waiting until
-        # the first hotkey press could make the permission dialog steal focus
-        # from the external field that should receive the first dictation.
+        # Portal I/O runs on PortalTransport's worker. Starting permission flows
+        # after the window is shown must never block the Qt GUI thread.
         self._remote.ensure_ready()
         self._shortcut.start()
 
@@ -77,6 +79,7 @@ class DictationNativeIntegration(QObject):
         self._injector.close()
         self._remote.close()
         self._shortcut.close()
+        self._portal_transport.close()
         self._overlay.hide()
         self._overlay.deleteLater()
 
