@@ -47,6 +47,7 @@ def test_meeting_history_kind_and_sidecar_are_combined(tmp_path: Path) -> None:
     assert history.get_session(session_id)["kind"] == "meeting"
     assert combined["text"] == "Testo raw originale"
     assert combined["meeting"]["num_speakers"] == 2
+    assert combined["meeting"]["acquisition"]["mode"] == "realtime"
     assert len(combined["meeting"]["review_segments"]) == 2
     assert history.get_session(session_id)["segments"][0]["text"] == "Testo raw"
 
@@ -94,6 +95,36 @@ def test_meeting_audio_can_be_deleted_without_history(tmp_path: Path, monkeypatc
     assert not audio.exists()
     assert history.get_session(session_id)["text"] == "Testo raw originale"
     assert store.get(session_id)["meeting"]["recording"] == {}
+
+
+def test_delete_audio_removes_canonical_and_all_source_tracks(tmp_path: Path, monkeypatch) -> None:
+    history, store, session_id = _meeting(tmp_path)
+    recordings = tmp_path / "recordings"
+    recordings.mkdir()
+    monkeypatch.setattr(AppMeta, "RECORDINGS_DIR", recordings)
+    canonical = recordings / f"{session_id}.flac"
+    local = recordings / f"{session_id}-source-1.flac"
+    remote = recordings / f"{session_id}-source-2.flac"
+    for path in (canonical, local, remote):
+        path.write_bytes(b"fake")
+    store.set_recording(session_id, {"path": str(canonical), "duration_s": 1.0, "size_bytes": 4})
+    store.set_source_recordings(
+        session_id,
+        [
+            {"id": "source-1", "source": "microphone", "recording": {"path": str(local)}},
+            {"id": "source-2", "source": "application", "recording": {"path": str(remote)}},
+        ],
+    )
+
+    assert store.delete_audio(session_id) is True
+    assert not canonical.exists()
+    assert not local.exists()
+    assert not remote.exists()
+    combined = store.get(session_id)
+    assert combined is not None
+    assert combined["meeting"]["recording"] == {}
+    assert all(not item["recording"] for item in combined["meeting"]["acquisition"]["sources"])
+    assert history.get_session(session_id)["text"] == "Testo raw originale"
 
 
 def test_audio_retention_never_deletes_path_outside_recordings(tmp_path: Path, monkeypatch) -> None:
