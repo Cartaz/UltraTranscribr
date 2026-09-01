@@ -78,6 +78,8 @@ class ApplicationService:
         """Return the small native-shell state surface without leaking AppController."""
         settings = self.controller.settings
         return {
+            "window_x": settings.window_x,
+            "window_y": settings.window_y,
             "window_width": settings.window_width,
             "window_height": settings.window_height,
             "audio_source": settings.audio_source,
@@ -86,12 +88,18 @@ class ApplicationService:
             "live_active": self.controller.active_live_count() > 0,
         }
 
-    def persist_window_geometry(self, width: int, height: int) -> None:
+    def persist_window_geometry(self, x: int, y: int, width: int, height: int) -> None:
         """Persist native window geometry independently from workflow settings rules."""
         settings = self.controller.settings
-        if settings.window_width == width and settings.window_height == height:
+        geometry = {
+            "window_x": int(x),
+            "window_y": int(y),
+            "window_width": int(width),
+            "window_height": int(height),
+        }
+        if all(getattr(settings, key) == value for key, value in geometry.items()):
             return
-        self.controller.update_settings(window_width=width, window_height=height)
+        self.controller.update_settings(**geometry)
 
     def live_active(self) -> bool:
         """Expose the tray's coarse runtime indicator without leaking controller state."""
