@@ -8,6 +8,7 @@ CACHE="$ROOT/.cache"
 WCPP="$CACHE/whisper.cpp"
 PIN="339f2b4e27d7c3b52f44a124a854abba507acff3"
 ONEAPI="/opt/intel/oneapi"
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 REQ_MARKER="$VENV/.ultratranscribr-requirements.sha256"
 BUILD_MARKER="$VENV/.ultratranscribr-whisper-build.sha256"
 FORCE_REBUILD="${ULTRATRANSCRIBR_FORCE_REBUILD:-0}"
@@ -186,19 +187,44 @@ print("VAD:", manager.get_vad_model_path())
 PY
 }
 
-install_desktop_entry() {
-  mkdir -p "$HOME/.local/share/applications"
-  cat > "$HOME/.local/share/applications/com.ultratranscribr.app.desktop" <<EOF
+install_desktop_integration() {
+  local applications_dir="$DATA_HOME/applications"
+  local icon_root="$DATA_HOME/icons/hicolor"
+  local icon_source="$ROOT/assets/icons/ultratranscribr.svg"
+
+  [[ -f "$icon_source" ]] || die "Icona desktop mancante: $icon_source"
+
+  # Plasma's StatusNotifier host strongly prefers a stable Freedesktop icon
+  # name. Install the same named asset in both app and status contexts so Qt
+  # can export IconName=ultratranscribr instead of relying only on D-Bus pixmaps.
+  install -Dm644 "$icon_source" "$icon_root/scalable/apps/ultratranscribr.svg"
+  install -Dm644 "$icon_source" "$icon_root/scalable/status/ultratranscribr.svg"
+
+  mkdir -p "$applications_dir"
+  cat > "$applications_dir/com.ultratranscribr.app.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=UltraTranscribr
 Comment=Trascrizione audio accelerata Intel SYCL
 Exec=$VENV/bin/python $ROOT/main.py
 Path=$ROOT
+Icon=ultratranscribr
 Terminal=false
 Categories=AudioVideo;Audio;Utility;
 StartupNotify=true
 EOF
+
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    if ! update-desktop-database "$applications_dir" >/dev/null 2>&1; then
+      log "AVVISO: aggiornamento database .desktop non riuscito; il file è comunque installato."
+    fi
+  fi
+
+  if command -v kbuildsycoca6 >/dev/null 2>&1; then
+    if ! kbuildsycoca6 --noincremental >/dev/null 2>&1; then
+      log "AVVISO: refresh cache KDE non riuscito; Plasma lo aggiornerà automaticamente."
+    fi
+  fi
 }
 
 run_environment_check() {
@@ -239,7 +265,7 @@ main() {
   key="$(build_key)"
   build_whisper_server "$key"
   ensure_default_models
-  install_desktop_entry
+  install_desktop_integration
   chmod +x "$ROOT/install.sh"
   run_environment_check
 
