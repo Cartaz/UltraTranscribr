@@ -69,7 +69,7 @@ class TestAppController:
                 controller._resolve_sink(None, "microphone")
 
     def test_application_source_requires_selected_stream(self, controller: AppController) -> None:
-        with pytest.raises(RuntimeError, match="Seleziona uno stream"):
+        with pytest.raises(ValueError, match="Seleziona uno stream"):
             controller.start_live_session(audio_source="application")
 
     def test_start_live_session_delegates_without_stopping_existing_sessions(
