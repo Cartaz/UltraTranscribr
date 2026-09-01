@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
 
+import pytest
+
 from config.constants import AppMeta
 from core.meeting_store import MeetingStore
 from core.transcript_history import TranscriptHistoryStore
@@ -12,7 +14,8 @@ def _meeting(tmp_path: Path) -> tuple[TranscriptHistoryStore, MeetingStore, str]
     session_id = store.create(
         model="medium",
         language="it",
-        microphone="Test Mic",
+        source="microphone",
+        source_path="Test Mic",
         num_speakers=2,
     )
     history.append_text(session_id, "Testo raw originale")
@@ -35,6 +38,19 @@ def _meeting(tmp_path: Path) -> tuple[TranscriptHistoryStore, MeetingStore, str]
         ],
     )
     return history, store, session_id
+
+
+def test_meeting_store_requires_canonical_source_metadata(tmp_path: Path) -> None:
+    history = TranscriptHistoryStore(tmp_path / "transcripts")
+    store = MeetingStore(history, tmp_path / "meetings")
+
+    with pytest.raises(ValueError, match="sorgente"):
+        store.create(
+            model="medium",
+            language="it",
+            source="",
+            source_path="",
+        )
 
 
 def test_meeting_history_kind_and_sidecar_are_combined(tmp_path: Path) -> None:
