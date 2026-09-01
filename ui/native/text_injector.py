@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections import deque
+from typing import Any
 
 from PySide6.QtCore import QByteArray, QMimeData, QObject, QTimer, Signal, Slot
 from PySide6.QtGui import QGuiApplication
@@ -31,8 +32,10 @@ class SystemTextInjector(QObject):
         self._closed = False
         self._has_inserted = False
         self._generation = 0
+        self._active_transaction: tuple[int, str, Any, bytes, QMimeData] | None = None
         self._enqueueSignal.connect(self._enqueue_on_gui)
         self._remote.readyChanged.connect(self._on_ready_changed)
+        self._remote.pasteCompleted.connect(self._on_paste_completed)
         self._remote.errorOccurred.connect(self._on_remote_error)
 
     def begin_session(self) -> None:
@@ -92,14 +95,24 @@ class SystemTextInjector(QObject):
         temporary.setData(_MARKER_MIME, QByteArray(marker))
         clipboard.setMimeData(temporary)
         self._busy = True
+        self._active_transaction = (generation, text, clipboard, marker, previous)
         if not self._remote.paste_shortcut():
-            self._restore_if_owned(clipboard, marker, previous)
+            self._restore_active_transaction()
             self._busy = False
             self._fail("RemoteDesktop non è pronto per l'inserimento")
+
+    @Slot()
+    def _on_paste_completed(self) -> None:
+        transaction = self._active_transaction
+        if transaction is None:
             return
+        generation, text, clipboard, marker, previous = transaction
 
         def restore() -> None:
+            if self._active_transaction is not transaction:
+                return
             self._restore_if_owned(clipboard, marker, previous)
+            self._active_transaction = None
             self._busy = False
             if self._closed:
                 return
@@ -118,13 +131,26 @@ class SystemTextInjector(QObject):
     def _on_remote_error(self, message: str) -> None:
         if self._closed:
             return
+        self._restore_active_transaction()
         self._queue.clear()
         self._busy = False
         self.errorOccurred.emit(message)
 
     def close(self) -> None:
+        if self._closed:
+            return
         self._closed = True
+        self._restore_active_transaction()
         self._queue.clear()
+        self._busy = False
+
+    def _restore_active_transaction(self) -> None:
+        transaction = self._active_transaction
+        self._active_transaction = None
+        if transaction is None:
+            return
+        _generation, _text, clipboard, marker, previous = transaction
+        self._restore_if_owned(clipboard, marker, previous)
 
     @staticmethod
     def _clone_mime(source: QMimeData | None) -> QMimeData:
