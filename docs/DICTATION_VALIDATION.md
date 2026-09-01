@@ -2,9 +2,11 @@
 
 Run this campaign only after installing the consolidated Phase 11 implementation on the target CachyOS/KDE Wayland system.
 
+The interactive shell reference is **fish**. Commands below can be pasted directly into fish; Bash should only be invoked explicitly when a Bash script itself must be interpreted.
+
 ## 1. Environment
 
-```bash
+```fish
 .venv/bin/python tools/dictation_doctor.py
 ```
 
@@ -53,7 +55,7 @@ For every target also test an empty field, insertion in the middle of existing t
 
 Perform at least 20 short Dictation sessions with the selected production model. Then run:
 
-```bash
+```fish
 .venv/bin/python tools/dictation_validation_report.py ~/.local/share/ultratranscribr/dictation-metrics.jsonl
 ```
 
