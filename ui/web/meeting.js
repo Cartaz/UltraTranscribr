@@ -166,7 +166,7 @@ function meetingStatus(value) {
     diarizing: "Diarizzazione",
     cancelling: "Annullamento",
     completed: "Completata",
-    interrupted: "Interrotta · audio recuperato",
+    interrupted: "Interrotta",
     cancelled: "Annullata",
     error: "Errore",
   })[String(value)] || label(value || "Idle");
@@ -363,7 +363,9 @@ function meetingStart() {
   }
 
   const payload = meetingRealtimePayload();
-  const missingApplication = payload.some(item => item.source === "application" && !Number.isFinite(Number(item.stream_id)));
+  const missingApplication = payload.some(item =>
+    item.source === "application" && (item.stream_id === null || item.stream_id === undefined || item.stream_id === "")
+  );
   if (missingApplication) {
     showError("Seleziona l'applicazione per ogni sorgente di tipo Applicazione", "meeting");
     return;
