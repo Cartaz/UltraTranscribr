@@ -97,12 +97,21 @@ def collect_environment_checks(project_root: Path | None = None) -> list[Environ
         ),
     ]
 
-    for module in ("PySide6", "numpy", "sounddevice", "soundfile", "pulsectl", "huggingface_hub"):
+    for module in (
+        "PySide6",
+        "numpy",
+        "sounddevice",
+        "soundfile",
+        "pulsectl",
+        "huggingface_hub",
+        "dbus_next",
+    ):
+        available = _module_available(module)
         checks.append(
             EnvironmentCheck(
                 f"Python package {module}",
-                _module_available(module),
-                "installato" if _module_available(module) else "non trovato",
+                available,
+                "installato" if available else "non trovato",
             )
         )
 
