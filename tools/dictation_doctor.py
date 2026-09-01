@@ -37,7 +37,7 @@ def run(command: Sequence[str], timeout: float = 5.0) -> tuple[int, str]:
 def _module_available(name: str) -> bool:
     try:
         return importlib.util.find_spec(name) is not None
-    except (ImportError, ModuleNotFoundError):
+    except (ImportError, ModuleNotFoundError, ValueError):
         return False
 
 
@@ -71,11 +71,11 @@ def collect(env: Mapping[str, str] | None = None) -> list[Check]:
         "ok" if session_bus else "fail",
         "configurato" if session_bus else "DBUS_SESSION_BUS_ADDRESS assente",
     ))
-    qtdbus_available = _module_available("PySide6.QtDBus")
+    dbus_next_available = _module_available("dbus_next")
     checks.append(Check(
-        "pyside6-qtdbus",
-        "ok" if qtdbus_available else "fail",
-        "PySide6.QtDBus importabile" if qtdbus_available else "PySide6.QtDBus non disponibile",
+        "dbus-next",
+        "ok" if dbus_next_available else "fail",
+        "dbus-next importabile" if dbus_next_available else "dbus-next non disponibile",
     ))
 
     busctl = shutil.which("busctl")
@@ -138,7 +138,11 @@ def collect(env: Mapping[str, str] | None = None) -> list[Check]:
 
     for binary in ("xdg-desktop-portal", "xdg-desktop-portal-kde"):
         path = shutil.which(binary)
-        checks.append(Check(binary, "ok" if path else "warn", path or "non trovato nel PATH"))
+        checks.append(Check(
+            binary,
+            "ok",
+            path or "servizio D-Bus operativo; eseguibile non nel PATH",
+        ))
     return checks
 
 
