@@ -6,6 +6,10 @@ Questa suite integra i test automatici e `docs/DICTATION_VALIDATION.md`. Non sos
 
 ## Convenzioni
 
+La **shell interattiva di riferimento è fish**. Tutti i comandi mostrati sono pensati per essere copiati direttamente in una console fish.
+
+Quando compare esplicitamente `bash`, è intenzionale: `install.sh` e `/opt/intel/oneapi/setvars.sh` sono script Bash e vengono quindi eseguiti tramite Bash senza chiedere a fish di interpretarli.
+
 Priorità:
 
 - **P0** — requisito bloccante: un fallimento impedisce di considerare la build pronta.
@@ -57,7 +61,7 @@ Editor/IDE:
 
 Comandi utili:
 
-```bash
+```fish
 git rev-parse HEAD
 uname -a
 python --version
@@ -74,7 +78,7 @@ wpctl status
 
 **Procedura**
 
-```bash
+```fish
 git status --short
 git rev-parse HEAD
 ```
@@ -88,7 +92,7 @@ git rev-parse HEAD
 
 ## SYS-002 — Compileall — P0
 
-```bash
+```fish
 .venv/bin/python -m compileall -q main.py config core ui tests
 ```
 
@@ -98,7 +102,7 @@ git rev-parse HEAD
 
 ## SYS-003 — Suite pytest completa — P0
 
-```bash
+```fish
 .venv/bin/python -m pytest
 ```
 
@@ -108,7 +112,7 @@ git rev-parse HEAD
 
 ## SYS-004 — Sintassi frontend — P0
 
-```bash
+```fish
 node --check ui/web/app.js
 node --check ui/web/multi_live.js
 node --check ui/web/settings_cleanup.js
@@ -122,7 +126,9 @@ node --check ui/web/meeting.js
 
 ## SYS-005 — Sintassi installer — P0
 
-```bash
+`install.sh` è uno script Bash; da fish il controllo corretto è invocare Bash esplicitamente:
+
+```fish
 bash -n install.sh
 ```
 
@@ -138,7 +144,7 @@ bash -n install.sh
 
 **Procedura**
 
-```bash
+```fish
 chmod +x install.sh
 ./install.sh
 ```
@@ -170,9 +176,10 @@ chmod +x install.sh
 
 ## SYS-012 — Environment check — P0
 
-```bash
-source /opt/intel/oneapi/setvars.sh
-.venv/bin/python -m core.environment_check
+`setvars.sh` è fornito da Intel in sintassi Bash e non deve essere `source`-ato direttamente da fish. Eseguire il check in un sottoprocesso Bash che carica oneAPI e poi avvia Python:
+
+```fish
+bash -c 'source /opt/intel/oneapi/setvars.sh >/dev/null 2>&1 && exec .venv/bin/python -m core.environment_check'
 ```
 
 **Atteso**: nessun requisito obbligatorio in stato FAIL.
@@ -181,7 +188,7 @@ source /opt/intel/oneapi/setvars.sh
 
 ## SYS-013 — Dictation Doctor — P0
 
-```bash
+```fish
 .venv/bin/python tools/dictation_doctor.py
 ```
 
@@ -203,7 +210,7 @@ source /opt/intel/oneapi/setvars.sh
 
 ## SYS-020 — Avvio canonico — P0
 
-```bash
+```fish
 .venv/bin/python main.py
 ```
 
@@ -261,7 +268,7 @@ source /opt/intel/oneapi/setvars.sh
 
 Controlli suggeriti:
 
-```bash
+```fish
 pgrep -af whisper-server
 pactl list short sinks
 ```
@@ -1038,9 +1045,8 @@ I test di terminazione forzata possono lasciare dati parziali intenzionalmente. 
 
 Eseguire almeno 20 sessioni brevi col modello che verrà usato normalmente.
 
-```bash
-.venv/bin/python tools/dictation_validation_report.py \
-  ~/.local/share/ultratranscribr/dictation-metrics.jsonl
+```fish
+.venv/bin/python tools/dictation_validation_report.py ~/.local/share/ultratranscribr/dictation-metrics.jsonl
 ```
 
 Registrare:
