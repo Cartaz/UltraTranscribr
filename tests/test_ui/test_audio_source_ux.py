@@ -76,13 +76,16 @@ def test_frontend_refreshes_sources_on_live_entry_without_polling() -> None:
     assert "setInterval(" not in script
 
 
-def test_meeting_device_picker_consumes_fresh_discovery_events() -> None:
+def test_meeting_source_editor_consumes_fresh_discovery_events() -> None:
     script = (WEB / "meeting.js").read_text(encoding="utf-8")
-    assert "function meetingRenderDevices" in script
+    assert "function meetingRenderSources" in script
     assert "filter(device => !!device?.is_mic)" in script
+    assert "filter(device => !!device?.is_monitor)" in script
     assert 'name === "audio_devices_changed"' in script
-    assert "meetingRenderDevices(value)" in script
-    assert "meetingRenderDevices(bootstrap.devices || [])" in script
+    assert 'name === "playback_streams_changed"' in script
+    assert "meetingRenderSources();" in script
+    assert "meetingMicrophones = (bootstrap.devices || [])" in script
+    assert "meetingStreams = bootstrap.playbackStreams || []" in script
     assert 'finishing: "Chiusura registrazione"' in script
     assert 'cancelling: "Annullamento"' in script
 
