@@ -150,20 +150,16 @@ class AudioInputResolver:
             return AudioInputLease(descriptor, descriptor.sink_name)
 
         assert selection.stream_id is not None
+        descriptor = self.describe(selection)
         route = self._router.isolate_stream(
             selection.stream_id,
             status_callback=status_callback,
         )
-        try:
-            stream = self._router.get_stream(selection.stream_id)
-            descriptor = AudioInputDescriptor(
-                source=selection.source,
-                source_path=stream.display_name,
-                sink_name=route.monitor_name,
-                stream_id=selection.stream_id,
-                label=selection.label or stream.display_name,
-            )
-            return AudioInputLease(descriptor, route.monitor_name, route)
-        except Exception:
-            route.close()
-            raise
+        routed_descriptor = AudioInputDescriptor(
+            source=descriptor.source,
+            source_path=descriptor.source_path,
+            sink_name=route.monitor_name,
+            stream_id=descriptor.stream_id,
+            label=descriptor.label,
+        )
+        return AudioInputLease(routed_descriptor, route.monitor_name, route)
