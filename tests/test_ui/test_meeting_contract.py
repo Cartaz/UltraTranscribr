@@ -37,6 +37,7 @@ def test_live_microphone_recording_is_opt_in_and_application_owned() -> None:
 def test_meeting_supports_realtime_multisource_file_and_review() -> None:
     source = (WEB / "meeting.js").read_text(encoding="utf-8")
     bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    application = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
     for token in (
         'button.textContent = "Riunione"',
         "startMeetingRealtime",
@@ -59,6 +60,8 @@ def test_meeting_supports_realtime_multisource_file_and_review() -> None:
         assert token in source
     assert "def startMeetingRealtime" in bridge
     assert "def startMeetingFile" in bridge
+    assert "def startMeeting(" not in bridge
+    assert "def start_meeting(" not in application
     assert "len(decoded) > 8" in bridge
 
 
