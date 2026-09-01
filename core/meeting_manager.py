@@ -698,21 +698,10 @@ class MeetingManager:
         duration = runtime.recording.duration_s if runtime.recording is not None else 0.0
         if runtime.capture is not None and runtime.status in {"recording", "finishing"}:
             duration = runtime.capture.duration_s
-        microphone = ""
-        for source in runtime.sources:
-            if source.get("source") == AudioSource.MICROPHONE.value:
-                microphone = str(
-                    source.get("source_path")
-                    or source.get("selected_input")
-                    or source.get("label")
-                    or ""
-                )
-                break
         return {
             "id": runtime.id,
             "mode": runtime.mode,
             "status": runtime.status,
-            "microphone": microphone,
             "sources": [dict(item) for item in runtime.sources],
             "source_path": runtime.source_path,
             "language": runtime.settings.language,
