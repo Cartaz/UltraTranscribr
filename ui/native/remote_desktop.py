@@ -5,9 +5,15 @@ import logging
 from typing import Any
 
 from PySide6.QtCore import Signal
-from PySide6.QtDBus import QDBusInterface, QDBusMessage, QDBusObjectPath
 
-from ui.native.xdg_portal import PORTAL_PATH, PORTAL_SERVICE, PortalClient, object_path, token
+from ui.native.xdg_portal import (
+    PortalClient,
+    PortalTransport,
+    object_path,
+    string_variant,
+    token,
+    uint_variant,
+)
 
 logger = logging.getLogger(__name__)
 INTERFACE = "org.freedesktop.portal.RemoteDesktop"
@@ -22,14 +28,22 @@ class RemoteDesktopKeyboardPortal(PortalClient):
     readyChanged = Signal(bool)
     errorOccurred = Signal(str)
     restoreTokenChanged = Signal(str)
+    pasteCompleted = Signal()
 
-    def __init__(self, restore_token: str | None = None, parent=None) -> None:
-        super().__init__(parent)
+    def __init__(
+        self,
+        restore_token: str | None = None,
+        transport: PortalTransport | None = None,
+        parent=None,
+    ) -> None:
+        super().__init__(transport, parent)
         self._session: str | None = None
         self._starting = False
         self._ready = False
         self._restore_token = str(restore_token or "")
         self._restore_attempted = False
+        self._paste_in_flight = False
+        self._paste_generation = 0
 
     @property
     def ready(self) -> bool:
@@ -40,18 +54,19 @@ class RemoteDesktopKeyboardPortal(PortalClient):
             return
         self._starting = True
         self._restore_attempted = bool(self._restore_token)
-        try:
-            self.call_request(
-                INTERFACE,
-                "CreateSession",
-                {
-                    "handle_token": token("ut_rd_request"),
-                    "session_handle_token": token("ut_rd_session"),
-                },
-                callback=self._created,
-            )
-        except Exception as exc:
-            self._fail(exc)
+        handle = token("ut_rd_request")
+        self.call_request(
+            INTERFACE,
+            "CreateSession",
+            "a{sv}",
+            [{
+                "handle_token": string_variant(handle),
+                "session_handle_token": string_variant(token("ut_rd_session")),
+            }],
+            handle_token=handle,
+            callback=self._created,
+            error_callback=self._fail,
+        )
 
     def _created(self, response: int, results: dict[str, Any]) -> None:
         if response != 0:
@@ -61,40 +76,45 @@ class RemoteDesktopKeyboardPortal(PortalClient):
         if not self._session:
             self._fail(RuntimeError("RemoteDesktop non ha restituito una sessione"))
             return
+        handle = token("ut_rd_devices")
         options: dict[str, Any] = {
-            "handle_token": token("ut_rd_devices"),
-            "types": KEYBOARD,
-            "persist_mode": 2,
+            "handle_token": string_variant(handle),
+            "types": uint_variant(KEYBOARD),
+            "persist_mode": uint_variant(2),
         }
         if self._restore_token:
-            options["restore_token"] = self._restore_token
-        try:
-            self.call_request(
-                INTERFACE,
-                "SelectDevices",
-                QDBusObjectPath(self._session),
-                options,
-                callback=self._selected,
-            )
-        except Exception as exc:
-            self._fail(exc)
+            options["restore_token"] = string_variant(self._restore_token)
+        self.call_request(
+            INTERFACE,
+            "SelectDevices",
+            "oa{sv}",
+            [self._session, options],
+            handle_token=handle,
+            callback=self._selected,
+            error_callback=self._fail,
+        )
 
     def _selected(self, response: int, _results: dict[str, Any]) -> None:
         if response != 0:
             self._fail(RuntimeError(f"Permesso tastiera RemoteDesktop rifiutato ({response})"))
             return
-        assert self._session
-        try:
-            self.call_request(
-                INTERFACE,
-                "Start",
-                QDBusObjectPath(self._session),
+        if not self._session:
+            self._fail(RuntimeError("Sessione RemoteDesktop assente prima di Start"))
+            return
+        handle = token("ut_rd_start")
+        self.call_request(
+            INTERFACE,
+            "Start",
+            "osa{sv}",
+            [
+                self._session,
                 "",
-                {"handle_token": token("ut_rd_start")},
-                callback=self._started,
-            )
-        except Exception as exc:
-            self._fail(exc)
+                {"handle_token": string_variant(handle)},
+            ],
+            handle_token=handle,
+            callback=self._started,
+            error_callback=self._fail,
+        )
 
     def _started(self, response: int, results: dict[str, Any]) -> None:
         self._starting = False
@@ -118,51 +138,47 @@ class RemoteDesktopKeyboardPortal(PortalClient):
         self.readyChanged.emit(True)
 
     def paste_shortcut(self) -> bool:
-        if not self._ready or not self._session:
-            self.ensure_ready()
+        if not self._ready or not self._session or self._paste_in_flight:
+            if not self._ready:
+                self.ensure_ready()
             return False
-        try:
-            self._notify_keysym(XK_SHIFT_L, KEY_PRESSED)
-            self._notify_keysym(XK_INSERT, KEY_PRESSED)
-            self._notify_keysym(XK_INSERT, KEY_RELEASED)
-            self._notify_keysym(XK_SHIFT_L, KEY_RELEASED)
-            return True
-        except Exception as exc:
-            self._fail(exc)
-            return False
+        self._paste_in_flight = True
+        self._paste_generation += 1
+        generation = self._paste_generation
+        session = self._session
+        calls = [
+            ("NotifyKeyboardKeysym", "oa{sv}iu", [session, {}, XK_SHIFT_L, KEY_PRESSED]),
+            ("NotifyKeyboardKeysym", "oa{sv}iu", [session, {}, XK_INSERT, KEY_PRESSED]),
+            ("NotifyKeyboardKeysym", "oa{sv}iu", [session, {}, XK_INSERT, KEY_RELEASED]),
+            ("NotifyKeyboardKeysym", "oa{sv}iu", [session, {}, XK_SHIFT_L, KEY_RELEASED]),
+        ]
 
-    def _notify_keysym(self, keysym: int, state: int) -> None:
-        assert self._session
-        self._require_bus()
-        interface = QDBusInterface(
-            PORTAL_SERVICE,
-            PORTAL_PATH,
-            INTERFACE,
-            self.bus,
-        )
-        reply = interface.call(
-            "NotifyKeyboardKeysym",
-            QDBusObjectPath(self._session),
-            {},
-            int(keysym),
-            int(state),
-        )
-        if reply.type() == QDBusMessage.MessageType.ErrorMessage:
-            raise RuntimeError(
-                f"Invio tasto RemoteDesktop fallito: {reply.errorMessage()}"
-            )
+        def completed(error: str | None) -> None:
+            if generation != self._paste_generation:
+                return
+            self._paste_in_flight = False
+            if error:
+                self._fail(RuntimeError(f"Invio tasto RemoteDesktop fallito: {error}"))
+                return
+            self.pasteCompleted.emit()
+
+        self.call_sequence(INTERFACE, calls, completed)
+        return True
 
     def reset(self) -> None:
         self.close_requests()
         self.close_session(self._session)
         self._session = None
         self._starting = False
+        self._paste_generation += 1
+        self._paste_in_flight = False
         if self._ready:
             self._ready = False
             self.readyChanged.emit(False)
 
     def close(self) -> None:
         self.reset()
+        self.close_owned_transport()
 
     def _fail(self, exc: Exception) -> None:
         logger.error("RemoteDesktop portal: %s", exc)

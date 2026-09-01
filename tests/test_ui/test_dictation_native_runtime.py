@@ -8,6 +8,7 @@ from ui.native.text_injector import SystemTextInjector
 class _FakeRemote(QObject):
     readyChanged = Signal(bool)
     errorOccurred = Signal(str)
+    pasteCompleted = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -42,6 +43,31 @@ class _FakeTimer:
         cls.callbacks.append(callback)
 
 
+class _FakePortalTransport:
+    def __init__(self) -> None:
+        self.subscriptions = []
+        self.unsubscriptions = []
+        self.closed_sessions = []
+        self.cancelled_requests = []
+
+    def subscribe_portal_signal(self, interface_name, member, callback):
+        key = f"sub-{len(self.subscriptions) + 1}"
+        self.subscriptions.append((key, interface_name, member, callback))
+        return key
+
+    def unsubscribe_portal_signal(self, subscription_id):
+        self.unsubscriptions.append(subscription_id)
+
+    def close_session(self, session):
+        self.closed_sessions.append(session)
+
+    def cancel_request(self, request_id):
+        self.cancelled_requests.append(request_id)
+
+    def close(self):
+        pass
+
+
 def test_stale_insertion_completion_does_not_leak_into_next_session(monkeypatch):
     clipboard = _FakeClipboard()
     _FakeTimer.callbacks = []
@@ -60,46 +86,65 @@ def test_stale_insertion_completion_does_not_leak_into_next_session(monkeypatch)
     injector.begin_session()
     injector.insert_final("old")
     assert remote.paste_calls == 1
-    assert len(_FakeTimer.callbacks) == 1
+    assert len(_FakeTimer.callbacks) == 0
 
     injector.begin_session()
     injector.insert_final("new")
     assert remote.paste_calls == 1
 
+    remote.pasteCompleted.emit()
+    assert len(_FakeTimer.callbacks) == 1
     _FakeTimer.callbacks.pop(0)()
     assert completed == []
     assert remote.paste_calls == 2
 
+    remote.pasteCompleted.emit()
+    assert len(_FakeTimer.callbacks) == 1
     _FakeTimer.callbacks.pop(0)()
     assert completed == ["new"]
     assert clipboard.mimeData().text() == "before"
 
 
-def test_global_shortcuts_reset_releases_partial_session(monkeypatch):
-    portal = GlobalShortcutsPortal()
-    disconnects = []
-    closed_sessions = []
+def test_remote_error_restores_clipboard_transaction(monkeypatch):
+    clipboard = _FakeClipboard()
+    _FakeTimer.callbacks = []
+    monkeypatch.setattr(
+        injector_module,
+        "QGuiApplication",
+        type("FakeGuiApplication", (), {"clipboard": staticmethod(lambda: clipboard)}),
+    )
+    monkeypatch.setattr(injector_module, "QTimer", _FakeTimer)
 
-    class FakeBus:
-        def disconnect(self, *args):
-            disconnects.append(args)
-            return True
+    remote = _FakeRemote()
+    injector = SystemTextInjector(remote)
+    errors = []
+    injector.errorOccurred.connect(errors.append)
+    injector.begin_session()
+    injector.insert_final("temporary")
+    assert clipboard.mimeData().text() == "temporary"
 
-    portal.bus = FakeBus()
-    portal._signals_connected = True
+    remote.errorOccurred.emit("portal failed")
+    assert clipboard.mimeData().text() == "before"
+    assert errors == ["portal failed"]
+
+
+def test_global_shortcuts_reset_releases_partial_session():
+    transport = _FakePortalTransport()
+    portal = GlobalShortcutsPortal(transport=transport)
+    portal._activated_subscription = portal.subscribe_signal("iface", "Activated", lambda _body: None)
+    portal._deactivated_subscription = portal.subscribe_signal("iface", "Deactivated", lambda _body: None)
     portal._session = "/org/freedesktop/portal/desktop/session/test"
     portal._ready = True
     portal._starting = True
-    monkeypatch.setattr(portal, "close_requests", lambda: None)
-    monkeypatch.setattr(portal, "close_session", closed_sessions.append)
 
     ready = []
     portal.readyChanged.connect(ready.append)
     portal._reset()
 
-    assert len(disconnects) == 2
-    assert closed_sessions == ["/org/freedesktop/portal/desktop/session/test"]
+    assert len(transport.unsubscriptions) == 2
+    assert transport.closed_sessions == ["/org/freedesktop/portal/desktop/session/test"]
     assert ready == [False]
     assert portal._session is None
-    assert portal._signals_connected is False
+    assert portal._activated_subscription is None
+    assert portal._deactivated_subscription is None
     assert portal._starting is False
