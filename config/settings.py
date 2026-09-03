@@ -29,11 +29,15 @@ class ModelSize(str, Enum):
 
     @classmethod
     def default(cls) -> "ModelSize":
-        return cls.TURBO
+        return cls(ProcessDefaults.MODEL_SIZE)
 
     @classmethod
     def choices(cls) -> list[str]:
-        return [m.value for m in cls]
+        return [
+            cls.LARGE_V3.value,
+            cls.TURBO.value,
+            cls.MEDIUM.value,
+        ]
 
 
 class ComputeDevice(str, Enum):
@@ -79,7 +83,7 @@ class Settings:
     chunk_ms: int = ProcessDefaults.CHUNK_MS
     dtype: str = ProcessDefaults.DTYPE
 
-    model_size: str = ModelSize.TURBO.value
+    model_size: str = ProcessDefaults.MODEL_SIZE
     device: str = ComputeDevice.SYCL.value
     compute_type: str = ProcessDefaults.COMPUTE_TYPE
     language: str = ProcessDefaults.LANGUAGE
@@ -211,6 +215,17 @@ class Settings:
             if keyword.casefold() == ProcessDefaults.LEGACY_FIREFOX_KEYWORD.casefold():
                 filtered["sink_search_keyword"] = ProcessDefaults.SINK_SEARCH_KEYWORD
                 logger.info("Keyword Firefox legacy rimossa dalla configurazione audio")
+
+            selected_model = str(
+                filtered.get("model_size", ProcessDefaults.MODEL_SIZE) or ""
+            )
+            if selected_model not in ModelSize.choices():
+                filtered["model_size"] = ProcessDefaults.MODEL_SIZE
+                logger.info(
+                    "Modello legacy/non gestito '%s': migrazione a %s",
+                    selected_model,
+                    ProcessDefaults.MODEL_SIZE,
+                )
 
             for coordinate_name in ("window_x", "window_y"):
                 coordinate = filtered.get(coordinate_name)
