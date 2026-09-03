@@ -35,10 +35,47 @@ def test_install_script_skips_unchanged_expensive_steps() -> None:
     assert "ULTRATRANSCRIBR_FORCE_REBUILD" in source
 
 
-def test_installer_runs_final_environment_check() -> None:
+def test_installer_runs_final_environment_check_without_oneapi_ld_pollution() -> None:
     source = (ROOT / "install.sh").read_text(encoding="utf-8")
     assert '"$VENV/bin/python" -m core.environment_check' in source
     assert "run_environment_check" in source
+    assert "env -u LD_LIBRARY_PATH" in source
+    assert 'export LD_LIBRARY_PATH="$VENV/lib:${LD_LIBRARY_PATH:-}"' not in source
+
+
+def test_installer_scopes_oneapi_to_whisper_build_subshell() -> None:
+    source = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    assert "build_whisper_stack() (" in source
+    assert 'source "$ONEAPI/setvars.sh"' in source
+    assert "build_whisper_stack\n  ensure_default_models" in source
+    assert "Inizializzazione Intel oneAPI fallita" in source
+
+
+def test_installer_reuses_whisper_build_and_builds_only_server_target() -> None:
+    source = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    assert 'if [[ "$FORCE_REBUILD" == "1" ]]; then\n    rm -rf "$WCPP/build"' in source
+    assert 'prepare_whisper_source\n  rm -rf "$WCPP/build"' not in source
+    assert "-DWHISPER_BUILD_TESTS=OFF" in source
+    assert 'cmake --build "$WCPP/build" --target whisper-server' in source
+
+
+def test_installer_preserves_whisper_shared_library_soname_symlinks() -> None:
+    source = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    assert 'local build_bin="$WCPP/build/bin"' in source
+    assert "\\( -type f -o -type l \\)" in source
+    assert 'cp -a "$library" "$VENV/lib/"' in source
+    assert 'cp -L "$so" "$VENV/lib/"' not in source
+
+
+def test_installer_verifies_whisper_with_shared_runtime_helper() -> None:
+    source = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    assert "from core.whisper_gpu_detect import verify_sycl_binary" in source
+    assert "verify_installed_whisper" in source
+    assert "whisper-server SYCL non eseguibile con il runtime oneAPI corrente" in source
 
 
 def test_installer_uses_the_canonical_default_model() -> None:
