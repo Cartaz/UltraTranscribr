@@ -8,10 +8,11 @@ import pytest
 from core import sycl_runtime
 
 
-def test_oneapi_library_probe_starts_without_inherited_ld_library_path(monkeypatch) -> None:
+def test_oneapi_library_probe_starts_clean_and_forces_reinitialization(monkeypatch) -> None:
     sycl_runtime.oneapi_library_paths.cache_clear()
     monkeypatch.setattr(sycl_runtime._ONEAPI_SETVARS, "is_file", lambda: True)
     monkeypatch.setenv("LD_LIBRARY_PATH", "/venv/old-runtime:/custom")
+    monkeypatch.setenv("SETVARS_COMPLETED", "1")
     captured: dict[str, object] = {}
 
     def fake_run(cmd, **kwargs):
@@ -30,6 +31,9 @@ def test_oneapi_library_probe_starts_without_inherited_ld_library_path(monkeypat
         "/opt/intel/oneapi/tbb/2022/lib",
     )
     assert "LD_LIBRARY_PATH" not in captured["env"]
+    command = captured["cmd"]
+    assert isinstance(command, list)
+    assert 'SETVARS_ARGS="--force"' in command[2]
     sycl_runtime.oneapi_library_paths.cache_clear()
 
 
