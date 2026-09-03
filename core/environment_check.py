@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Iterable
 
 from config.constants import AppMeta, ProcessDefaults, WhisperServerDefaults
+from core.torch_xpu import probe_torch_xpu
 from core.whisper_gpu_detect import (
     _check_compute_runtime,
     _check_intel_gpu,
@@ -35,7 +36,7 @@ def _module_available(name: str) -> bool:
 
 
 def collect_environment_checks(project_root: Path | None = None) -> list[EnvironmentCheck]:
-    """Return cheap, non-destructive checks for the supported runtime."""
+    """Return non-destructive checks for the supported runtime."""
     root = Path(project_root or Path(__file__).resolve().parent.parent)
     manager = WhisperModelManager()
 
@@ -49,6 +50,7 @@ def collect_environment_checks(project_root: Path | None = None) -> list[Environ
     except OSError:
         vad_ok = False
 
+    xpu_ok, xpu_detail = probe_torch_xpu()
     checks = [
         EnvironmentCheck(
             "Python 3.12+",
@@ -74,6 +76,11 @@ def collect_environment_checks(project_root: Path | None = None) -> list[Environ
             "Intel GPU",
             _check_intel_gpu(),
             "Intel VGA / Display / 3D controller",
+        ),
+        EnvironmentCheck(
+            "PyTorch XPU",
+            xpu_ok,
+            xpu_detail,
         ),
         EnvironmentCheck(
             "ffmpeg",
@@ -105,6 +112,11 @@ def collect_environment_checks(project_root: Path | None = None) -> list[Environ
         "pulsectl",
         "huggingface_hub",
         "dbus_next",
+        "torch",
+        "torchaudio",
+        "torchcodec",
+        "pyannote.audio",
+        "demucs_infer",
     ):
         available = _module_available(module)
         checks.append(
@@ -114,16 +126,6 @@ def collect_environment_checks(project_root: Path | None = None) -> list[Environ
                 "installato" if available else "non trovato",
             )
         )
-
-    demucs_ok = _module_available("demucs") and _module_available("torch")
-    checks.append(
-        EnvironmentCheck(
-            "Demucs (opzionale)",
-            demucs_ok,
-            "disponibile" if demucs_ok else "non installato",
-            required=False,
-        )
-    )
     return checks
 
 
