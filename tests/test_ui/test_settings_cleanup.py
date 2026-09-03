@@ -62,7 +62,7 @@ def test_model_selection_is_immediate_and_file_queue_has_no_turbo_fallback() -> 
     file_script = (WEB / "file_history.js").read_text(encoding="utf-8")
     application = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
 
-    assert '$(&quot;s-model&quot;).onchange = settingsSelectModel'.replace('&quot;', '"') in settings_script
+    assert '$("s-model").onchange = settingsSelectModel' in settings_script
     assert 'JSON.stringify({model_size: model})' in settings_script
     assert '"modelChoices": ModelSize.choices()' in application
     assert 'settings.model_size || "large-v3-turbo"' not in file_script
