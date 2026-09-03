@@ -41,6 +41,13 @@ def test_installer_runs_final_environment_check() -> None:
     assert "run_environment_check" in source
 
 
+def test_installer_uses_the_canonical_default_model() -> None:
+    source = (ROOT / "install.sh").read_text(encoding="utf-8")
+    assert "from config.constants import ProcessDefaults" in source
+    assert "manager.get_model_path(ProcessDefaults.MODEL_SIZE)" in source
+    assert 'manager.get_model_path("large-v3-turbo")' not in source
+
+
 def test_demucs_remains_optional_and_noninteractive_safe() -> None:
     source = (ROOT / "install.sh").read_text(encoding="utf-8")
     assert "ULTRATRANSCRIBR_INSTALL_DEMUCS" in source
