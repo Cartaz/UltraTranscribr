@@ -1,0 +1,4 @@
+# Heavy inference packages. PyTorch/torchaudio/torchcodec are pinned and
+# installed explicitly by install.sh from the official PyTorch XPU/CPU indexes.
+pyannote.audio==4.0.7
+demucs-infer==4.2.2
