@@ -257,10 +257,15 @@ function fileHistoryEnqueue(paths) {
     return;
   }
   const settings = state.boot?.settings || {};
+  const selectedModel = String(settings.model_size || "").trim();
+  if (!selectedModel) {
+    showError("Configurazione modello Whisper non disponibile. Riapri le impostazioni e seleziona un modello.", "file");
+    return;
+  }
   call("enqueueFileBatch", [
     JSON.stringify(clean),
     settings.language || "auto",
-    settings.model_size || "large-v3-turbo",
+    selectedModel,
     $("song-mode").checked,
     $("isolate-vocals").checked,
   ], result => {
