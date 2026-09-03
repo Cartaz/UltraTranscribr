@@ -42,7 +42,7 @@ class ProcessDefaults:
     CHANNELS = 1
     CHUNK_MS = 3000
     DTYPE = "float32"
-    MODEL_SIZE = "large-v3-turbo"
+    MODEL_SIZE = "large-v3"
     DEVICE = "sycl"
     COMPUTE_TYPE = "f16"
     LANGUAGE = "en"
