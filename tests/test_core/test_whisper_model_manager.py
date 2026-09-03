@@ -124,6 +124,10 @@ def test_unknown_model_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         manager.get_model_info("../../evil")
     with pytest.raises(ValueError):
+        manager.get_model_path("../../evil")
+    with pytest.raises(ValueError):
+        manager.is_model_cached("../../evil")
+    with pytest.raises(ValueError):
         manager.download_model("../../evil", lambda _done, _total: None)
     with pytest.raises(ValueError):
         manager.delete_model("../../evil")
