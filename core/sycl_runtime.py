@@ -1,6 +1,6 @@
 """Runtime environment construction for whisper.cpp SYCL subprocesses.
 
-The Python process also hosts PyTorch XPU.  Those two consumers can depend on
+The Python process also hosts PyTorch XPU. Those two consumers can depend on
 slightly different Intel runtime releases, so whisper-server must receive the
 oneAPI environment in its own subprocess instead of mutating the application
 process environment.
@@ -36,11 +36,12 @@ def _dedupe(paths: list[str]) -> list[str]:
 
 @lru_cache(maxsize=1)
 def oneapi_library_paths() -> tuple[str, ...]:
-    """Return Intel's own runtime library order from ``setvars.sh``.
+    """Return Intel's runtime library order from a clean ``setvars.sh`` run.
 
-    ``LD_LIBRARY_PATH`` is deliberately removed from the probe environment so
-    a virtualenv-provided Unified Runtime cannot be folded into the oneAPI
-    result and then outrank the compiler runtime that built whisper.cpp.
+    Intel normally prevents repeated ``setvars.sh`` calls in one shell. This
+    probe is intentionally a disposable child process, so forcing a fresh run
+    is safe and prevents an inherited ``SETVARS_COMPLETED`` or stale
+    ``LD_LIBRARY_PATH`` from selecting a different Unified Runtime release.
     """
 
     if not _ONEAPI_SETVARS.is_file():
@@ -49,7 +50,7 @@ def oneapi_library_paths() -> tuple[str, ...]:
     env = os.environ.copy()
     env.pop("LD_LIBRARY_PATH", None)
     command = (
-        'source "$1" >/dev/null 2>&1 '
+        'SETVARS_ARGS="--force" source "$1" >/dev/null 2>&1 '
         '&& printf "%s" "${LD_LIBRARY_PATH:-}"'
     )
     try:
@@ -81,10 +82,9 @@ def build_whisper_sycl_env(
 ) -> dict[str, str]:
     """Build an isolated environment for one whisper.cpp SYCL process.
 
-    oneAPI paths must precede ``.venv/lib``.  PyTorch XPU installs its own
-    Unified Runtime in the virtualenv; putting that directory first can mix a
-    newer oneAPI ``libsycl`` with an older ``libur_loader`` and abort the
-    server at dynamic-link time.
+    oneAPI paths must precede application libraries. PyTorch XPU installs its
+    own Intel runtime; inherited runtime paths are retained only after the
+    coherent oneAPI set so they cannot override ``libsycl``/Unified Runtime.
     """
 
     env = dict(os.environ if base_env is None else base_env)
