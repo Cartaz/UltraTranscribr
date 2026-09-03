@@ -48,6 +48,31 @@ function settingsPopulateModelChoices(values, current) {
   });
 }
 
+function settingsSelectModel() {
+  const select = $("s-model");
+  if (!select) return;
+  const current = String(state.boot?.settings?.model_size || "");
+  if (sessionBusy() || state.modelBusy) {
+    select.value = current;
+    notice("Ferma le operazioni attive prima di cambiare modello", true);
+    return;
+  }
+  const model = String(select.value || "").trim();
+  if (!model || model === current) return;
+  call("applySettings", [JSON.stringify({model_size: model})], result => {
+    const response = json(result);
+    if (!response?.ok) {
+      select.value = current;
+      showError(response?.error || "Modello non applicato", "settings");
+      return;
+    }
+    state.boot.settings = response.settings;
+    writeSetting("model_size", response.settings?.model_size);
+    settingsRenderModels(state.models);
+    notice(`Modello predefinito: ${modelLabels[model] || model}`);
+  });
+}
+
 function settingElement(name) {
   return document.querySelector(`#settings-form [name="${name}"]`);
 }
@@ -277,6 +302,7 @@ const settingsModule = {
     all("[data-settings-tab]").forEach(button => { button.onclick = () => switchSettingsTab(button.dataset.settingsTab); });
     all("[data-reset-section]").forEach(button => { button.onclick = () => resetSettingsSection(button.dataset.resetSection); });
     $("settings-form").onsubmit = settingsSave;
+    $("s-model").onchange = settingsSelectModel;
     $("models-refresh").onclick = settingsRefreshModels;
   },
   hydrate(bootstrap) {
@@ -297,7 +323,7 @@ const settingsModule = {
   },
   event(name, value) {
     if (name === "config_changed" && value && typeof value === "object") {
-      hydrateSettings({...state.boot?.settings, ...value});
+      Object.entries(value).forEach(([setting, settingValue]) => writeSetting(setting, settingValue));
       return false;
     }
     if (name === "model_download_started") {
