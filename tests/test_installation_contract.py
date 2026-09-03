@@ -64,6 +64,16 @@ def test_xpu_stack_and_demucs_are_mandatory_noninteractive_dependencies() -> Non
     assert "demucs-infer==4.2.2" in xpu
 
 
+def test_torchcodec_native_import_is_not_required_by_dependency_selfcheck() -> None:
+    source = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    assert "\nimport torchcodec\n" not in source
+    assert 'version("torchcodec")' in source
+    assert "already-decoded waveforms" in source
+    assert "_requirements_imports_probe" in source
+    assert "requirements_imports_ok verbose" in source
+
+
 def test_legacy_sherpa_dependency_is_removed() -> None:
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     assert "sherpa-onnx" not in requirements
