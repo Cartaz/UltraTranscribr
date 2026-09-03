@@ -1,3 +1,13 @@
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from types import ModuleType
+
+import numpy as np
+
+import core.speaker_diarization as sd
 from core.speaker_diarization import align_speakers, speaker_label
 
 
@@ -39,3 +49,81 @@ def test_manual_speaker_names_only_change_display_label() -> None:
     assert speaker_label("SPEAKER_00", names) == "Marco"
     assert speaker_label("SPEAKER_01", names) == "Speaker 2"
     assert speaker_label(None, names) == "Speaker ?"
+
+
+class _Turn:
+    def __init__(self, start: float, end: float) -> None:
+        self.start = start
+        self.end = end
+
+
+class _Annotation:
+    def itertracks(self, yield_label=False):
+        assert yield_label is True
+        yield _Turn(0.0, 1.0), None, "voice-B"
+        yield _Turn(1.0, 2.0), None, "voice-A"
+        yield _Turn(2.0, 3.0), None, "voice-B"
+
+
+def test_annotation_is_canonicalized_to_stable_session_speaker_ids() -> None:
+    assert sd._annotation_to_segments(_Annotation()) == [
+        {"start": 0.0, "end": 1.0, "speaker_id": "SPEAKER_00"},
+        {"start": 1.0, "end": 2.0, "speaker_id": "SPEAKER_01"},
+        {"start": 2.0, "end": 3.0, "speaker_id": "SPEAKER_00"},
+    ]
+
+
+def test_model_status_requires_complete_payload_and_revision_marker(tmp_path: Path) -> None:
+    manager = sd.DiarizationModelManager(tmp_path)
+    model = manager.model_dir
+    model.mkdir(parents=True)
+    (model / "config.yaml").write_text("pipeline: {}\n", encoding="utf-8")
+    for name in ("segmentation", "embedding", "plda"):
+        directory = model / name
+        directory.mkdir()
+        (directory / "payload.bin").write_bytes(b"x")
+    assert manager.status()["ready"] is False
+    manager.marker.write_text(
+        json.dumps({"repo_id": sd.COMMUNITY_REPO_ID, "revision": "abc123"}),
+        encoding="utf-8",
+    )
+    status = manager.status()
+    assert status["ready"] is True
+    assert status["revision"] == "abc123"
+
+
+def test_diarizer_uses_exclusive_output_and_exact_known_speaker_count(monkeypatch, tmp_path) -> None:
+    captured = {}
+
+    class _Waveform:
+        def unsqueeze(self, dim):
+            assert dim == 0
+            return self
+
+    torch = ModuleType("torch")
+    torch.from_numpy = lambda array: _Waveform()
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setattr(sd, "get_torch_xpu_device", lambda: "xpu:0")
+    monkeypatch.setattr(
+        sd.sf,
+        "read",
+        lambda *args, **kwargs: (np.zeros((16000, 1), dtype=np.float32), 16000),
+    )
+
+    class _Output:
+        exclusive_speaker_diarization = _Annotation()
+
+    class _Pipeline:
+        def __call__(self, payload, **kwargs):
+            captured["payload"] = payload
+            captured["kwargs"] = kwargs
+            return _Output()
+
+    diarizer = sd.SpeakerDiarizer(sd.DiarizationModelManager(tmp_path))
+    monkeypatch.setattr(diarizer, "_get_pipeline", lambda: _Pipeline())
+
+    result = diarizer.run("meeting.flac", num_speakers=4)
+
+    assert captured["kwargs"] == {"num_speakers": 4}
+    assert captured["payload"]["sample_rate"] == 16000
+    assert result[0]["speaker_id"] == "SPEAKER_00"

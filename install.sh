@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# UltraTranscribr installer for CachyOS/Arch + Intel SYCL.
+# UltraTranscribr installer for CachyOS/Arch + Intel SYCL/XPU.
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,6 +12,11 @@ DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 REQ_MARKER="$VENV/.ultratranscribr-requirements.sha256"
 BUILD_MARKER="$VENV/.ultratranscribr-whisper-build.sha256"
 FORCE_REBUILD="${ULTRATRANSCRIBR_FORCE_REBUILD:-0}"
+TORCH_VERSION="2.9.1"
+TORCHAUDIO_VERSION="2.9.1"
+TORCHCODEC_VERSION="0.9.1"
+PYTORCH_XPU_INDEX="https://download.pytorch.org/whl/xpu"
+PYTORCH_CPU_INDEX="https://download.pytorch.org/whl/cpu"
 
 log() { printf '[UltraTranscribr] %s\n' "$*"; }
 die() { printf 'ERRORE: %s\n' "$*" >&2; exit 1; }
@@ -33,20 +38,34 @@ PY
 }
 
 requirements_imports_ok() {
-  "$VENV/bin/python" - <<'PY' >/dev/null 2>&1
+  "$VENV/bin/python" - <<PY >/dev/null 2>&1
+from importlib.metadata import version
+
 import PySide6
+import dbus_next
+import demucs_infer
 import huggingface_hub
 import numpy
 import pulsectl
+import pyannote.audio
 import sounddevice
 import soundfile
+import torch
+import torchaudio
+import torchcodec
+
+assert version("torch").split("+")[0] == "$TORCH_VERSION"
+assert version("torchaudio").split("+")[0] == "$TORCHAUDIO_VERSION"
+assert version("torchcodec").split("+")[0] == "$TORCHCODEC_VERSION"
+assert "+xpu" in torch.__version__, torch.__version__
 PY
 }
 
 requirements_key() {
   {
     "$VENV/bin/python" --version 2>&1
-    sha256sum "$ROOT/requirements.txt"
+    printf '%s\n' "$TORCH_VERSION" "$TORCHAUDIO_VERSION" "$TORCHCODEC_VERSION"
+    sha256sum "$ROOT/requirements.txt" "$ROOT/requirements-xpu.txt"
   } | sha256sum | awk '{print $1}'
 }
 
@@ -60,56 +79,36 @@ build_key() {
   } | sha256sum | awk '{print $1}'
 }
 
-ask_demucs() {
-  local mode="${ULTRATRANSCRIBR_INSTALL_DEMUCS:-ask}"
-  case "${mode,,}" in
-    1|true|yes|y|s) return 0 ;;
-    0|false|no|n) return 1 ;;
-    ask)
-      if [[ -t 0 ]]; then
-        local answer=""
-        read -r -p "Installare Demucs + PyTorch CPU per modalità Musica? [s/N]: " answer || true
-        [[ "$answer" =~ ^[sSyY]$ ]]
-        return
-      fi
-      return 1
-      ;;
-    *) die "ULTRATRANSCRIBR_INSTALL_DEMUCS deve essere ask, 1 oppure 0" ;;
-  esac
-}
-
 install_python_dependencies() {
   local key
   key="$(requirements_key)"
   if [[ -f "$REQ_MARKER" ]] \
      && [[ "$(cat "$REQ_MARKER")" == "$key" ]] \
      && requirements_imports_ok; then
-    log "Dipendenze Python invariate: salto pip install."
+    log "Dipendenze Python/XPU invariate: salto pip install."
     return
   fi
 
   log "Installazione/aggiornamento dipendenze Python..."
   "$VENV/bin/python" -m pip install --upgrade pip
   "$VENV/bin/pip" install -r "$ROOT/requirements.txt"
-  requirements_imports_ok || die "Verifica import dipendenze Python fallita"
+
+  log "Installazione PyTorch Intel XPU $TORCH_VERSION..."
+  "$VENV/bin/pip" install --index-url "$PYTORCH_XPU_INDEX" \
+    "torch==$TORCH_VERSION" "torchaudio==$TORCHAUDIO_VERSION"
+
+  # pyannote.audio imports TorchCodec, but UltraTranscribr passes already-decoded
+  # waveforms to the diarizer. The CPU codec wheel therefore avoids introducing
+  # a second GPU media stack while remaining ABI-compatible with this torch pin.
+  "$VENV/bin/pip" install --no-deps --index-url "$PYTORCH_CPU_INDEX" \
+    "torchcodec==$TORCHCODEC_VERSION"
+
+  log "Installazione diarizzazione Community-1 e Demucs..."
+  "$VENV/bin/pip" install -r "$ROOT/requirements-xpu.txt"
+
+  requirements_imports_ok || die "Verifica dipendenze PyTorch XPU/pyannote/Demucs fallita"
   key="$(requirements_key)"
   printf '%s\n' "$key" > "$REQ_MARKER"
-}
-
-install_optional_demucs() {
-  ask_demucs || return 0
-  if "$VENV/bin/python" - <<'PY' >/dev/null 2>&1
-import demucs
-import torch
-PY
-  then
-    log "Demucs già installato: nessuna modifica."
-    return
-  fi
-
-  log "Installazione Demucs + PyTorch CPU..."
-  "$VENV/bin/pip" install --index-url https://download.pytorch.org/whl/cpu torch torchaudio
-  "$VENV/bin/pip" install demucs
 }
 
 whisper_build_is_current() {
@@ -194,10 +193,6 @@ install_desktop_integration() {
   local icon_source="$ROOT/assets/icons/ultratranscribr.svg"
 
   [[ -f "$icon_source" ]] || die "Icona desktop mancante: $icon_source"
-
-  # Plasma's StatusNotifier host strongly prefers a stable Freedesktop icon
-  # name. Install the same named asset in both app and status contexts so Qt
-  # can export IconName=ultratranscribr instead of relying only on D-Bus pixmaps.
   install -Dm644 "$icon_source" "$icon_root/scalable/apps/ultratranscribr.svg"
   install -Dm644 "$icon_source" "$icon_root/scalable/status/ultratranscribr.svg"
 
@@ -206,7 +201,7 @@ install_desktop_integration() {
 [Desktop Entry]
 Type=Application
 Name=UltraTranscribr
-Comment=Trascrizione audio accelerata Intel SYCL
+Comment=Trascrizione audio accelerata Intel SYCL/XPU
 Exec=$VENV/bin/python $ROOT/main.py
 Path=$ROOT
 Icon=ultratranscribr
@@ -231,12 +226,13 @@ EOF
 run_environment_check() {
   cd "$ROOT"
   export LD_LIBRARY_PATH="$VENV/lib:${LD_LIBRARY_PATH:-}"
+  export ONEAPI_DEVICE_SELECTOR="level_zero:0"
   "$VENV/bin/python" -m core.environment_check \
     || die "Self-check finale fallito. Consulta il report sopra."
 }
 
 main() {
-  echo "=== UltraTranscribr / Intel SYCL ==="
+  echo "=== UltraTranscribr / Intel SYCL + PyTorch XPU ==="
 
   local py
   py="$(find_python)" || die "Python 3.12+ non trovato"
@@ -253,7 +249,6 @@ main() {
   fi
 
   install_python_dependencies
-  install_optional_demucs
 
   set +u
   # shellcheck disable=SC1091

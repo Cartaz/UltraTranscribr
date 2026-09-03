@@ -81,11 +81,9 @@ class FileTranscriberThread(threading.Thread):
         try:
             source = self._file_path
             if self._isolate_vocals and self._song_mode:
-                isolated = self._run_vocal_isolation()
+                source = self._run_vocal_isolation()
                 if self._stop_event.is_set():
                     return
-                if isolated:
-                    source = isolated
             self._emit("file_transcriber_status_changed", StatusEnum.RUNNING.value)
             start_pct = DEMUCS_END if self._vocal_path else 0
             self._emit("file_transcriber_progress", start_pct)
@@ -105,12 +103,9 @@ class FileTranscriberThread(threading.Thread):
                 self._emit("file_transcriber_status_changed", StatusEnum.STOPPED.value)
             self._cleanup()
 
-    def _run_vocal_isolation(self) -> Optional[str]:
-        from core.vocal_isolator import isolate_vocals, is_demucs_available
+    def _run_vocal_isolation(self) -> str:
+        from core.vocal_isolator import isolate_vocals
 
-        if not is_demucs_available():
-            logger.warning("Demucs non disponibile; continuo col file originale")
-            return None
         self._emit("file_transcriber_status_changed", StatusEnum.ISOLATING_VOCALS.value)
 
         def progress(value: int) -> None:
@@ -119,7 +114,6 @@ class FileTranscriberThread(threading.Thread):
         self._vocal_path = isolate_vocals(
             self._file_path,
             model_name="htdemucs",
-            device="cpu",
             stop_event=self._stop_event,
             progress_callback=progress,
         )
@@ -279,7 +273,6 @@ class FileTranscriberThread(threading.Thread):
                 return max(0.0, start), max(max(0.0, start), end)
             offsets = raw.get("offsets")
             if isinstance(offsets, dict):
-                # CLI-style JSON offsets are expressed in milliseconds.
                 start = float(offsets.get("from", 0.0)) / 1000.0
                 end = float(offsets.get("to", offsets.get("from", 0.0))) / 1000.0
                 return max(0.0, start), max(max(0.0, start), end)

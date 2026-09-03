@@ -48,11 +48,25 @@ def test_installer_uses_the_canonical_default_model() -> None:
     assert 'manager.get_model_path("large-v3-turbo")' not in source
 
 
-def test_demucs_remains_optional_and_noninteractive_safe() -> None:
+def test_xpu_stack_and_demucs_are_mandatory_noninteractive_dependencies() -> None:
     source = (ROOT / "install.sh").read_text(encoding="utf-8")
-    assert "ULTRATRANSCRIBR_INSTALL_DEMUCS" in source
-    assert "[[ -t 0 ]]" in source
-    assert "ask_demucs || return 0" in source
+    xpu = (ROOT / "requirements-xpu.txt").read_text(encoding="utf-8")
+
+    assert "ULTRATRANSCRIBR_INSTALL_DEMUCS" not in source
+    assert "ask_demucs" not in source
+    assert "Installare Demucs" not in source
+    assert 'TORCH_VERSION="2.9.1"' in source
+    assert 'TORCHAUDIO_VERSION="2.9.1"' in source
+    assert 'TORCHCODEC_VERSION="0.9.1"' in source
+    assert "download.pytorch.org/whl/xpu" in source
+    assert "+xpu" in source
+    assert "pyannote.audio==4.0.7" in xpu
+    assert "demucs-infer==4.2.2" in xpu
+
+
+def test_legacy_sherpa_dependency_is_removed() -> None:
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert "sherpa-onnx" not in requirements
 
 
 def test_application_log_uses_bounded_rotation() -> None:

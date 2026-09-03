@@ -34,7 +34,7 @@ def test_report_distinguishes_required_and_optional_failures() -> None:
     assert "[OPTIONAL] extra: not installed" in report
 
 
-def test_collect_environment_checks_is_non_destructive(monkeypatch, tmp_path: Path) -> None:
+def test_collect_environment_checks_requires_xpu_pyannote_and_demucs(monkeypatch, tmp_path: Path) -> None:
     models_dir = tmp_path / "models"
     models_dir.mkdir()
     vad_path = models_dir / envcheck.WhisperServerDefaults.VAD_MODEL_FILENAME
@@ -44,17 +44,18 @@ def test_collect_environment_checks_is_non_destructive(monkeypatch, tmp_path: Pa
     monkeypatch.setattr(envcheck, "_check_level_zero_loader", lambda: True)
     monkeypatch.setattr(envcheck, "_check_compute_runtime", lambda: True)
     monkeypatch.setattr(envcheck, "_check_intel_gpu", lambda: True)
+    monkeypatch.setattr(envcheck, "probe_torch_xpu", lambda: (True, "Intel Test XPU"))
     monkeypatch.setattr(envcheck, "find_whisper_server", lambda root: "/tmp/whisper-server")
     monkeypatch.setattr(envcheck, "verify_sycl_binary", lambda binary, root: True)
     monkeypatch.setattr(envcheck.shutil, "which", lambda name: f"/usr/bin/{name}")
-    monkeypatch.setattr(envcheck, "_module_available", lambda name: name not in {"demucs", "torch"})
+    monkeypatch.setattr(envcheck, "_module_available", lambda name: True)
 
     class FakeManager:
         def get_model_info(self, model: str) -> dict[str, object]:
             assert model == envcheck.ProcessDefaults.MODEL_SIZE
             return {
                 "installed": True,
-                "path": str(models_dir / "ggml-large-v3-turbo.bin"),
+                "path": str(models_dir / "ggml-large-v3.bin"),
             }
 
     monkeypatch.setattr(envcheck, "WhisperModelManager", FakeManager)
@@ -62,20 +63,14 @@ def test_collect_environment_checks_is_non_destructive(monkeypatch, tmp_path: Pa
     checks = envcheck.collect_environment_checks(tmp_path)
     by_name = {check.name: check for check in checks}
 
-    assert by_name["Level Zero loader"].ok is True
-    assert by_name["Intel Compute Runtime"].ok is True
-    assert by_name["Intel GPU"].ok is True
-    assert by_name["whisper-server SYCL"].ok is True
-    assert by_name["Modello VAD"].ok is True
-    assert by_name["Demucs (opzionale)"].required is False
+    assert by_name["PyTorch XPU"].ok is True
+    assert by_name["Python package pyannote.audio"].required is True
+    assert by_name["Python package demucs_infer"].required is True
+    assert by_name["Python package torchcodec"].required is True
     assert required_checks_pass_without_oneapi_path(by_name)
 
 
 def required_checks_pass_without_oneapi_path(by_name: dict[str, envcheck.EnvironmentCheck]) -> bool:
     # /opt/intel/oneapi is intentionally not fabricated in the test runner.
-    relevant = [
-        check
-        for name, check in by_name.items()
-        if name != "Intel oneAPI"
-    ]
+    relevant = [check for name, check in by_name.items() if name != "Intel oneAPI"]
     return envcheck.required_checks_pass(relevant)
