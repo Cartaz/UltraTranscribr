@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import queue
 import struct
 import subprocess
@@ -16,6 +15,7 @@ from typing import Any, Callable, Optional
 
 from config.constants import AppMeta, SYCLDefaults
 from config.settings import Settings
+from core.sycl_runtime import build_whisper_sycl_env
 from core.whisper_gpu_detect import find_whisper_server, verify_sycl_binary
 
 logger = logging.getLogger(__name__)
@@ -425,29 +425,7 @@ class WhisperBackend:
         return cmd
 
     def _build_env(self) -> dict[str, str]:
-        env = os.environ.copy()
-        env["GGML_SYCL"] = "1"
-        env["ONEAPI_DEVICE_SELECTOR"] = SYCLDefaults.ONEAPI_DEVICE_SELECTOR
-        env["ZES_ENABLE_SYSMAN"] = "1"
-        ld_paths = []
-        for candidate in (
-            self._project_root / ".venv" / "lib",
-            self._project_root / "lib",
-        ):
-            if candidate.is_dir():
-                ld_paths.append(str(candidate))
-        oneapi = Path("/opt/intel/oneapi")
-        if oneapi.is_dir():
-            for lib_dir in oneapi.glob("*/*/lib"):
-                if lib_dir.is_dir():
-                    ld_paths.append(str(lib_dir))
-            for lib_dir in oneapi.glob("tbb/*/lib/intel64/gcc4.8"):
-                if lib_dir.is_dir():
-                    ld_paths.append(str(lib_dir))
-        if ld_paths:
-            current = env.get("LD_LIBRARY_PATH", "")
-            env["LD_LIBRARY_PATH"] = ":".join(ld_paths + ([current] if current else []))
-        return env
+        return build_whisper_sycl_env(self._project_root)
 
     def _wait_for_health(self) -> None:
         deadline = time.monotonic() + SYCLDefaults.HEALTH_TIMEOUT_S

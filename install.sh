@@ -83,7 +83,7 @@ requirements_key() {
 build_key() {
   {
     printf '%s\n' "$PIN"
-    printf '%s\n' 'GGML_SYCL=ON|Release|icx|icpx'
+    printf '%s\n' 'GGML_SYCL=ON|Release|icx|icpx|server-only'
     icx --version | head -1
     icpx --version | head -1
     cmake --version | head -1
@@ -123,6 +123,19 @@ install_python_dependencies() {
   printf '%s\n' "$key" > "$REQ_MARKER"
 }
 
+verify_installed_whisper() {
+  cd "$ROOT"
+  env -u LD_LIBRARY_PATH "$VENV/bin/python" - "$VENV/bin/whisper-server" <<'PY'
+import sys
+from pathlib import Path
+
+from core.whisper_gpu_detect import verify_sycl_binary
+
+binary = sys.argv[1]
+raise SystemExit(0 if verify_sycl_binary(binary, Path.cwd()) else 1)
+PY
+}
+
 whisper_build_is_current() {
   local key="$1"
   [[ "$FORCE_REBUILD" != "1" ]] || return 1
@@ -130,7 +143,7 @@ whisper_build_is_current() {
   [[ -f "$BUILD_MARKER" ]] || return 1
   [[ "$(cat "$BUILD_MARKER")" == "$key" ]] || return 1
   compgen -G "$VENV/lib/libggml-sycl.so*" >/dev/null || return 1
-  "$VENV/bin/whisper-server" --help >/dev/null 2>&1 || return 1
+  verify_installed_whisper >/dev/null 2>&1 || return 1
   return 0
 }
 
@@ -151,6 +164,28 @@ prepare_whisper_source() {
   fi
 }
 
+package_whisper_runtime() {
+  local build_bin="$WCPP/build/bin"
+  local server="$build_bin/whisper-server"
+  [[ -x "$server" ]] || die "whisper-server non trovato nella build"
+
+  install -Dm755 "$server" "$VENV/bin/whisper-server"
+  mkdir -p "$VENV/lib"
+  rm -f "$VENV/lib"/libggml*.so* "$VENV/lib"/libwhisper.so* 2>/dev/null || true
+
+  local copied=0
+  while IFS= read -r -d '' library; do
+    cp -a "$library" "$VENV/lib/"
+    copied=1
+  done < <(
+    find "$build_bin" -maxdepth 1 -name 'lib*.so*' \
+      \( -type f -o -type l \) -print0
+  )
+  [[ "$copied" == "1" ]] || die "Librerie whisper.cpp non trovate nella build"
+  compgen -G "$VENV/lib/libggml-sycl.so*" >/dev/null \
+    || die "libggml-sycl non installata"
+}
+
 build_whisper_server() {
   local key="$1"
   if whisper_build_is_current "$key"; then
@@ -160,32 +195,44 @@ build_whisper_server() {
 
   log "Build whisper.cpp SYCL richiesta."
   prepare_whisper_source
-  rm -rf "$WCPP/build"
+  if [[ "$FORCE_REBUILD" == "1" ]]; then
+    rm -rf "$WCPP/build"
+  fi
+
   cmake -S "$WCPP" -B "$WCPP/build" \
     -DGGML_SYCL=ON \
+    -DWHISPER_BUILD_TESTS=OFF \
+    -DWHISPER_BUILD_EXAMPLES=ON \
+    -DWHISPER_BUILD_SERVER=ON \
     -DCMAKE_C_COMPILER=icx \
     -DCMAKE_CXX_COMPILER=icpx \
     -DCMAKE_BUILD_TYPE=Release \
     || die "Configurazione CMake fallita"
-  cmake --build "$WCPP/build" --config Release -j"$(nproc)" \
+  cmake --build "$WCPP/build" --target whisper-server --config Release -j"$(nproc)" \
     || die "Build whisper.cpp fallita"
 
-  local server
-  server="$(find "$WCPP/build" -type f -name whisper-server -perm -u+x | head -1)"
-  [[ -n "$server" ]] || die "whisper-server non trovato nella build"
-  install -Dm755 "$server" "$VENV/bin/whisper-server"
-
-  mkdir -p "$VENV/lib"
-  rm -f "$VENV/lib"/libggml*.so* "$VENV/lib"/libwhisper.so* 2>/dev/null || true
-  while IFS= read -r -d '' so; do
-    cp -L "$so" "$VENV/lib/"
-  done < <(find "$WCPP/build" -name 'lib*.so*' -type f -print0)
-
-  export LD_LIBRARY_PATH="$VENV/lib:${LD_LIBRARY_PATH:-}"
-  "$VENV/bin/whisper-server" --help >/dev/null 2>&1 \
-    || die "whisper-server non eseguibile"
+  package_whisper_runtime
+  if ! verify_installed_whisper; then
+    die "whisper-server SYCL non eseguibile con il runtime oneAPI corrente"
+  fi
   printf '%s\n' "$key" > "$BUILD_MARKER"
 }
+
+build_whisper_stack() (
+  # oneAPI is scoped to this subshell. The Python/PyTorch process must not
+  # inherit its LD_LIBRARY_PATH because PyTorch XPU ships its own Intel runtime.
+  set +u
+  # shellcheck disable=SC1091
+  source "$ONEAPI/setvars.sh" >/dev/null 2>&1 \
+    || die "Inizializzazione Intel oneAPI fallita"
+  set -u
+  command -v icx >/dev/null || die "icx non disponibile dopo setvars.sh"
+  command -v icpx >/dev/null || die "icpx non disponibile dopo setvars.sh"
+
+  local key
+  key="$(build_key)"
+  build_whisper_server "$key"
+)
 
 ensure_default_models() {
   cd "$ROOT"
@@ -237,9 +284,11 @@ EOF
 
 run_environment_check() {
   cd "$ROOT"
-  export LD_LIBRARY_PATH="$VENV/lib:${LD_LIBRARY_PATH:-}"
-  export ONEAPI_DEVICE_SELECTOR="level_zero:0"
-  "$VENV/bin/python" -m core.environment_check \
+  # PyTorch XPU must resolve its wheel-provided Intel runtime. The environment
+  # checker launches whisper-server separately with the isolated oneAPI env.
+  env -u LD_LIBRARY_PATH \
+    ONEAPI_DEVICE_SELECTOR="level_zero:0" \
+    "$VENV/bin/python" -m core.environment_check \
     || die "Self-check finale fallito. Consulta il report sopra."
 }
 
@@ -261,17 +310,7 @@ main() {
   fi
 
   install_python_dependencies
-
-  set +u
-  # shellcheck disable=SC1091
-  source "$ONEAPI/setvars.sh" >/dev/null 2>&1 || true
-  set -u
-  command -v icx >/dev/null || die "icx non disponibile dopo setvars.sh"
-  command -v icpx >/dev/null || die "icpx non disponibile dopo setvars.sh"
-
-  local key
-  key="$(build_key)"
-  build_whisper_server "$key"
+  build_whisper_stack
   ensure_default_models
   install_desktop_integration
   chmod +x "$ROOT/install.sh"
