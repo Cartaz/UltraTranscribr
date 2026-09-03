@@ -44,7 +44,7 @@ def test_buffer_spill_is_fifo_and_stats_reset():
         np.testing.assert_array_equal(actual, expected)
     b.put(chunks[0])
     b.clear()
-    assert b.total_put == 0 and b.total_get == 0 and b.qsize() == 0
+    assert b.total_put == 0 and b.total_get == 0 and b.qsize == 0
     b.close()
 
 
