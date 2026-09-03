@@ -1,12 +1,16 @@
-"""Offline speaker diarization and timestamp alignment for Meeting sessions."""
+"""High-accuracy local speaker diarization for Meeting sessions.
+
+The Meeting pipeline uses pyannote Community-1 on the shared PyTorch Intel XPU
+runtime. Community-1's exclusive diarization is used for transcript
+reconciliation; there is no lightweight/CPU diarization fallback.
+"""
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
-import tarfile
 import threading
-import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -14,162 +18,239 @@ import numpy as np
 import soundfile as sf
 
 from config.constants import AppMeta, ProcessDefaults
+from core.torch_xpu import get_torch_xpu_device
 from core.transcript_export import normalize_segments
 
 logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[str, int], None]
 
-SEGMENTATION_URL = (
-    "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
-    "speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
-)
-EMBEDDING_URL = (
-    "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
-    "speaker-recongition-models/"
-    "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
-)
+COMMUNITY_REPO_ID = "pyannote/speaker-diarization-community-1"
+COMMUNITY_MODEL_NAME = "community-1"
+_MARKER_NAME = ".ultratranscribr-model.json"
+_REQUIRED_DIRECTORIES = ("segmentation", "embedding", "plda")
 
 
 class DiarizationModelManager:
+    """Own the app-local, fully offline Community-1 snapshot."""
+
     def __init__(self, root: Optional[Path] = None) -> None:
         self.root = Path(root or AppMeta.DIARIZATION_MODELS_DIR)
-        self.segmentation = self.root / "pyannote-segmentation-3.0.onnx"
-        self.embedding = self.root / "3dspeaker-eres2net-base-16k.onnx"
+        self.model_dir = self.root / COMMUNITY_MODEL_NAME
+        self.marker = self.model_dir / _MARKER_NAME
         self._lock = threading.Lock()
 
     def status(self) -> dict[str, Any]:
+        revision = ""
+        if self.marker.is_file():
+            try:
+                payload = json.loads(self.marker.read_text(encoding="utf-8"))
+                revision = str(payload.get("revision") or "")
+            except (OSError, json.JSONDecodeError, TypeError):
+                revision = ""
         return {
-            "ready": self.segmentation.is_file() and self.embedding.is_file(),
-            "segmentation": str(self.segmentation),
-            "embedding": str(self.embedding),
+            "ready": self._is_complete(self.model_dir) and bool(revision),
+            "model": str(self.model_dir),
+            "repo_id": COMMUNITY_REPO_ID,
+            "revision": revision,
         }
 
     def ensure_models(self, progress: Optional[ProgressCallback] = None) -> dict[str, Any]:
         with self._lock:
-            self.root.mkdir(parents=True, exist_ok=True)
-            if not self.segmentation.is_file():
-                archive = self.root / "segmentation.tar.bz2.part"
-                self._download(SEGMENTATION_URL, archive, "segmentation", progress)
-                try:
-                    with tarfile.open(archive, "r:bz2") as tar:
-                        member = next(
-                            (item for item in tar.getmembers() if item.isfile() and item.name.endswith("/model.onnx")),
-                            None,
-                        )
-                        if member is None:
-                            raise RuntimeError("model.onnx non trovato nell'archivio diarizzazione")
-                        source = tar.extractfile(member)
-                        if source is None:
-                            raise RuntimeError("impossibile leggere il modello diarizzazione")
-                        temp = self.segmentation.with_suffix(".onnx.tmp")
-                        with open(temp, "wb") as target:
-                            shutil.copyfileobj(source, target)
-                            target.flush()
-                            os.fsync(target.fileno())
-                        os.replace(temp, self.segmentation)
-                finally:
-                    archive.unlink(missing_ok=True)
-            if not self.embedding.is_file():
-                part = self.embedding.with_suffix(".onnx.part")
-                self._download(EMBEDDING_URL, part, "embedding", progress)
-                os.replace(part, self.embedding)
-        return self.status()
+            current = self.status()
+            if current["ready"]:
+                return current
 
-    @staticmethod
-    def _download(
-        url: str,
-        target: Path,
-        label: str,
-        progress: Optional[ProgressCallback],
-    ) -> None:
-        temp = Path(target)
-        temp.parent.mkdir(parents=True, exist_ok=True)
-        request = urllib.request.Request(url, headers={"User-Agent": "UltraTranscribr/1"})
-        with urllib.request.urlopen(request, timeout=60) as response, open(temp, "wb") as handle:
-            total = int(response.headers.get("Content-Length") or 0)
-            downloaded = 0
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                handle.write(chunk)
-                downloaded += len(chunk)
-                if progress:
-                    percent = int(downloaded * 100 / total) if total > 0 else 0
-                    progress(label, max(0, min(100, percent)))
-            handle.flush()
-            os.fsync(handle.fileno())
-        if progress:
-            progress(label, 100)
+            try:
+                from huggingface_hub import HfApi, get_token, snapshot_download
+            except ImportError as exc:
+                raise RuntimeError(
+                    "huggingface-hub non disponibile; esegui ./install.sh"
+                ) from exc
+
+            token = get_token()
+            if not token:
+                raise RuntimeError(
+                    "Community-1 richiede una tantum l'accettazione delle condizioni su "
+                    "Hugging Face e un token locale. Accetta il modello "
+                    f"'{COMMUNITY_REPO_ID}', poi esegui `.venv/bin/hf auth login` e riprova."
+                )
+
+            self.root.mkdir(parents=True, exist_ok=True)
+            staging = self.root / f".{COMMUNITY_MODEL_NAME}.download"
+            shutil.rmtree(staging, ignore_errors=True)
+            if progress:
+                progress(COMMUNITY_MODEL_NAME, 0)
+
+            try:
+                info = HfApi().model_info(COMMUNITY_REPO_ID, revision="main", token=token)
+                revision = str(info.sha or "").strip()
+                if not revision:
+                    raise RuntimeError("Hugging Face non ha restituito la revisione del modello")
+                snapshot_download(
+                    repo_id=COMMUNITY_REPO_ID,
+                    revision=revision,
+                    local_dir=staging,
+                    token=token,
+                )
+                if not self._has_model_payload(staging):
+                    raise RuntimeError("snapshot Community-1 incompleto")
+                marker = staging / _MARKER_NAME
+                marker_payload = json.dumps(
+                    {"repo_id": COMMUNITY_REPO_ID, "revision": revision},
+                    ensure_ascii=False,
+                    indent=2,
+                ) + "\n"
+                with marker.open("w", encoding="utf-8") as handle:
+                    handle.write(marker_payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                shutil.rmtree(self.model_dir, ignore_errors=True)
+                os.replace(staging, self.model_dir)
+            except Exception as exc:
+                shutil.rmtree(staging, ignore_errors=True)
+                raise RuntimeError(
+                    "Download Community-1 fallito. Verifica di aver accettato le condizioni "
+                    "del modello e che il token Hugging Face sia valido."
+                ) from exc
+
+            if progress:
+                progress(COMMUNITY_MODEL_NAME, 100)
+            return self.status()
+
+    @classmethod
+    def _has_model_payload(cls, model_dir: Path) -> bool:
+        if not (model_dir / "config.yaml").is_file():
+            return False
+        for name in _REQUIRED_DIRECTORIES:
+            directory = model_dir / name
+            try:
+                if not directory.is_dir() or not any(
+                    path.is_file() and path.stat().st_size > 0
+                    for path in directory.rglob("*")
+                ):
+                    return False
+            except OSError:
+                return False
+        return True
+
+    @classmethod
+    def _is_complete(cls, model_dir: Path) -> bool:
+        return cls._has_model_payload(model_dir) and (model_dir / _MARKER_NAME).is_file()
 
 
 class SpeakerDiarizer:
+    """Run pyannote Community-1 on XPU and return exclusive speaker turns."""
+
     def __init__(self, models: Optional[DiarizationModelManager] = None) -> None:
         self.models = models or DiarizationModelManager()
+        self._pipeline: Any | None = None
+        self._pipeline_path: Path | None = None
+        self._pipeline_lock = threading.Lock()
+
+    def _get_pipeline(self) -> Any:
+        status = self.models.ensure_models()
+        model_path = Path(str(status["model"]))
+        with self._pipeline_lock:
+            if self._pipeline is not None and self._pipeline_path == model_path:
+                return self._pipeline
+            try:
+                from pyannote.audio import Pipeline
+            except ImportError as exc:
+                raise RuntimeError(
+                    "pyannote.audio non disponibile; esegui ./install.sh"
+                ) from exc
+            pipeline = Pipeline.from_pretrained(str(model_path))
+            if pipeline is None:
+                raise RuntimeError("impossibile caricare Community-1 dalla cache locale")
+            pipeline.to(get_torch_xpu_device())
+            self._pipeline = pipeline
+            self._pipeline_path = model_path
+            return pipeline
 
     def run(
         self,
         audio_path: Path | str,
         *,
         num_speakers: int = -1,
-        cluster_threshold: float = 0.5,
         progress: Optional[Callable[[int], None]] = None,
     ) -> list[dict[str, Any]]:
-        try:
-            import sherpa_onnx
-        except ImportError as exc:
-            raise RuntimeError(
-                "Diarizzazione non disponibile: installa la dipendenza sherpa-onnx"
-            ) from exc
-
-        status = self.models.ensure_models()
-        config = sherpa_onnx.OfflineSpeakerDiarizationConfig(
-            segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
-                pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(
-                    model=status["segmentation"]
-                ),
-            ),
-            embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(
-                model=status["embedding"],
-            ),
-            clustering=sherpa_onnx.FastClusteringConfig(
-                num_clusters=int(num_speakers),
-                threshold=float(cluster_threshold),
-            ),
-            min_duration_on=0.3,
-            min_duration_off=0.5,
-        )
-        if not config.validate():
-            raise RuntimeError("configurazione diarizzazione non valida")
-        diarizer = sherpa_onnx.OfflineSpeakerDiarization(config)
+        pipeline = self._get_pipeline()
+        device = get_torch_xpu_device()
+        del device
 
         audio, sample_rate = sf.read(str(audio_path), dtype="float32", always_2d=True)
         if audio.size == 0:
             raise RuntimeError("registrazione riunione vuota")
         mono = np.mean(audio, axis=1, dtype=np.float32)
-        if int(sample_rate) != int(diarizer.sample_rate):
-            raise RuntimeError(
-                f"la diarizzazione richiede {diarizer.sample_rate} Hz; ricevuti {sample_rate} Hz"
-            )
+        if int(sample_rate) != ProcessDefaults.SAMPLE_RATE:
+            from core.audio_resampler import resample
 
-        def callback(done: int, total: int) -> int:
-            if progress and total:
-                progress(max(0, min(100, int(done * 100 / total))))
-            return 0
+            mono = resample(mono, int(sample_rate), ProcessDefaults.SAMPLE_RATE)
+        mono = np.asarray(mono, dtype=np.float32)
 
-        result = diarizer.process(mono, callback=callback).sort_by_start_time()
-        segments: list[dict[str, Any]] = []
-        for item in result:
-            segments.append(
-                {
-                    "start": round(float(item.start), 3),
-                    "end": round(float(item.end), 3),
-                    "speaker_id": f"SPEAKER_{int(item.speaker):02d}",
-                }
+        try:
+            import torch
+        except ImportError as exc:
+            raise RuntimeError("PyTorch XPU non disponibile; esegui ./install.sh") from exc
+        waveform = torch.from_numpy(mono.copy()).unsqueeze(0)
+        kwargs: dict[str, int] = {}
+        if int(num_speakers) > 0:
+            kwargs["num_speakers"] = int(num_speakers)
+
+        if progress:
+            progress(5)
+        try:
+            output = pipeline(
+                {"waveform": waveform, "sample_rate": ProcessDefaults.SAMPLE_RATE},
+                **kwargs,
             )
+        except Exception as exc:
+            raise RuntimeError(f"Diarizzazione Community-1/XPU fallita: {exc}") from exc
+
+        exclusive = getattr(output, "exclusive_speaker_diarization", None)
+        if exclusive is None:
+            raise RuntimeError("Community-1 non ha restituito exclusive_speaker_diarization")
+        segments = _annotation_to_segments(exclusive)
+        if not segments:
+            raise RuntimeError("Community-1 non ha rilevato segmenti vocali")
         if progress:
             progress(100)
         return segments
+
+
+def _annotation_to_segments(annotation: Any) -> list[dict[str, Any]]:
+    rows: list[tuple[float, float, str]] = []
+    if hasattr(annotation, "itertracks"):
+        iterator = annotation.itertracks(yield_label=True)
+        for turn, _track, label in iterator:
+            start = max(0.0, float(turn.start))
+            end = max(start, float(turn.end))
+            if end > start:
+                rows.append((start, end, str(label)))
+    else:
+        for item in annotation:
+            try:
+                turn, label = item
+                start = max(0.0, float(turn.start))
+                end = max(start, float(turn.end))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if end > start:
+                rows.append((start, end, str(label)))
+
+    rows.sort(key=lambda item: (item[0], item[1], item[2]))
+    speaker_ids: dict[str, str] = {}
+    output: list[dict[str, Any]] = []
+    for start, end, raw_label in rows:
+        speaker = speaker_ids.setdefault(raw_label, f"SPEAKER_{len(speaker_ids):02d}")
+        output.append(
+            {
+                "start": round(start, 3),
+                "end": round(end, 3),
+                "speaker_id": speaker,
+            }
+        )
+    return output
 
 
 def align_speakers(
@@ -178,9 +259,10 @@ def align_speakers(
 ) -> list[dict[str, Any]]:
     """Create editable review segments while preserving raw Whisper segments.
 
-    Speaker attribution is based on temporal overlap. When the two strongest
-    speakers have nearly equal overlap, the segment is explicitly marked
-    uncertain instead of pretending the identity is certain.
+    The supplied diarization is Community-1's exclusive speaker timeline, which
+    is specifically intended for reconciliation with transcription timestamps.
+    A Whisper segment can still straddle a real speaker hand-off; temporal
+    overlap therefore remains explicit and ambiguous assignments are marked.
     """
     transcript = normalize_segments(transcript_segments)
     diarization = [
