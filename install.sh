@@ -37,8 +37,8 @@ PY
   return 1
 }
 
-requirements_imports_ok() {
-  "$VENV/bin/python" - <<PY >/dev/null 2>&1
+_requirements_imports_probe() {
+  "$VENV/bin/python" - <<PY
 from importlib.metadata import version
 
 import PySide6
@@ -52,13 +52,24 @@ import sounddevice
 import soundfile
 import torch
 import torchaudio
-import torchcodec
 
 assert version("torch").split("+")[0] == "$TORCH_VERSION"
 assert version("torchaudio").split("+")[0] == "$TORCHAUDIO_VERSION"
+# TorchCodec is a declared pyannote dependency, but UltraTranscribr passes
+# already-decoded waveforms to Community-1 and never invokes TorchCodec.
+# Validate the installed distribution version without loading its native codec
+# extension, which may legitimately be unavailable with the XPU torch build.
 assert version("torchcodec").split("+")[0] == "$TORCHCODEC_VERSION"
 assert "+xpu" in torch.__version__, torch.__version__
 PY
+}
+
+requirements_imports_ok() {
+  if [[ "${1:-quiet}" == "verbose" ]]; then
+    _requirements_imports_probe
+  else
+    _requirements_imports_probe >/dev/null 2>&1
+  fi
 }
 
 requirements_key() {
@@ -97,16 +108,17 @@ install_python_dependencies() {
   "$VENV/bin/pip" install --index-url "$PYTORCH_XPU_INDEX" \
     "torch==$TORCH_VERSION" "torchaudio==$TORCHAUDIO_VERSION"
 
-  # pyannote.audio imports TorchCodec, but UltraTranscribr passes already-decoded
-  # waveforms to the diarizer. The CPU codec wheel therefore avoids introducing
-  # a second GPU media stack while remaining ABI-compatible with this torch pin.
+  # pyannote.audio declares TorchCodec, but UltraTranscribr passes already-decoded
+  # waveforms to the diarizer. The CPU codec wheel satisfies dependency metadata
+  # without introducing a second GPU media stack; it is not imported by our runtime.
   "$VENV/bin/pip" install --no-deps --index-url "$PYTORCH_CPU_INDEX" \
     "torchcodec==$TORCHCODEC_VERSION"
 
   log "Installazione diarizzazione Community-1 e Demucs..."
   "$VENV/bin/pip" install -r "$ROOT/requirements-xpu.txt"
 
-  requirements_imports_ok || die "Verifica dipendenze PyTorch XPU/pyannote/Demucs fallita"
+  requirements_imports_ok verbose \
+    || die "Verifica dipendenze PyTorch XPU/pyannote/Demucs fallita"
   key="$(requirements_key)"
   printf '%s\n' "$key" > "$REQ_MARKER"
 }
