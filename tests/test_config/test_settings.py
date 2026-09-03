@@ -1,22 +1,24 @@
 # tests/test_config/test_settings.py
 """Test per le impostazioni dell'applicazione unificata."""
 
+import json
+
 import pytest
 
+from config.constants import AppMeta, ProcessDefaults
 from config.settings import AudioSource, ComputeDevice, ModelSize, Settings
 
 
 class TestModelSize:
     """Test per l'enum ModelSize."""
 
-    def test_default_is_turbo(self) -> None:
-        assert ModelSize.default() == ModelSize.TURBO
+    def test_default_is_large_v3(self) -> None:
+        assert ModelSize.default() == ModelSize.LARGE_V3
 
-    def test_choices_contains_all(self) -> None:
-        choices = ModelSize.choices()
-        assert len(choices) == len(list(ModelSize))
-        assert "small" in choices
-        assert "tiny.en" in choices
+    def test_choices_exposes_only_managed_models(self) -> None:
+        assert ModelSize.choices() == ["large-v3", "large-v3-turbo", "medium"]
+        assert "small" not in ModelSize.choices()
+        assert "tiny.en" not in ModelSize.choices()
 
 
 class TestAudioSource:
@@ -47,7 +49,7 @@ class TestSettings:
         assert s.sample_rate == 16000
         assert s.channels == 1
         assert s.chunk_ms == 3000
-        assert s.model_size == ModelSize.TURBO.value
+        assert s.model_size == ModelSize.LARGE_V3.value
         assert s.device == ComputeDevice.SYCL.value
         assert s.compute_type == "f16"
         assert s.language == "en"
@@ -60,8 +62,28 @@ class TestSettings:
         s2 = s.with_(model_size="medium", language="it")
         assert s2.model_size == "medium"
         assert s2.language == "it"
-        assert s.model_size == ModelSize.TURBO.value
+        assert s.model_size == ModelSize.LARGE_V3.value
         assert s.language == "en"
+
+    def test_hidden_model_is_not_a_valid_user_setting(self) -> None:
+        with pytest.raises(ValueError, match="model_size non valido"):
+            Settings(model_size="tiny")
+
+    def test_load_migrates_old_hidden_model_without_losing_other_settings(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        settings_path = tmp_path / "settings.json"
+        settings_path.write_text(
+            json.dumps({"model_size": "tiny", "language": "it", "beam_size": 7}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(AppMeta, "SETTINGS_PATH", settings_path)
+
+        loaded = Settings.load()
+
+        assert loaded.model_size == ProcessDefaults.MODEL_SIZE
+        assert loaded.language == "it"
+        assert loaded.beam_size == 7
 
     def test_with_invalid_key_raises(self) -> None:
         s = Settings()

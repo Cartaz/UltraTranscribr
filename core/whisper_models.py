@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from config.constants import AppMeta, WhisperServerDefaults
+from config.settings import ModelSize
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ _MIN_MODEL_BYTES = {
     "medium": 900_000_000, "medium.en": 900_000_000,
     "large-v3": 1_000_000_000, "large-v3-turbo": 500_000_000,
 }
-_UI_MODEL_CHOICES = ("large-v3", "large-v3-turbo", "medium")
+_UI_MODEL_CHOICES = tuple(ModelSize.choices())
 ProgressCallback = Callable[[int, Optional[int]], None]
 
 
@@ -57,7 +58,7 @@ class WhisperModelManager:
     def get_model_path(self, model_size: str) -> Path:
         filename = self._resolve_filename(model_size)
         target = self._models_dir / filename
-        min_bytes = _MIN_MODEL_BYTES.get(model_size, 1_000_000)
+        min_bytes = _MIN_MODEL_BYTES[model_size]
         if self._is_valid_cached(target, min_bytes):
             return target
         return self._download_asset(_ASR_REPOS, filename, target, min_bytes)
@@ -71,7 +72,7 @@ class WhisperModelManager:
 
     def is_model_cached(self, model_size: str) -> bool:
         target = self._models_dir / self._resolve_filename(model_size)
-        return self._is_valid_cached(target, _MIN_MODEL_BYTES.get(model_size, 1_000_000))
+        return self._is_valid_cached(target, _MIN_MODEL_BYTES[model_size])
 
     def get_model_info(self, model_size: str) -> dict[str, object]:
         """Return cheap inventory information without hashing multi-GB files."""
@@ -157,7 +158,8 @@ class WhisperModelManager:
         return removed
 
     def _resolve_filename(self, model_size: str) -> str:
-        return _MODEL_FILES.get(model_size, WhisperServerDefaults.MODEL_FILENAME)
+        self._require_known_model(model_size)
+        return _MODEL_FILES[model_size]
 
     @staticmethod
     def _require_known_model(model_size: str) -> None:

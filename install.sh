@@ -179,10 +179,11 @@ build_whisper_server() {
 ensure_default_models() {
   cd "$ROOT"
   "$VENV/bin/python" - <<'PY'
+from config.constants import ProcessDefaults
 from core.whisper_models import WhisperModelManager
 
 manager = WhisperModelManager()
-print("ASR:", manager.get_model_path("large-v3-turbo"))
+print("ASR:", manager.get_model_path(ProcessDefaults.MODEL_SIZE))
 print("VAD:", manager.get_vad_model_path())
 PY
 }

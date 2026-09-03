@@ -57,6 +57,18 @@ def test_each_settings_group_has_a_scoped_reset() -> None:
     assert "sessionBusy()" in script
 
 
+def test_model_selection_is_immediate_and_file_queue_has_no_turbo_fallback() -> None:
+    settings_script = (WEB / "settings_cleanup.js").read_text(encoding="utf-8")
+    file_script = (WEB / "file_history.js").read_text(encoding="utf-8")
+    application = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
+
+    assert '$("s-model").onchange = settingsSelectModel' in settings_script
+    assert 'JSON.stringify({model_size: model})' in settings_script
+    assert '"modelChoices": ModelSize.choices()' in application
+    assert 'settings.model_size || "large-v3-turbo"' not in file_script
+    assert 'const selectedModel = String(settings.model_size || "").trim()' in file_script
+
+
 def test_window_geometry_is_persisted_automatically_with_debounce() -> None:
     main_window = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
     application = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
