@@ -8,9 +8,19 @@ import pytest
 from core import sycl_runtime
 
 
-def test_oneapi_library_probe_starts_clean_and_forces_reinitialization(monkeypatch) -> None:
+def _fake_setvars(monkeypatch, tmp_path: Path) -> Path:
+    setvars = tmp_path / "setvars.sh"
+    setvars.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    monkeypatch.setattr(sycl_runtime, "_ONEAPI_SETVARS", setvars)
+    return setvars
+
+
+def test_oneapi_library_probe_starts_clean_and_forces_reinitialization(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     sycl_runtime.oneapi_library_paths.cache_clear()
-    monkeypatch.setattr(sycl_runtime._ONEAPI_SETVARS, "is_file", lambda: True)
+    _fake_setvars(monkeypatch, tmp_path)
     monkeypatch.setenv("LD_LIBRARY_PATH", "/venv/old-runtime:/custom")
     monkeypatch.setenv("SETVARS_COMPLETED", "1")
     captured: dict[str, object] = {}
@@ -66,9 +76,9 @@ def test_whisper_env_prioritizes_oneapi_before_virtualenv_runtime(monkeypatch, t
     assert env["ONEAPI_DEVICE_SELECTOR"] == "level_zero:0"
 
 
-def test_oneapi_probe_failure_is_actionable(monkeypatch) -> None:
+def test_oneapi_probe_failure_is_actionable(monkeypatch, tmp_path: Path) -> None:
     sycl_runtime.oneapi_library_paths.cache_clear()
-    monkeypatch.setattr(sycl_runtime._ONEAPI_SETVARS, "is_file", lambda: True)
+    _fake_setvars(monkeypatch, tmp_path)
     monkeypatch.setattr(
         sycl_runtime.subprocess,
         "run",
