@@ -44,7 +44,7 @@ def test_buffer_spill_is_fifo_and_stats_reset():
         np.testing.assert_array_equal(actual, expected)
     b.put(chunks[0])
     b.clear()
-    assert b.total_put == 0 and b.total_get == 0 and b.qsize == 0
+    assert b.total_put == 0 and b.total_get == 0 and b.qsize() == 0
     b.close()
 
 
@@ -186,49 +186,34 @@ def test_demucs_output_is_the_file_actually_transcribed(monkeypatch):
     assert seen["source"] == "/tmp/vocals.wav"
 
 
-def test_demucs_api_does_not_pass_cli_only_two_stems(monkeypatch, tmp_path):
-    import core.vocal_isolator_io as vio
+def test_demucs_device_selection_is_owned_by_shared_xpu_runtime(monkeypatch, tmp_path):
+    import core.vocal_isolator as vi
 
-    captured_kwargs = {}
+    input_file = tmp_path / "song.wav"
+    input_file.write_bytes(b"RIFF")
+    monkeypatch.setattr(vi.importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setattr(vi, "get_torch_xpu_device", lambda: "xpu:0")
 
-    class FakeSeparator:
-        samplerate = 44100
+    captured = {}
+    io_module = ModuleType("core.vocal_isolator_io")
 
-        def __init__(self, **kwargs):
-            captured_kwargs.update(kwargs)
+    def fake_isolate(input_path, model_name, device, stop_event, progress_callback):
+        captured.update(
+            input_path=input_path,
+            model_name=model_name,
+            device=device,
+            stop_event=stop_event,
+            progress_callback=progress_callback,
+        )
+        output = tmp_path / "vocals.wav"
+        output.write_bytes(b"RIFF")
+        return str(output)
 
-        def separate_audio_file(self, input_path):
-            return None, {"vocals": object()}
+    io_module.isolate_vocals_xpu = fake_isolate
+    monkeypatch.setitem(sys.modules, "core.vocal_isolator_io", io_module)
 
-    demucs_module = ModuleType("demucs")
-    api_module = ModuleType("demucs.api")
-    api_module.Separator = FakeSeparator
-    demucs_module.api = api_module
-    monkeypatch.setitem(sys.modules, "demucs", demucs_module)
-    monkeypatch.setitem(sys.modules, "demucs.api", api_module)
+    result = vi.isolate_vocals(str(input_file), device="cpu")
 
-    out_dir = tmp_path / "demucs-out"
-    out_dir.mkdir()
-    monkeypatch.setattr(
-        vio.tempfile,
-        "mkdtemp",
-        lambda prefix: str(out_dir),
-    )
-    monkeypatch.setattr(
-        vio,
-        "_save_vocals_wav",
-        lambda output_path, vocals_tensor, sample_rate: Path(
-            output_path
-        ).write_bytes(b"RIFF"),
-    )
-
-    result = vio._isolate_api(
-        "song.wav",
-        "htdemucs",
-        "cpu",
-        None,
-        None,
-    )
-
-    assert captured_kwargs == {"model": "htdemucs", "device": "cpu"}
-    assert result == str(out_dir / "vocals.wav")
+    assert captured["device"] == "xpu:0"
+    assert captured["model_name"] == "htdemucs"
+    assert result == str(tmp_path / "vocals.wav")
