@@ -19,6 +19,15 @@ class _Controller:
             window_height=820,
         )
         self.updates: list[dict[str, object]] = []
+        self.subscriptions: list[tuple[str, object]] = []
+
+    def subscribe(self, event: str, handler) -> None:
+        self.subscriptions.append((event, handler))
+
+    def unsubscribe(self, event: str, handler) -> None:
+        subscription = (event, handler)
+        if subscription in self.subscriptions:
+            self.subscriptions.remove(subscription)
 
     def active_live_count(self) -> int:
         return 0
