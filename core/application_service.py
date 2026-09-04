@@ -122,6 +122,12 @@ class ApplicationService:
 
     def dictation_shortcut_pressed(self) -> None:
         """Forward one native global-shortcut press into the canonical dictation state."""
+        if self.meeting.is_busy() or self.meeting_batch.is_busy():
+            self._bus.emit(
+                "dictation_error",
+                "Termina la riunione o la coda Riunioni prima di avviare la dettatura",
+            )
+            return
         self.controller.dictation_shortcut_pressed()
 
     def dictation_shortcut_released(self) -> None:
