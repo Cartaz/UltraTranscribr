@@ -12,12 +12,23 @@ media -> FLAC mono 16 kHz -> Whisper/SYCL -> Community-1/XPU -> allineamento spe
 
 UltraTranscribr non esegue più riunioni in parallelo. In questo modo Whisper e Community-1 non competono per GPU/RAM e il batch resta utilizzabile anche su sistemi con memoria limitata.
 
+## Configurazione per registrazione
+
+I campi **Lingua predefinita** e **Interlocutori predefiniti** servono solo come valori iniziali quando vengono selezionati i file. Prima di avviare il batch, la UI mostra una riga per ogni registrazione e permette di cambiare separatamente:
+
+- lingua;
+- numero di interlocutori (`0` = rilevamento automatico, massimo `20`).
+
+Questi valori vengono congelati nel relativo job quando il batch viene avviato. È quindi possibile elaborare nello stesso batch, per esempio, una riunione con 5 interlocutori, una con 4 e una con 9 senza creare code separate.
+
+La richiesta viene validata interamente prima di modificare la coda: un file mancante o una configurazione non valida non può lasciare un batch parzialmente accodato.
+
 ## Comportamento
 
 - si possono selezionare più registrazioni con un'unica finestra file;
-- lingua e numero di interlocutori scelti al momento dell'accodamento vengono salvati in ogni job;
+- lingua e numero di interlocutori possono essere configurati separatamente per ogni registrazione prima dell'avvio;
 - il modello Whisper resta quello configurato nell'applicazione e le impostazioni backend sono bloccate finché la coda è attiva;
-- ogni job mostra fase, progresso Whisper e progresso diarizzazione;
+- ogni job mostra la propria configurazione, la fase, il progresso Whisper e il progresso diarizzazione;
 - al completamento la riunione viene salvata nell'Archivio senza aprire automaticamente la review;
 - se un job fallisce, l'errore resta visibile nella coda e il job successivo viene avviato comunque;
 - **Annulla coda** interrompe la riunione attiva e marca come annullate quelle ancora in attesa;
@@ -28,4 +39,4 @@ Live, File, Dettatura, ricalcolo della diarizzazione e modifiche alle impostazio
 
 ## Ownership
 
-`core/meeting_batch.py` possiede esclusivamente scheduling FIFO e stato transitorio dei job. `MeetingManager` resta l'unico proprietario della pipeline di una singola riunione. `ApplicationService` applica le regole di esclusività tra workflow e possiede il lifecycle della coda; il bridge QWebChannel espone soltanto valori serializzati e comandi mirati.
+`core/meeting_batch.py` possiede esclusivamente scheduling FIFO e stato transitorio dei job. `MeetingManager` resta l'unico proprietario della pipeline di una singola riunione. `ApplicationService` normalizza i valori per-file, applica le regole di esclusività tra workflow e possiede il lifecycle della coda; il bridge QWebChannel espone soltanto valori serializzati e comandi mirati.
