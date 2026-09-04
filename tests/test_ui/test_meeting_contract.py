@@ -41,7 +41,8 @@ def test_meeting_supports_realtime_multisource_file_and_review() -> None:
     for token in (
         'button.textContent = "Riunione"',
         "startMeetingRealtime",
-        "startMeetingFile",
+        "enqueueMeetingBatch",
+        "chooseAudioFiles",
         "finishMeeting",
         "getMeetingAudioUrl",
         "setMeetingSpeakerName",
@@ -60,6 +61,7 @@ def test_meeting_supports_realtime_multisource_file_and_review() -> None:
         assert token in source
     assert "def startMeetingRealtime" in bridge
     assert "def startMeetingFile" in bridge
+    assert "def enqueueMeetingBatch" in bridge
     assert "def startMeeting(" not in bridge
     assert "def start_meeting(" not in application
     assert "len(decoded) > 8" in bridge
