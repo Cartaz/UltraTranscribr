@@ -14,6 +14,7 @@ La configurazione di riferimento è CachyOS/Arch Linux con GPU Intel e due runti
 - Trascrizione File singola o batch con timestamp ed export `.txt`, `.srt`, `.vtt`.
 - Modalità Musica con isolamento vocale Demucs/HTDemucs su Intel XPU.
 - Riunioni realtime multi-sorgente oppure da registrazione audio/video esistente.
+- Batch Riunioni sequenziale per elaborare più registrazioni senza inferenze GPU concorrenti, con lingua e numero interlocutori configurabili per ogni file.
 - Fino a 8 sorgenti realtime conservate come tracce FLAC separate e sincronizzate.
 - Diarizzazione locale ad alta accuratezza con `pyannote/speaker-diarization-community-1`.
 - Timestamp Whisper parola-per-parola per separare cambi di interlocutore anche dentro un singolo segmento di trascrizione.
@@ -120,6 +121,14 @@ microfono / sistema / applicazioni        file audio/video
 
 Se il numero di interlocutori è noto viene passato direttamente a Community-1; `0` mantiene il conteggio automatico. UltraTranscribr assegna identificatori tecnici `SPEAKER_00`, `SPEAKER_01`, ecc. e non tenta di riconoscere l'identità reale delle persone. I nomi vengono aggiunti manualmente nella review e non viene mantenuta alcuna libreria di campioni vocali.
 
+### Batch di registrazioni
+
+In **Riunione → Da registrazione** è possibile selezionare più file audio/video e avviarli come coda FIFO. La coda esegue una sola pipeline Meeting alla volta, quindi Whisper/SYCL e Community-1/XPU non competono tra loro per GPU e RAM.
+
+I campi generali di lingua e numero interlocutori diventano valori predefiniti per i file appena selezionati. Prima di avviare il batch ogni registrazione ha una propria riga modificabile: lingua e numero di interlocutori (`0` = automatico, massimo `20`) vengono congelati nel relativo job. È quindi possibile mescolare nello stesso batch, per esempio, riunioni con 4, 5 e 9 interlocutori.
+
+Se un job fallisce, viene marcato in errore e la coda continua con quello successivo. Le riunioni completate vengono archiviate senza aprire automaticamente ogni review. **Annulla coda** interrompe la riunione corrente e annulla quelle ancora in attesa; **Pulisci completate** pulisce soltanto la vista della coda e non cancella l'Archivio. La coda è transitoria e non viene ripristinata dopo un riavvio dell'applicazione. La descrizione dettagliata è in `docs/MEETING_BATCH.md`.
+
 ### Allineamento speaker e review
 
 Per le nuove trascrizioni UltraTranscribr conserva i timestamp parola-per-parola restituiti da whisper.cpp. Ogni parola viene riconciliata con la timeline `exclusive_speaker_diarization`: se un singolo segmento Whisper contiene prima una domanda di uno speaker e subito dopo la risposta di un altro, la review viene spezzata automaticamente al cambio interlocutore invece di assegnare l'intero blocco a una sola persona.
@@ -209,7 +218,7 @@ node --check ui/web/meeting.js
 
 La CI headless verifica logica, contratti, sintassi e lifecycle senza fingere la presenza di una GPU Intel reale. Il test fisico di PyTorch XPU, Community-1 e HTDemucs resta parte del self-check/installazione sul sistema target.
 
-La documentazione della pipeline Riunione è in `docs/MEETING_PIPELINE.md`; quella della Dettatura globale in `docs/DICTATION.md` e `docs/DICTATION_VALIDATION.md`.
+La documentazione della pipeline Riunione è in `docs/MEETING_PIPELINE.md`; il batch Riunioni è descritto in `docs/MEETING_BATCH.md`; quella della Dettatura globale in `docs/DICTATION.md` e `docs/DICTATION_VALIDATION.md`.
 
 ## Licenza
 
