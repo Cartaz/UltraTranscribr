@@ -433,6 +433,18 @@ class ApplicationService:
             num_speakers=num_speakers,
         )
 
+    def rerun_meeting_diarization(
+        self,
+        session_id: str,
+        *,
+        num_speakers: int,
+    ) -> dict[str, Any]:
+        self._require_meeting_start_available()
+        return self.meeting.rerun_diarization(
+            session_id,
+            num_speakers=num_speakers,
+        )
+
     def finish_meeting(self) -> dict[str, Any]:
         return self.meeting.finish()
 
@@ -444,11 +456,8 @@ class ApplicationService:
         return self.meeting.get(session_id)
 
     def meeting_audio_path(self, session_id: str) -> str:
-        meeting = self.meeting.get(session_id)
-        path = Path(
-            str((meeting or {}).get("meeting", {}).get("recording", {}).get("path") or "")
-        )
-        return str(path) if path.is_file() else ""
+        path = self.meeting.audio_path(session_id)
+        return str(path) if path is not None else ""
 
     def set_meeting_speaker_name(
         self, session_id: str, speaker_id: str, name: str
