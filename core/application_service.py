@@ -469,6 +469,11 @@ class ApplicationService:
     ) -> dict[str, Any]:
         return self.meeting.edit_segment(session_id, index, text)
 
+    def set_meeting_segment_speaker(
+        self, session_id: str, index: int, speaker_id: str
+    ) -> dict[str, Any]:
+        return self.meeting.set_segment_speaker(session_id, index, speaker_id)
+
     def delete_meeting_audio(self, session_id: str) -> bool:
         return self.meeting.delete_audio(session_id)
 
