@@ -263,23 +263,24 @@ class BackendBridge(QObject):
         except Exception as exc:
             return self._error(exc)
 
-    @Slot(str, str, int, result=str)
-    def enqueueMeetingBatch(
-        self,
-        paths_json: str,
-        language: str,
-        num_speakers: int,
-    ) -> str:
+    @Slot(str, result=str)
+    def enqueueMeetingBatch(self, jobs_json: str) -> str:
         try:
-            decoded = json.loads(paths_json)
+            decoded = json.loads(jobs_json)
             if not isinstance(decoded, list):
-                raise ValueError("elenco registrazioni non valido")
-            paths = [str(path) for path in decoded if str(path).strip()]
-            jobs = self._application.enqueue_meeting_files(
-                paths,
-                language=language.strip() or None,
-                num_speakers=int(num_speakers),
-            )
+                raise ValueError("elenco riunioni non valido")
+            entries: list[dict[str, Any]] = []
+            for item in decoded:
+                if not isinstance(item, dict):
+                    raise ValueError("configurazione riunione non valida")
+                entries.append(
+                    {
+                        "path": str(item.get("path") or "").strip(),
+                        "language": str(item.get("language") or "").strip(),
+                        "num_speakers": item.get("num_speakers", 0),
+                    }
+                )
+            jobs = self._application.enqueue_meeting_files(entries)
             return self._ok(jobs=jobs)
         except Exception as exc:
             return self._error(exc)
