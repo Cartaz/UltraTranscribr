@@ -20,17 +20,38 @@ def test_meeting_batch_is_owned_below_webchannel_and_reuses_meeting_pipeline() -
     assert "def cancel_meeting_queue" in application
     assert "def clear_finished_meeting_queue" in application
     assert "def enqueueMeetingBatch" in bridge
-    assert "self._application.enqueue_meeting_files(" in bridge
+    assert "self._application.enqueue_meeting_files(entries)" in bridge
     assert '"meeting_queue_changed"' in bridge
     assert '"meeting_queue_job_updated"' in bridge
 
 
-def test_meeting_recording_picker_and_queue_support_multiple_files() -> None:
+def test_meeting_recording_picker_stages_per_file_settings_before_queue_start() -> None:
+    web = (ROOT / "ui" / "web" / "meeting.js").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    application = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
+
+    assert "let meetingFileDrafts = [];" in web
+    assert 'call("chooseAudioFiles"' in web
+    assert 'id="meeting-batch-drafts"' in web
+    assert "meetingRenderBatchDrafts" in web
+    assert 'languageInput.setAttribute("aria-label"' in web
+    assert 'speakersInput.setAttribute("aria-label"' in web
+    assert 'speakersInput.min = "0"' in web
+    assert 'speakersInput.max = "20"' in web
+    assert "meetingConfiguredBatch" in web
+    assert 'call("enqueueMeetingBatch", [JSON.stringify(configured)]' in web
+    assert "Lingua predefinita" in web
+    assert "Interlocutori predefiniti" in web
+    assert "modificarli separatamente per ogni registrazione" in web
+    assert "def enqueueMeetingBatch(self, jobs_json: str)" in bridge
+    assert '"language": str(item.get("language")' in bridge
+    assert '"num_speakers": item.get("num_speakers", 0)' in bridge
+    assert "default_language = self.controller.settings.language" in application
+
+
+def test_meeting_queue_displays_frozen_per_file_configuration() -> None:
     web = (ROOT / "ui" / "web" / "meeting.js").read_text(encoding="utf-8")
 
-    assert "let meetingFilePaths = [];" in web
-    assert 'call("chooseAudioFiles"' in web
-    assert 'call("enqueueMeetingBatch"' in web
     assert 'id="meeting-batch-list"' in web
     assert 'id="meeting-batch-cancel"' in web
     assert 'id="meeting-batch-clear"' in web
@@ -38,6 +59,8 @@ def test_meeting_recording_picker_and_queue_support_multiple_files() -> None:
     assert "meetingRenderBatchQueue" in web
     assert "transcription_progress" in web
     assert "diarization_progress" in web
+    assert 'job.language || "auto"' in web
+    assert "job.num_speakers" in web
     assert "una alla volta" in web
 
 
@@ -67,10 +90,14 @@ def test_meeting_batch_locks_competing_workflows_and_backend_settings() -> None:
     assert '$("meeting-language").disabled = active' in web
 
 
-def test_meeting_batch_ui_has_dedicated_neumorphic_queue_styles() -> None:
+def test_meeting_batch_ui_has_dedicated_neumorphic_queue_and_draft_styles() -> None:
     css = (ROOT / "ui" / "web" / "meeting.css").read_text(encoding="utf-8")
 
     for token in (
+        ".meeting-batch-drafts-wrap",
+        ".meeting-batch-drafts",
+        ".meeting-batch-draft-item",
+        ".meeting-batch-draft-field",
         ".meeting-batch-card",
         ".meeting-batch-list",
         ".meeting-batch-item",
