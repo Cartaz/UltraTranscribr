@@ -427,10 +427,7 @@ class ApplicationService:
 
     def enqueue_meeting_files(
         self,
-        paths: list[str],
-        *,
-        language: str | None,
-        num_speakers: int,
+        entries: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         if self.batch_busy():
             raise RuntimeError(
@@ -446,13 +443,21 @@ class ApplicationService:
             raise RuntimeError(
                 "Ferma Live, File o Dettatura prima di avviare la coda Riunioni"
             )
-        settings = self.controller.settings
-        resolved_language = str(language or "").strip() or settings.language
-        return self.meeting_batch.enqueue(
-            paths,
-            language=resolved_language,
-            num_speakers=int(num_speakers),
-        )
+
+        default_language = self.controller.settings.language
+        normalized: list[dict[str, Any]] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise ValueError("configurazione riunione non valida")
+            normalized.append(
+                {
+                    "path": str(entry.get("path") or "").strip(),
+                    "language": str(entry.get("language") or "").strip()
+                    or default_language,
+                    "num_speakers": entry.get("num_speakers", 0),
+                }
+            )
+        return self.meeting_batch.enqueue(normalized)
 
     def list_meeting_queue(self) -> list[dict[str, Any]]:
         return self.meeting_batch.list_jobs()
