@@ -19,6 +19,7 @@ from core.audio_diagnostics import build_audio_diagnostics
 from core.background_tasks import BackgroundTaskGroup
 from core.event_bus import EventBus
 from core.history_postprocess import generate_history_postprocess
+from core.meeting_batch import MeetingBatchCoordinator
 from core.session_recordings import delete_recording, recording_info
 from core.transcript_postprocess import profile_choices
 
@@ -45,6 +46,12 @@ class ApplicationService:
         self.meeting = controller.meeting
         self.controller.history.migrate_legacy_session_names()
         self._bus = EventBus()
+        self.meeting_batch = MeetingBatchCoordinator(
+            self.meeting,
+            subscribe=self.controller.subscribe,
+            unsubscribe=self.controller.unsubscribe,
+            event_sink=self._bus.emit,
+        )
         self._tasks = BackgroundTaskGroup("Application", join_timeout=10.0)
         self._subscriptions: list[tuple[str, Callable[[Any], None]]] = []
         self._closed = False
@@ -54,6 +61,10 @@ class ApplicationService:
         if self._closed:
             return
         self._closed = True
+        try:
+            self.meeting_batch.close()
+        except Exception:
+            logger.exception("Chiusura coda Meeting fallita")
         for event, handler in reversed(self._subscriptions):
             try:
                 self.controller.unsubscribe(event, handler)
@@ -169,6 +180,7 @@ class ApplicationService:
             "playbackStreams": discovery["streams"],
             "liveSessions": sessions,
             "fileQueue": self.file_batch.list_jobs(),
+            "meetingQueue": self.meeting_batch.list_jobs(),
             "postprocessProfiles": profile_choices(),
             "meetingRuntime": self.meeting.snapshot(),
             "diarizationModels": self.meeting.models.status(),
@@ -182,6 +194,7 @@ class ApplicationService:
                 "backendRunning": self.controller.backend.is_running,
                 "bufferLevel": self.controller.buffer.buffer_level,
                 "meetingBusy": self.meeting.is_busy(),
+                "meetingBatchBusy": self.meeting_batch.is_busy(),
             },
         }
 
@@ -194,8 +207,10 @@ class ApplicationService:
         return {key: value for key, value in payload.items() if key in allowed}
 
     def apply_settings(self, overrides: dict[str, Any]) -> Settings:
-        if self.meeting.is_busy():
-            raise RuntimeError("Termina la riunione prima di modificare le impostazioni")
+        if self.meeting.is_busy() or self.meeting_batch.is_busy():
+            raise RuntimeError(
+                "Termina la riunione o la coda Riunioni prima di modificare le impostazioni"
+            )
         before = self.controller.settings
         backend_changed = any(
             key in overrides and overrides[key] != getattr(before, key, None)
@@ -278,9 +293,9 @@ class ApplicationService:
             else:
                 sink_name = selection or None
 
-            if self.meeting.is_busy():
+            if self.meeting.is_busy() or self.meeting_batch.is_busy():
                 raise RuntimeError(
-                    "Termina la riunione prima di avviare una sessione Live"
+                    "Termina la riunione o la coda Riunioni prima di avviare una sessione Live"
                 )
             if self.controller.is_file_busy():
                 raise RuntimeError("Ferma la trascrizione File prima di avviare Live")
@@ -334,9 +349,9 @@ class ApplicationService:
         source = Path(path).expanduser()
         if not source.is_file():
             raise FileNotFoundError("Seleziona un file esistente")
-        if self.meeting.is_busy():
+        if self.meeting.is_busy() or self.meeting_batch.is_busy():
             raise RuntimeError(
-                "Termina la riunione prima di avviare una trascrizione File"
+                "Termina la riunione o la coda Riunioni prima di avviare una trascrizione File"
             )
         self.controller.start_file_transcription(
             str(source),
@@ -367,8 +382,10 @@ class ApplicationService:
         resolved_model = (
             model_size if model_size in ModelSize.choices() else settings.model_size
         )
-        if self.meeting.is_busy():
-            raise RuntimeError("Termina la riunione prima di accodare file")
+        if self.meeting.is_busy() or self.meeting_batch.is_busy():
+            raise RuntimeError(
+                "Termina la riunione o la coda Riunioni prima di accodare file"
+            )
         return self.file_batch.enqueue(
             paths,
             language=resolved_language,
@@ -399,10 +416,55 @@ class ApplicationService:
             for job in self.file_batch.list_jobs()
         )
 
+    def meeting_batch_busy(self) -> bool:
+        return self.meeting_batch.is_busy()
+
+    def enqueue_meeting_files(
+        self,
+        paths: list[str],
+        *,
+        language: str | None,
+        num_speakers: int,
+    ) -> list[dict[str, Any]]:
+        if self.batch_busy():
+            raise RuntimeError(
+                "Annulla o completa la coda File prima di accodare riunioni"
+            )
+        if self.meeting.is_busy() and not self.meeting_batch.is_busy():
+            raise RuntimeError("Termina la riunione corrente prima di accodarne altre")
+        if (
+            self.controller.active_live_count() > 0
+            or self.controller.is_file_busy()
+            or self.controller.dictation_busy()
+        ):
+            raise RuntimeError(
+                "Ferma Live, File o Dettatura prima di avviare la coda Riunioni"
+            )
+        settings = self.controller.settings
+        resolved_language = str(language or "").strip() or settings.language
+        return self.meeting_batch.enqueue(
+            paths,
+            language=resolved_language,
+            num_speakers=int(num_speakers),
+        )
+
+    def list_meeting_queue(self) -> list[dict[str, Any]]:
+        return self.meeting_batch.list_jobs()
+
+    def cancel_meeting_queue(self) -> list[dict[str, Any]]:
+        return self.meeting_batch.cancel(clear_pending=True)
+
+    def clear_finished_meeting_queue(self) -> list[dict[str, Any]]:
+        return self.meeting_batch.clear_finished()
+
     def _require_meeting_start_available(self) -> None:
         if self.batch_busy():
             raise RuntimeError(
                 "Annulla o completa la coda File prima di avviare una riunione"
+            )
+        if self.meeting_batch.is_busy():
+            raise RuntimeError(
+                "Annulla o completa la coda Riunioni prima di avviare una riunione manuale"
             )
 
     def start_meeting_realtime(
@@ -478,8 +540,10 @@ class ApplicationService:
         return self.meeting.delete_audio(session_id)
 
     def require_meeting_idle(self, action: str) -> None:
-        if self.meeting.is_busy():
-            raise RuntimeError(f"Termina la riunione prima di {action}")
+        if self.meeting.is_busy() or self.meeting_batch.is_busy():
+            raise RuntimeError(
+                f"Termina la riunione o la coda Riunioni prima di {action}"
+            )
 
     def _require_transcription_idle(self) -> None:
         if self.controller.active_live_count() > 0 or self.controller.is_file_busy():
