@@ -17,6 +17,7 @@ La configurazione di riferimento è CachyOS/Arch Linux con GPU Intel e due runti
 - Fino a 8 sorgenti realtime conservate come tracce FLAC separate e sincronizzate.
 - Diarizzazione locale ad alta accuratezza con `pyannote/speaker-diarization-community-1`.
 - Numero di interlocutori noto opzionale e `exclusive_speaker_diarization` per la riconciliazione con Whisper.
+- Ricalcolo della sola diarizzazione su riunioni già trascritte, riusando audio e segmenti Whisper persistiti.
 - Nomi speaker e correzioni manuali senza creare una libreria biometrica/voiceprint.
 - Cronologia persistente, recovery audio e retention configurabile.
 - UI Dark Neumorphism con stato canonico mantenuto in Python.
@@ -111,6 +112,14 @@ microfono / sistema / applicazioni        file audio/video
 ```
 
 Se il numero di interlocutori è noto viene passato direttamente a Community-1; `0` mantiene il conteggio automatico. UltraTranscribr assegna identificatori tecnici `SPEAKER_00`, `SPEAKER_01`, ecc. e non tenta di riconoscere l'identità reale delle persone. I nomi vengono aggiunti manualmente nella review e non viene mantenuta alcuna libreria di campioni vocali.
+
+### Ricalcolo della diarizzazione
+
+Dalla review di una Riunione è possibile scegliere nuovamente il numero di interlocutori e usare **Ricalcola diarizzazione**. Questo percorso non avvia whisper.cpp: riusa il FLAC canonico conservato e i segmenti Whisper timestampati già persistiti, quindi sostituisce soltanto la diarizzazione e il relativo allineamento speaker.
+
+Il risultato precedente viene sostituito solo dopo un ricalcolo completato con successo. Se Community-1 fallisce o l'operazione viene annullata, review e diarizzazione già salvate restano utilizzabili. Le correzioni manuali del testo vengono riapplicate quando il segmento Whisper raw è ancora lo stesso; gli ID speaker vengono inoltre stabilizzati per sovrapposizione temporale con la diarizzazione precedente, così i nomi manuali restano associati per quanto possibile allo stesso interlocutore.
+
+Il ricalcolo richiede che l'audio della Riunione sia ancora conservato. Dopo **Elimina audio** o dopo la retention automatica, la sola trascrizione testuale non è sufficiente per eseguire nuovamente Community-1.
 
 ### Primo download di Community-1
 

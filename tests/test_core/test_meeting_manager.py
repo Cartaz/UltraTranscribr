@@ -3,6 +3,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import pytest
 import soundfile as sf
 
 from config.constants import AppMeta
@@ -110,17 +111,20 @@ class _FakeFileWorker:
 
 class _Models:
     def status(self):
-        return {"ready": True, "segmentation": "seg.onnx", "embedding": "emb.onnx"}
+        return {"ready": True, "model": "community-1"}
 
     def ensure_models(self, progress=None):
         if progress:
-            progress("segmentation", 100)
+            progress("community-1", 100)
         return self.status()
 
 
 class _Diarizer:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
     def run(self, path, *, num_speakers, progress=None):
-        del path, num_speakers
+        self.calls.append((str(path), int(num_speakers)))
         if progress:
             progress(100)
         return [{"start": 0.0, "end": 0.5, "speaker_id": "SPEAKER_00"}]
@@ -162,11 +166,27 @@ def _wait_until(predicate, timeout: float = 2.0) -> None:
     raise AssertionError("condition did not become true before timeout")
 
 
+def _completed_meeting(
+    manager: MeetingManager,
+    *,
+    num_speakers: int = 1,
+) -> str:
+    started = manager.start_realtime(
+        _single_microphone(),
+        language="it",
+        num_speakers=num_speakers,
+    )
+    manager.finish()
+    _wait_until(lambda: manager.snapshot()["status"] == "completed")
+    return str(started["id"])
+
+
 def test_meeting_exposes_only_canonical_start_entrypoints(monkeypatch, tmp_path: Path) -> None:
     _, manager = _manager(monkeypatch, tmp_path)
     assert not hasattr(manager, "start")
     assert callable(manager.start_realtime)
     assert callable(manager.start_file)
+    assert callable(manager.rerun_diarization)
 
 
 def test_meeting_start_finish_processes_to_reviewable_session(monkeypatch, tmp_path: Path) -> None:
@@ -196,6 +216,68 @@ def test_meeting_start_finish_processes_to_reviewable_session(monkeypatch, tmp_p
     assert review[0]["speaker_id"] == "SPEAKER_00"
     assert review[0]["raw_text"] == "Ciao a tutti"
     assert Path(combined["meeting"]["recording"]["path"]).is_file()
+
+
+def test_rerun_diarization_reuses_raw_segments_without_starting_whisper(monkeypatch, tmp_path: Path) -> None:
+    controller, manager = _manager(monkeypatch, tmp_path)
+    session_id = _completed_meeting(manager)
+    raw_before = controller.history.get_session(session_id)
+    assert raw_before is not None
+    raw_segments = list(raw_before["segments"])
+    raw_text = raw_before["text"]
+    manager.set_speaker_name(session_id, "SPEAKER_00", "Marco")
+    manager.edit_segment(session_id, 0, "Correzione manuale")
+    starts_before = controller.backend_starts
+
+    started = manager.rerun_diarization(session_id, num_speakers=4)
+    assert started["operation"] == "rediarization"
+    assert started["progress"] == 100
+    _wait_until(lambda: manager.snapshot()["status"] == "completed")
+
+    combined = manager.get(session_id)
+    assert combined is not None
+    assert controller.backend_starts == starts_before
+    assert combined["text"] == raw_text
+    assert combined["segments"] == raw_segments
+    assert combined["meeting"]["num_speakers"] == 4
+    assert combined["meeting"]["speaker_names"] == {"SPEAKER_00": "Marco"}
+    assert combined["meeting"]["review_segments"][0]["text"] == "Correzione manuale"
+    assert combined["meeting"]["review_segments"][0]["raw_text"] == "Ciao a tutti"
+    assert manager.diarizer.calls[-1][1] == 4
+
+
+def test_rerun_diarization_recovers_meeting_that_failed_after_whisper(monkeypatch, tmp_path: Path) -> None:
+    controller, manager = _manager(monkeypatch, tmp_path)
+    session_id = _completed_meeting(manager)
+    starts_before = controller.backend_starts
+    manager.store.set_status(session_id, "error", terminal=True)
+
+    manager.rerun_diarization(session_id, num_speakers=2)
+    _wait_until(lambda: manager.snapshot()["status"] == "completed")
+
+    combined = manager.get(session_id)
+    assert combined is not None
+    assert combined["status"] == "completed"
+    assert combined["meeting"]["processing_status"] == "completed"
+    assert combined["meeting"]["num_speakers"] == 2
+    assert controller.backend_starts == starts_before
+
+
+def test_rerun_diarization_requires_saved_audio(monkeypatch, tmp_path: Path) -> None:
+    _, manager = _manager(monkeypatch, tmp_path)
+    session_id = _completed_meeting(manager)
+    assert manager.delete_audio(session_id) is True
+
+    with pytest.raises(RuntimeError, match="Audio della riunione non disponibile"):
+        manager.rerun_diarization(session_id, num_speakers=1)
+
+
+def test_rerun_diarization_validates_speaker_count(monkeypatch, tmp_path: Path) -> None:
+    _, manager = _manager(monkeypatch, tmp_path)
+    session_id = _completed_meeting(manager)
+
+    with pytest.raises(ValueError, match="tra 0 e 20"):
+        manager.rerun_diarization(session_id, num_speakers=21)
 
 
 def test_realtime_meeting_records_multiple_sources_as_tracks(monkeypatch, tmp_path: Path) -> None:

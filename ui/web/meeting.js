@@ -10,6 +10,7 @@ let meetingFilePath = "";
 let meetingMicrophones = [];
 let meetingMonitors = [];
 let meetingStreams = [];
+let meetingReviewHasAudio = false;
 let meetingSources = [{ source: "microphone", selected_input: "", stream_id: null, label: "" }];
 
 views.meeting = "RIUNIONE";
@@ -90,7 +91,7 @@ function meetingEnsureUI() {
             <div><label>Trascrizione</label><div class="progress" id="meeting-transcription-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div></div>
             <div><label>Diarizzazione</label><div class="progress" id="meeting-diarization-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div></div>
           </div>
-          <p class="help" id="meeting-model-note">La prima diarizzazione scarica automaticamente i modelli ONNX locali.</p>
+          <p class="help" id="meeting-model-note">La prima diarizzazione scarica Community-1 da Hugging Face; dopo il download il modello viene riutilizzato localmente.</p>
         </section>
       </div>
 
@@ -110,6 +111,11 @@ function meetingEnsureUI() {
             <button id="meeting-export-vtt" type="button">Esporta .vtt</button>
             <button id="meeting-delete-audio" type="button">Elimina audio</button>
           </div>
+          <div class="fields two meeting-rediarization-controls">
+            <div><label for="meeting-review-speaker-count">Interlocutori per il ricalcolo</label><input id="meeting-review-speaker-count" type="number" min="0" max="20" value="0"></div>
+            <div class="actions"><button id="meeting-rerun-diarization" class="button selected" type="button" disabled>Ricalcola diarizzazione</button></div>
+          </div>
+          <p class="help">Riusa l'audio e i segmenti Whisper già salvati: Whisper non viene rilanciato. Le correzioni manuali e i nomi degli interlocutori vengono conservati.</p>
           <h3>Interlocutori</h3>
           <div id="meeting-speakers" class="meeting-speakers"></div>
           <details><summary>Transcript raw originale</summary><div id="meeting-raw" class="meeting-raw transcript"></div></details>
@@ -178,6 +184,8 @@ function meetingRenderRuntime(runtime) {
   if ($("meeting-start")) $("meeting-start").disabled = active || state.live || state.file;
   if ($("meeting-finish")) $("meeting-finish").disabled = !runtime || runtime.mode !== "realtime" || runtime.status !== "recording";
   if ($("meeting-cancel")) $("meeting-cancel").disabled = !active;
+  if ($("meeting-rerun-diarization")) $("meeting-rerun-diarization").disabled = active || !meetingReviewHasAudio;
+  if ($("meeting-review-speaker-count")) $("meeting-review-speaker-count").disabled = active;
   if ($("meeting-status")) $("meeting-status").textContent = runtime ? meetingStatus(runtime.status) : "Idle";
   if ($("meeting-model")) $("meeting-model").textContent = runtime?.model ? (modelLabels[runtime.model] || runtime.model) : "—";
   if ($("meeting-language-value")) $("meeting-language-value").textContent = runtime?.language || "—";
@@ -475,6 +483,8 @@ function meetingRenderReview() {
   $("meeting-review").hidden = false;
   $("meeting-review-title").textContent = meeting.started_at ? `Riunione · ${new Date(meeting.started_at).toLocaleString()}` : "Riunione";
   $("meeting-raw").textContent = meeting.text || "Nessun transcript raw.";
+  if ($("meeting-review-speaker-count")) $("meeting-review-speaker-count").value = Number(metadata.num_speakers) || 0;
+  meetingReviewHasAudio = false;
   meetingRenderReviewSources(metadata);
 
   const speakerIds = new Set();
@@ -552,10 +562,26 @@ function meetingRenderReview() {
     const audio = $("meeting-audio");
     if (!audio) return;
     const value = String(url || "");
+    meetingReviewHasAudio = !!value;
     if (value) audio.src = value;
     else audio.removeAttribute("src");
     audio.load();
     $("meeting-delete-audio").disabled = !value;
+    if ($("meeting-rerun-diarization")) $("meeting-rerun-diarization").disabled = meetingIsBusy() || !meetingReviewHasAudio;
+  });
+}
+
+function meetingRerunDiarization() {
+  if (!meetingCurrent?.id || !meetingReviewHasAudio || meetingIsBusy()) return;
+  const count = Math.max(0, Number($("meeting-review-speaker-count")?.value) || 0);
+  call("rerunMeetingDiarization", [meetingCurrent.id, count], raw => {
+    const response = json(raw);
+    if (!response?.ok) {
+      showError(response?.error || "Impossibile ricalcolare la diarizzazione", "meeting");
+      return;
+    }
+    meetingRenderRuntime(response.meeting);
+    notice("Ricalcolo diarizzazione avviato sui segmenti Whisper già salvati");
   });
 }
 
@@ -599,6 +625,7 @@ const meetingModule = {
     $("meeting-start").onclick = meetingStart;
     $("meeting-finish").onclick = meetingFinish;
     $("meeting-cancel").onclick = () => call("cancelMeeting", [], raw => meetingRenderRuntime(json(raw)?.meeting));
+    $("meeting-rerun-diarization").onclick = meetingRerunDiarization;
     $("meeting-export-txt").onclick = () => meetingExport("txt");
     $("meeting-export-srt").onclick = () => meetingExport("srt");
     $("meeting-export-vtt").onclick = () => meetingExport("vtt");
@@ -662,9 +689,10 @@ const meetingModule = {
       return true;
     }
     if (name === "meeting_completed") {
+      const rediarized = state.meetingRuntime?.operation === "rediarization";
       meetingRefreshList();
       meetingLoad(String(value));
-      notice("Riunione pronta per la revisione");
+      notice(rediarized ? "Diarizzazione ricalcolata; trascrizione e correzioni manuali sono state conservate" : "Riunione pronta per la revisione");
       return true;
     }
     if (name === "meeting_error") {

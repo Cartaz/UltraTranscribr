@@ -65,6 +65,27 @@ def test_meeting_supports_realtime_multisource_file_and_review() -> None:
     assert "len(decoded) > 8" in bridge
 
 
+def test_meeting_review_can_rerun_only_diarization_from_saved_artifacts() -> None:
+    source = (WEB / "meeting.js").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    application = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
+    manager = (ROOT / "core" / "meeting_manager.py").read_text(encoding="utf-8")
+
+    assert 'id="meeting-rerun-diarization"' in source
+    assert 'id="meeting-review-speaker-count"' in source
+    assert "rerunMeetingDiarization" in source
+    assert "Whisper non viene rilanciato" in source
+    assert "correzioni manuali" in source
+    assert "modelli ONNX locali" not in source
+    assert "def rerunMeetingDiarization" in bridge
+    assert "self._application.rerun_meeting_diarization(" in bridge
+    assert "def rerun_meeting_diarization" in application
+    assert "self.meeting.rerun_diarization(" in application
+    assert "def rerun_diarization" in manager
+    assert 'operation="rediarization"' in manager
+    assert "ensure_backend_started" not in manager.split("def _rerun_diarization_worker", 1)[1].split("def _compute_diarization", 1)[0]
+
+
 def test_meeting_list_uses_text_content_for_persisted_data() -> None:
     source = (WEB / "meeting.js").read_text(encoding="utf-8")
     assert "preview.textContent = item.text_preview" in source

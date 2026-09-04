@@ -11,6 +11,7 @@ import logging
 import os
 import shutil
 import threading
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -306,6 +307,128 @@ def align_speakers(
             }
         )
     return output
+
+
+def stabilize_speaker_ids(
+    previous_segments: list[dict[str, Any]],
+    new_segments: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Map new diarization clusters onto prior speaker IDs by temporal overlap.
+
+    Community-1 cluster labels are session-local. Re-running the same audio can
+    therefore number otherwise-identical speakers differently. A deterministic
+    one-to-one overlap match keeps existing manual speaker names attached to the
+    most similar voice timeline. New unmatched clusters receive fresh IDs that
+    cannot accidentally inherit an old name.
+    """
+
+    previous = _valid_diarization_segments(previous_segments)
+    current = _valid_diarization_segments(new_segments)
+    if not previous or not current:
+        return [dict(item) for item in new_segments]
+
+    scores: dict[tuple[str, str], float] = defaultdict(float)
+    old_ids = {item["speaker_id"] for item in previous}
+    new_ids = {item["speaker_id"] for item in current}
+    for new in current:
+        for old in previous:
+            overlap = max(
+                0.0,
+                min(float(new["end"]), float(old["end"]))
+                - max(float(new["start"]), float(old["start"])),
+            )
+            if overlap > 0:
+                scores[(new["speaker_id"], old["speaker_id"])] += overlap
+
+    mapping: dict[str, str] = {}
+    used_old: set[str] = set()
+    ranked = sorted(
+        (
+            (score, new_id, old_id)
+            for (new_id, old_id), score in scores.items()
+            if score > 0
+        ),
+        key=lambda item: (-item[0], item[2], item[1]),
+    )
+    for _score, new_id, old_id in ranked:
+        if new_id in mapping or old_id in used_old:
+            continue
+        mapping[new_id] = old_id
+        used_old.add(old_id)
+
+    reserved = set(old_ids)
+    next_number = 0
+    for new_id in sorted(new_ids):
+        if new_id in mapping:
+            continue
+        while f"SPEAKER_{next_number:02d}" in reserved:
+            next_number += 1
+        stable = f"SPEAKER_{next_number:02d}"
+        mapping[new_id] = stable
+        reserved.add(stable)
+        next_number += 1
+
+    output: list[dict[str, Any]] = []
+    for item in new_segments:
+        row = dict(item)
+        speaker_id = str(row.get("speaker_id") or "")
+        if speaker_id in mapping:
+            row["speaker_id"] = mapping[speaker_id]
+        output.append(row)
+    return output
+
+
+def preserve_review_text(
+    previous_review: list[dict[str, Any]],
+    new_review: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Carry manual text edits across a diarization-only rerun.
+
+    Edits are reused only when start/end timestamps and raw Whisper text still
+    identify the same transcript segment. This prevents a stale correction from
+    being applied if the raw transcript ever changes independently.
+    """
+
+    indexed: dict[tuple[float, float, str], deque[str]] = defaultdict(deque)
+    for item in previous_review:
+        key = _review_identity(item)
+        indexed[key].append(str(item.get("text") or ""))
+
+    output: list[dict[str, Any]] = []
+    for item in new_review:
+        row = dict(item)
+        bucket = indexed.get(_review_identity(row))
+        if bucket:
+            row["text"] = bucket.popleft()
+        output.append(row)
+    return output
+
+
+def _valid_diarization_segments(
+    segments: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for item in segments:
+        try:
+            start = max(0.0, float(item.get("start", 0.0)))
+            end = max(start, float(item.get("end", 0.0)))
+        except (TypeError, ValueError):
+            continue
+        speaker_id = str(item.get("speaker_id") or "").strip()
+        if end <= start or not speaker_id:
+            continue
+        output.append({"start": start, "end": end, "speaker_id": speaker_id})
+    return output
+
+
+def _review_identity(item: dict[str, Any]) -> tuple[float, float, str]:
+    try:
+        start = round(float(item.get("start", 0.0)), 3)
+        end = round(float(item.get("end", 0.0)), 3)
+    except (TypeError, ValueError):
+        start = end = 0.0
+    raw = str(item.get("raw_text") or "").strip()
+    return start, end, raw
 
 
 def speaker_label(speaker_id: Optional[str], names: dict[str, str]) -> str:
