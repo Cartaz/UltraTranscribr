@@ -19,10 +19,6 @@ from core.background_tasks import BackgroundTaskGroup
 class MeetingBatchManager(Protocol):
     """Narrow MeetingManager surface required by MeetingBatchCoordinator."""
 
-    def subscribe(self, event: str, handler) -> None: ...
-
-    def unsubscribe(self, event: str, handler) -> None: ...
-
     def is_busy(self) -> bool: ...
 
     def start_file(
@@ -30,7 +26,6 @@ class MeetingBatchManager(Protocol):
         file_path: Path | str,
         *,
         language: str | None = None,
-        model_size: str | None = None,
         num_speakers: int = 0,
     ) -> dict[str, Any]: ...
 
@@ -42,7 +37,6 @@ class MeetingBatchJob:
     id: str
     path: str
     language: str
-    model_size: str
     num_speakers: int
     status: str = "queued"
     phase: str = "queued"
@@ -65,9 +59,13 @@ class MeetingBatchCoordinator:
         self,
         manager: MeetingBatchManager,
         *,
+        subscribe: Callable[[str, Callable[[Any], None]], None],
+        unsubscribe: Callable[[str, Callable[[Any], None]], None],
         event_sink: Callable[[str, Any], None],
     ) -> None:
         self._manager = manager
+        self._subscribe = subscribe
+        self._unsubscribe = unsubscribe
         self._event_sink = event_sink
         self._lock = threading.RLock()
         self._tasks = BackgroundTaskGroup("MeetingBatch", join_timeout=10.0)
@@ -79,7 +77,7 @@ class MeetingBatchCoordinator:
             ("history_changed", self._on_history_changed),
         )
         for event, handler in self._subscriptions:
-            self._manager.subscribe(event, handler)
+            self._subscribe(event, handler)
 
     def list_jobs(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -97,7 +95,6 @@ class MeetingBatchCoordinator:
         paths: list[str],
         *,
         language: str,
-        model_size: str,
         num_speakers: int,
     ) -> list[dict[str, Any]]:
         if self._closed:
@@ -128,7 +125,6 @@ class MeetingBatchCoordinator:
                         id=uuid.uuid4().hex[:12],
                         path=path,
                         language=str(language),
-                        model_size=str(model_size),
                         num_speakers=count,
                     )
                 )
@@ -171,7 +167,7 @@ class MeetingBatchCoordinator:
                 return
             self._closed = True
         for event, handler in self._subscriptions:
-            self._manager.unsubscribe(event, handler)
+            self._unsubscribe(event, handler)
         self._tasks.close()
 
     def _maybe_start_next_async(self) -> None:
@@ -200,7 +196,6 @@ class MeetingBatchCoordinator:
             snapshot = self._manager.start_file(
                 job.path,
                 language=job.language,
-                model_size=job.model_size,
                 num_speakers=job.num_speakers,
             )
         except Exception as exc:
