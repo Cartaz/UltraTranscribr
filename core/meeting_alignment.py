@@ -15,6 +15,7 @@ from core.transcript_export import normalize_segments
 _UNCERTAINTY_RATIO = 0.8
 _POINT_WINDOW_S = 0.04
 _OVERLAP_EPSILON_S = 0.03
+_SCORE_PRECISION = 9
 
 
 def align_speakers(
@@ -96,11 +97,7 @@ def _align_word_segment(
     current: list[dict[str, Any]] = []
     current_key: tuple[Any, ...] | None = None
     for word in assigned:
-        key = (
-            word["speaker_id"],
-            bool(word["uncertain"]),
-            tuple(word["speaker_candidates"]),
-        )
+        key = _word_group_key(word)
         if current and key != current_key:
             groups.append(current)
             current = []
@@ -123,7 +120,7 @@ def _align_word_segment(
             "text": raw_text,
             "speaker_id": group[0]["speaker_id"],
             "uncertain": bool(group[0]["uncertain"]),
-            "speaker_candidates": list(group[0]["speaker_candidates"]),
+            "speaker_candidates": _group_candidates(group),
             "alignment": "word",
             "source_segment_index": int(source_index),
             "source_word_start": int(group[0]["word_index"]),
@@ -134,6 +131,33 @@ def _align_word_segment(
             row["overlap_speakers"] = overlap_speakers
         output.append(row)
     return output
+
+
+def _word_group_key(word: dict[str, Any]) -> tuple[Any, ...]:
+    """Group by the decision that matters, not by noisy secondary candidates."""
+    if bool(word.get("uncertain")):
+        return (
+            "uncertain",
+            tuple(sorted(str(item) for item in word.get("speaker_candidates") or [])),
+        )
+    return ("speaker", word.get("speaker_id"))
+
+
+def _group_candidates(group: list[dict[str, Any]]) -> list[str]:
+    """Return deterministic candidate metadata without influencing segmentation."""
+    candidates: set[str] = set()
+    primary = str(group[0].get("speaker_id") or "")
+    for word in group:
+        candidates.update(
+            str(item)
+            for item in word.get("speaker_candidates") or []
+            if str(item)
+        )
+    ordered = sorted(candidates)
+    if primary and primary in ordered:
+        ordered.remove(primary)
+        ordered.insert(0, primary)
+    return ordered[:2]
 
 
 def _align_whisper_segment(
@@ -185,14 +209,23 @@ def _assign_interval(
         if overlap > 0:
             overlaps[str(turn["speaker_id"])] += overlap
 
-    ranked = sorted(overlaps.items(), key=lambda item: (-item[1], item[0]))
+    ranked = sorted(
+        overlaps.items(),
+        key=lambda item: (-round(item[1], _SCORE_PRECISION), item[0]),
+    )
     candidates = [speaker for speaker, _score in ranked[:2]]
     if not ranked:
         return None, False, candidates
+    best_score = round(ranked[0][1], _SCORE_PRECISION)
+    second_score = (
+        round(ranked[1][1], _SCORE_PRECISION)
+        if len(ranked) > 1
+        else 0.0
+    )
     uncertain = (
         len(ranked) > 1
-        and ranked[0][1] > 0
-        and ranked[1][1] / ranked[0][1] >= _UNCERTAINTY_RATIO
+        and best_score > 0
+        and second_score / best_score >= _UNCERTAINTY_RATIO
     )
     return (None if uncertain else ranked[0][0]), uncertain, candidates
 
