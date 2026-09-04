@@ -319,6 +319,23 @@ class BackendBridge(QObject):
         except Exception as exc:
             return self._error(exc)
 
+    @Slot(str, int, str, result=str)
+    def setMeetingSegmentSpeaker(
+        self,
+        session_id: str,
+        index: int,
+        speaker_id: str,
+    ) -> str:
+        try:
+            meeting = self._application.set_meeting_segment_speaker(
+                session_id,
+                index,
+                speaker_id,
+            )
+            return self._ok(meeting=meeting)
+        except Exception as exc:
+            return self._error(exc)
+
     @Slot(str, result=str)
     def deleteMeetingAudio(self, session_id: str) -> str:
         try:
