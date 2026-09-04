@@ -20,7 +20,13 @@ from core.meeting_capture import (
 )
 from core.meeting_store import MeetingStore
 from core.microphone_recording import MicrophoneRecorder, RecordingInfo
-from core.speaker_diarization import DiarizationModelManager, SpeakerDiarizer, align_speakers
+from core.speaker_diarization import (
+    DiarizationModelManager,
+    SpeakerDiarizer,
+    align_speakers,
+    preserve_review_text,
+    stabilize_speaker_ids,
+)
 from core.transcript_history import TranscriptHistoryStore
 from core.whisper_backend import WhisperBackend
 
@@ -70,6 +76,7 @@ class MeetingRuntime:
     control_thread: Optional[threading.Thread] = None
     stop_event: threading.Event = field(default_factory=threading.Event)
     error: str = ""
+    operation: str = "full"
 
 
 class MeetingManager:
@@ -77,6 +84,7 @@ class MeetingManager:
 
     _TERMINAL_STATUSES = {"completed", "error", "cancelled", "interrupted"}
     _MAX_REALTIME_SOURCES = 8
+    _MAX_SPEAKERS = 20
     _RECOVERY_JOIN_TIMEOUT_S = 5.0
     _CONTROL_JOIN_TIMEOUT_S = 10.0
     _TRANSCRIBER_JOIN_TIMEOUT_S = 5.0
@@ -126,6 +134,7 @@ class MeetingManager:
     ) -> dict[str, Any]:
         self._require_start_available()
         selections = self._normalize_sources(sources)
+        speaker_count = self._normalize_num_speakers(num_speakers)
         settings = self._controller.settings.with_(
             language=language or self._controller.settings.language,
             live_microphone_recording=False,
@@ -138,7 +147,7 @@ class MeetingManager:
             source=source_name,
             source_path=source_path,
             acquisition_mode="realtime",
-            num_speakers=max(0, int(num_speakers)),
+            num_speakers=speaker_count,
         )
         planned_sources = [
             {
@@ -159,7 +168,7 @@ class MeetingManager:
             id=session_id,
             mode="realtime",
             settings=settings,
-            num_speakers=max(0, int(num_speakers)),
+            num_speakers=speaker_count,
             sources=planned_sources,
             source_path=source_path,
             capture=capture,
@@ -190,6 +199,7 @@ class MeetingManager:
         source = Path(file_path).expanduser()
         if not source.is_file():
             raise FileNotFoundError("Seleziona una registrazione esistente")
+        speaker_count = self._normalize_num_speakers(num_speakers)
         settings = self._controller.settings.with_(
             language=language or self._controller.settings.language,
             live_microphone_recording=False,
@@ -200,7 +210,7 @@ class MeetingManager:
             source="file",
             source_path=str(source),
             acquisition_mode="file",
-            num_speakers=max(0, int(num_speakers)),
+            num_speakers=speaker_count,
         )
         planned = [
             {
@@ -216,7 +226,7 @@ class MeetingManager:
             id=session_id,
             mode="file",
             settings=settings,
-            num_speakers=max(0, int(num_speakers)),
+            num_speakers=speaker_count,
             sources=planned,
             source_path=str(source),
             status="preparing_file",
@@ -236,6 +246,95 @@ class MeetingManager:
         self._emit("meeting_updated", self._snapshot(runtime))
         worker.start()
         return self._snapshot(runtime)
+
+    def rerun_diarization(
+        self,
+        session_id: str,
+        *,
+        num_speakers: int = 0,
+    ) -> dict[str, Any]:
+        """Recompute only speaker diarization from persisted audio + Whisper segments."""
+        self._require_start_available()
+        session_key = str(session_id or "").strip()
+        meeting = self.store.get(session_key)
+        if meeting is None:
+            raise KeyError("riunione non trovata")
+        raw_segments = list(meeting.get("segments") or [])
+        if not raw_segments:
+            raise RuntimeError(
+                "La riunione non contiene segmenti Whisper timestampati da riutilizzare"
+            )
+        audio_path = self.store.recording_path(session_key)
+        if audio_path is None:
+            raise RuntimeError(
+                "Audio della riunione non disponibile: impossibile ricalcolare la diarizzazione"
+            )
+
+        speaker_count = self._normalize_num_speakers(num_speakers)
+        metadata = dict(meeting.get("meeting") or {})
+        acquisition = dict(metadata.get("acquisition") or {})
+        recording = dict(metadata.get("recording") or {})
+        settings = self._controller.settings.with_(
+            model_size=str(meeting.get("model") or self._controller.settings.model_size),
+            language=str(meeting.get("language") or self._controller.settings.language),
+            live_microphone_recording=False,
+        )
+        info = RecordingInfo(
+            path=str(audio_path),
+            duration_s=float(recording.get("duration_s") or 0.0),
+            size_bytes=int(recording.get("size_bytes") or audio_path.stat().st_size),
+            sample_rate=int(recording.get("sample_rate") or 16000),
+            channels=int(recording.get("channels") or 1),
+            format=str(recording.get("format") or "flac"),
+        )
+        runtime = MeetingRuntime(
+            id=session_key,
+            mode=str(acquisition.get("mode") or "realtime"),
+            settings=settings,
+            num_speakers=speaker_count,
+            sources=[dict(item) for item in acquisition.get("sources") or []],
+            source_path=str(meeting.get("source_path") or ""),
+            recording=info,
+            status=(
+                "downloading_diarization"
+                if not self.models.status()["ready"]
+                else "diarizing"
+            ),
+            progress=100,
+            diarization_progress=0,
+            operation="rediarization",
+        )
+        previous_diarization = list(metadata.get("diarization_segments") or [])
+        previous_review = list(metadata.get("review_segments") or [])
+        previous_status = str(meeting.get("status") or metadata.get("processing_status") or "completed")
+
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("gestore Meeting chiuso")
+            self._runtime = runtime
+        worker = threading.Thread(
+            target=self._rerun_diarization_worker,
+            args=(
+                runtime,
+                raw_segments,
+                previous_diarization,
+                previous_review,
+                previous_status,
+            ),
+            daemon=True,
+            name=f"MeetingRediarization-{session_key}",
+        )
+        runtime.processing_thread = worker
+        snapshot = self._snapshot(runtime)
+        self._emit("meeting_updated", snapshot)
+        worker.start()
+        return snapshot
+
+    def audio_path(self, session_id: str) -> Optional[Path]:
+        try:
+            return self.store.recording_path(session_id)
+        except KeyError:
+            return None
 
     def finish(self) -> dict[str, Any]:
         """Request finalization without blocking the caller on audio shutdown."""
@@ -356,7 +455,8 @@ class MeetingManager:
             runtime.stop_event.set()
             runtime.status = "cancelling"
             runtime.error = ""
-            self.store.set_status(runtime.id, runtime.status)
+            if runtime.operation != "rediarization":
+                self.store.set_status(runtime.id, runtime.status)
             control = threading.Thread(
                 target=self._cancel_runtime,
                 args=(runtime, previous_status),
@@ -370,6 +470,19 @@ class MeetingManager:
 
     def _cancel_runtime(self, runtime: MeetingRuntime, previous_status: str) -> None:
         try:
+            if runtime.operation == "rediarization":
+                processing = runtime.processing_thread
+                if processing and processing.is_alive() and processing is not threading.current_thread():
+                    processing.join(timeout=self._PROCESSING_JOIN_TIMEOUT_S)
+                    if processing.is_alive():
+                        logger.warning(
+                            "Ricalcolo diarizzazione Meeting %s ancora attivo dopo cancel bounded",
+                            runtime.id,
+                        )
+                        return
+                self._mark_rediarization_cancelled(runtime)
+                return
+
             if runtime.capture is not None and previous_status in {"recording", "finishing"}:
                 try:
                     bundle = runtime.capture.stop_and_finalize()
@@ -398,7 +511,10 @@ class MeetingManager:
             self._emit("history_changed", runtime.id)
         except Exception as exc:
             logger.exception("Annullamento Meeting fallito")
-            self._fail(runtime, str(exc))
+            if runtime.operation == "rediarization":
+                self._fail_rediarization(runtime, str(exc))
+            else:
+                self._fail(runtime, str(exc))
         finally:
             with self._lock:
                 if runtime.control_thread is threading.current_thread():
@@ -489,6 +605,12 @@ class MeetingManager:
             if processing.is_alive():
                 logger.warning("Processing Meeting %s ancora attivo dopo shutdown bounded", runtime.id)
 
+        if runtime.operation == "rediarization":
+            if runtime.status not in self._TERMINAL_STATUSES:
+                runtime.status = "interrupted"
+                self._emit("meeting_updated", self._snapshot(runtime))
+            return
+
         if runtime.status not in self._TERMINAL_STATUSES:
             runtime.status = "interrupted"
             self.store.set_status(runtime.id, "interrupted", terminal=True)
@@ -525,34 +647,19 @@ class MeetingManager:
             if not raw_segments:
                 raise RuntimeError("Whisper non ha prodotto segmenti timestampati")
 
-            runtime.status = (
-                "downloading_diarization"
-                if not self.models.status()["ready"]
-                else "diarizing"
-            )
-            self.store.set_status(runtime.id, runtime.status)
-            self._emit("meeting_updated", self._snapshot(runtime))
-            self.models.ensure_models(
-                lambda label, percent: self._model_progress(runtime, label, percent)
-            )
-            if runtime.stop_event.is_set() or self._shutdown_event.is_set():
-                return
-            runtime.status = "diarizing"
-            runtime.diarization_progress = 0
-            self.store.set_status(runtime.id, runtime.status)
-            self._emit("meeting_updated", self._snapshot(runtime))
-            diarization = self.diarizer.run(
+            diarization, review = self._compute_diarization(
+                runtime,
                 info.path,
-                num_speakers=runtime.num_speakers if runtime.num_speakers > 0 else -1,
-                progress=lambda percent: self._diarization_progress(runtime, percent),
+                raw_segments,
+                persist_transient_status=True,
             )
             if runtime.stop_event.is_set() or self._shutdown_event.is_set():
                 return
-            review = align_speakers(raw_segments, diarization)
             self.store.set_diarization(
                 runtime.id,
                 diarization_segments=diarization,
                 review_segments=review,
+                num_speakers=runtime.num_speakers,
             )
             runtime.status = "completed"
             runtime.progress = 100
@@ -567,6 +674,101 @@ class MeetingManager:
                 return
             logger.exception("Elaborazione riunione %s fallita", runtime.id)
             self._fail(runtime, str(exc))
+
+    def _rerun_diarization_worker(
+        self,
+        runtime: MeetingRuntime,
+        raw_segments: list[dict[str, Any]],
+        previous_diarization: list[dict[str, Any]],
+        previous_review: list[dict[str, Any]],
+        previous_status: str,
+    ) -> None:
+        try:
+            assert runtime.recording is not None
+            diarization, review = self._compute_diarization(
+                runtime,
+                runtime.recording.path,
+                raw_segments,
+                persist_transient_status=False,
+                previous_diarization=previous_diarization,
+                previous_review=previous_review,
+            )
+            if runtime.stop_event.is_set() or self._shutdown_event.is_set():
+                if not self._shutdown_event.is_set():
+                    self._mark_rediarization_cancelled(runtime)
+                return
+            self.store.set_diarization(
+                runtime.id,
+                diarization_segments=diarization,
+                review_segments=review,
+                num_speakers=runtime.num_speakers,
+            )
+            runtime.status = "completed"
+            runtime.progress = 100
+            runtime.diarization_progress = 100
+            runtime.error = ""
+            self.store.set_status(
+                runtime.id,
+                "completed",
+                terminal=previous_status != "completed",
+            )
+            self._emit("meeting_completed", runtime.id)
+            self._emit("meeting_updated", self._snapshot(runtime))
+            self._emit("history_changed", runtime.id)
+        except Exception as exc:
+            if runtime.stop_event.is_set() or self._shutdown_event.is_set():
+                if runtime.stop_event.is_set() and not self._shutdown_event.is_set():
+                    self._mark_rediarization_cancelled(runtime)
+                return
+            logger.exception("Ricalcolo diarizzazione riunione %s fallito", runtime.id)
+            self._fail_rediarization(runtime, str(exc))
+        finally:
+            with self._lock:
+                if runtime.processing_thread is threading.current_thread():
+                    runtime.processing_thread = None
+
+    def _compute_diarization(
+        self,
+        runtime: MeetingRuntime,
+        audio_path: Path | str,
+        raw_segments: list[dict[str, Any]],
+        *,
+        persist_transient_status: bool,
+        previous_diarization: Optional[list[dict[str, Any]]] = None,
+        previous_review: Optional[list[dict[str, Any]]] = None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        runtime.status = (
+            "downloading_diarization"
+            if not self.models.status()["ready"]
+            else "diarizing"
+        )
+        runtime.diarization_progress = 0
+        if persist_transient_status:
+            self.store.set_status(runtime.id, runtime.status)
+        self._emit("meeting_updated", self._snapshot(runtime))
+
+        self.models.ensure_models(
+            lambda label, percent: self._model_progress(runtime, label, percent)
+        )
+        if runtime.stop_event.is_set() or self._shutdown_event.is_set():
+            return [], []
+
+        runtime.status = "diarizing"
+        runtime.diarization_progress = 0
+        if persist_transient_status:
+            self.store.set_status(runtime.id, runtime.status)
+        self._emit("meeting_updated", self._snapshot(runtime))
+        diarization = self.diarizer.run(
+            audio_path,
+            num_speakers=runtime.num_speakers if runtime.num_speakers > 0 else -1,
+            progress=lambda percent: self._diarization_progress(runtime, percent),
+        )
+        if previous_diarization:
+            diarization = stabilize_speaker_ids(previous_diarization, diarization)
+        review = align_speakers(raw_segments, diarization)
+        if previous_review:
+            review = preserve_review_text(previous_review, review)
+        return diarization, review
 
     def _transcription_event(self, runtime: MeetingRuntime, event: str, payload: Any) -> None:
         if runtime.stop_event.is_set() or self._shutdown_event.is_set():
@@ -617,6 +819,19 @@ class MeetingManager:
         runtime.diarization_progress = max(0, min(100, int(percent)))
         self._emit("meeting_updated", self._snapshot(runtime))
 
+    def _mark_rediarization_cancelled(self, runtime: MeetingRuntime) -> None:
+        if runtime.status == "cancelled":
+            return
+        runtime.status = "cancelled"
+        runtime.error = ""
+        self._emit("meeting_updated", self._snapshot(runtime))
+
+    def _fail_rediarization(self, runtime: MeetingRuntime, error: str) -> None:
+        runtime.error = str(error)
+        runtime.status = "error"
+        self._emit("meeting_error", {"session_id": runtime.id, "error": runtime.error})
+        self._emit("meeting_updated", self._snapshot(runtime))
+
     def _fail(self, runtime: MeetingRuntime, error: str) -> None:
         if runtime.status in self._TERMINAL_STATUSES:
             return
@@ -662,6 +877,15 @@ class MeetingManager:
         if runtime is None or runtime.status != status:
             raise RuntimeError("Nessuna riunione in registrazione")
         return runtime
+
+    @classmethod
+    def _normalize_num_speakers(cls, value: int) -> int:
+        count = int(value)
+        if count < 0 or count > cls._MAX_SPEAKERS:
+            raise ValueError(
+                f"Il numero di interlocutori deve essere tra 0 e {cls._MAX_SPEAKERS}"
+            )
+        return count
 
     def _normalize_sources(
         self,
@@ -711,6 +935,7 @@ class MeetingManager:
             "progress": runtime.progress,
             "diarization_progress": runtime.diarization_progress,
             "error": runtime.error,
+            "operation": runtime.operation,
         }
 
     def _recover_orphans(self) -> None:
