@@ -11,10 +11,9 @@ import threading
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from core.background_tasks import BackgroundTaskGroup
-from core.event_bus import EventBus
 
 
 class MeetingBatchManager(Protocol):
@@ -62,9 +61,14 @@ class MeetingBatchCoordinator:
     _ACTIVE_STATUSES = {"starting", "running", "cancelling"}
     _TERMINAL_PHASES = {"completed", "error", "cancelled", "interrupted"}
 
-    def __init__(self, manager: MeetingBatchManager) -> None:
+    def __init__(
+        self,
+        manager: MeetingBatchManager,
+        *,
+        event_sink: Callable[[str, Any], None],
+    ) -> None:
         self._manager = manager
-        self._bus = EventBus()
+        self._event_sink = event_sink
         self._lock = threading.RLock()
         self._tasks = BackgroundTaskGroup("MeetingBatch", join_timeout=10.0)
         self._jobs: list[MeetingBatchJob] = []
@@ -299,7 +303,7 @@ class MeetingBatchCoordinator:
         self._emit_job_payload(job.to_dict())
 
     def _emit_job_payload(self, payload: dict[str, Any]) -> None:
-        self._bus.emit("meeting_queue_job_updated", payload)
+        self._event_sink("meeting_queue_job_updated", payload)
 
     def _emit_changed(self) -> None:
-        self._bus.emit("meeting_queue_changed", self.list_jobs())
+        self._event_sink("meeting_queue_changed", self.list_jobs())
