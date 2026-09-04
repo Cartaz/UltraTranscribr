@@ -402,6 +402,42 @@ function meetingFinish() {
   });
 }
 
+function meetingClearReview(sessionId) {
+  if (meetingCurrent?.id !== String(sessionId)) return;
+  const audio = $("meeting-audio");
+  if (audio) {
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+  }
+  meetingCurrent = null;
+  meetingReviewHasAudio = false;
+  if ($("meeting-review")) $("meeting-review").hidden = true;
+}
+
+function meetingDeleteSession(item) {
+  const sessionId = String(item?.id || "");
+  if (!sessionId) return;
+  const title = item?.started_at ? new Date(item.started_at).toLocaleString() : "questa riunione";
+  if (!window.confirm(`Eliminare definitivamente la riunione ${title}? Verranno rimossi trascrizione, review e audio associato.`)) return;
+  call("deleteHistorySession", [sessionId], raw => {
+    const response = json(raw);
+    if (!response?.ok) {
+      showError(response?.error || "Eliminazione riunione non riuscita", "meeting");
+      return;
+    }
+    if (response.deleted) {
+      meetingClearReview(sessionId);
+      if (meetingHistoryId === sessionId) meetingHistoryId = null;
+      meetingRefreshList();
+      notice("Riunione eliminata definitivamente");
+    } else {
+      meetingRefreshList();
+      notice("Riunione già assente");
+    }
+  });
+}
+
 function meetingRefreshList() {
   call("searchHistory", ["meeting", 100], result => {
     const items = (json(result) || []).filter(item => item?.kind === "meeting");
@@ -416,18 +452,30 @@ function meetingRefreshList() {
       return;
     }
     items.forEach(item => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "history-item";
+      const row = document.createElement("div");
+      row.className = "meeting-history-entry";
+
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "history-item";
       const title = document.createElement("strong");
       title.textContent = item.started_at ? new Date(item.started_at).toLocaleString() : String(item.id || "Riunione");
       const meta = document.createElement("small");
       meta.textContent = `${meetingStatus(item.status)} · ${item.language || "auto"} · ${item.source || "meeting"}`;
       const preview = document.createElement("span");
       preview.textContent = item.text_preview || "Nessun testo";
-      button.append(title, meta, preview);
-      button.onclick = () => meetingLoad(item.id);
-      list.append(button);
+      open.append(title, meta, preview);
+      open.onclick = () => meetingLoad(item.id);
+
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "button compact-button meeting-history-delete";
+      remove.textContent = "Elimina";
+      remove.setAttribute("aria-label", `Elimina riunione ${title.textContent}`);
+      remove.onclick = () => meetingDeleteSession(item);
+
+      row.append(open, remove);
+      list.append(row);
     });
   });
 }
@@ -491,6 +539,24 @@ function meetingKnownSpeakerIds(metadata) {
   return [...ids].filter(id => String(id).startsWith("SPEAKER_")).sort();
 }
 
+function meetingApplySpeakerPresentation(row, status, select, item, names) {
+  const manual = String(item?.speaker_override || "");
+  const autoSpeaker = String(item?.speaker_id || "");
+  const effective = manual || autoSpeaker;
+  row.classList.toggle("meeting-uncertain", !!item?.uncertain && !manual);
+  if (manual) status.textContent = `${meetingSpeakerLabel(effective, names)} · manuale`;
+  else if (item?.uncertain) status.textContent = "Speaker ? · incerto";
+  else status.textContent = meetingSpeakerLabel(effective, names);
+  select.value = manual;
+}
+
+function meetingRenderReviewPreservingListPosition() {
+  const scrollTop = $("meeting-review-list")?.scrollTop || 0;
+  meetingRenderReview();
+  const list = $("meeting-review-list");
+  if (list) list.scrollTop = scrollTop;
+}
+
 function meetingRenderReview() {
   const meeting = meetingCurrent;
   const metadata = meeting?.meeting;
@@ -519,7 +585,7 @@ function meetingRenderReview() {
       const response = json(responseRaw);
       if (response?.ok) {
         meetingCurrent = response.meeting;
-        meetingRenderReview();
+        meetingRenderReviewPreservingListPosition();
       } else showError(response?.error || "Nome non salvato", "meeting");
     });
     row.append(caption, input);
@@ -536,15 +602,10 @@ function meetingRenderReview() {
     list.append(empty);
   }
   review.forEach((item, index) => {
-    const manual = String(item.speaker_override || "");
-    const autoSpeaker = String(item.speaker_id || "");
-    const effective = manual || autoSpeaker;
     const hasOverlap = Array.isArray(item.overlap_speakers) && item.overlap_speakers.length > 1;
-    const unresolved = !!item.uncertain && !manual;
 
     const row = document.createElement("article");
     row.className = "meeting-review-segment";
-    row.classList.toggle("meeting-uncertain", unresolved);
     row.classList.toggle("meeting-overlap", hasOverlap);
 
     const head = document.createElement("div");
@@ -561,16 +622,13 @@ function meetingRenderReview() {
     speakerControls.className = "meeting-review-speaker-controls";
     const status = document.createElement("span");
     status.className = "meeting-review-speaker";
-    if (manual) status.textContent = `${meetingSpeakerLabel(effective, names)} · manuale`;
-    else if (item.uncertain) status.textContent = "Speaker ? · incerto";
-    else status.textContent = meetingSpeakerLabel(effective, names);
 
     const select = document.createElement("select");
     select.className = "meeting-speaker-select";
     select.setAttribute("aria-label", `Speaker segmento ${index + 1}`);
     const automatic = document.createElement("option");
     automatic.value = "";
-    automatic.textContent = `Automatico · ${item.uncertain ? "Speaker ?" : meetingSpeakerLabel(autoSpeaker, names)}`;
+    automatic.textContent = `Automatico · ${item.uncertain ? "Speaker ?" : meetingSpeakerLabel(item.speaker_id, names)}`;
     select.append(automatic);
     speakerIds.forEach(id => {
       const option = document.createElement("option");
@@ -578,15 +636,24 @@ function meetingRenderReview() {
       option.textContent = meetingSpeakerLabel(id, names);
       select.append(option);
     });
-    select.value = manual;
-    select.onchange = () => call("setMeetingSegmentSpeaker", [meeting.id, index, select.value], raw => {
-      const response = json(raw);
-      if (response?.ok) {
-        meetingCurrent = response.meeting;
-        meetingRenderReview();
-        notice(select.value ? "Speaker corretto manualmente" : "Assegnazione speaker riportata su Automatico");
-      } else showError(response?.error || "Speaker non salvato", "meeting");
-    });
+    meetingApplySpeakerPresentation(row, status, select, item, names);
+    select.onchange = () => {
+      const requestedSpeaker = select.value;
+      select.disabled = true;
+      call("setMeetingSegmentSpeaker", [meeting.id, index, requestedSpeaker], raw => {
+        select.disabled = false;
+        const response = json(raw);
+        if (response?.ok) {
+          meetingCurrent = response.meeting;
+          const updated = response.meeting?.meeting?.review_segments?.[index] || item;
+          meetingApplySpeakerPresentation(row, status, select, updated, response.meeting?.meeting?.speaker_names || names);
+          notice(requestedSpeaker ? "Speaker corretto manualmente" : "Assegnazione speaker riportata su Automatico");
+        } else {
+          meetingApplySpeakerPresentation(row, status, select, item, names);
+          showError(response?.error || "Speaker non salvato", "meeting");
+        }
+      });
+    };
     speakerControls.append(status, select);
     head.append(seek, speakerControls);
 
@@ -759,7 +826,6 @@ const meetingModule = {
       return true;
     }
     if (name === "meeting_review_changed") {
-      if (meetingCurrent?.id === String(value)) meetingLoad(String(value));
       return true;
     }
     if (name === "meeting_source_status") {
