@@ -132,6 +132,14 @@ class _Annotation:
         yield _Turn(2.0, 3.0), None, "voice-B"
 
 
+class _RegularAnnotation:
+    def itertracks(self, yield_label=False):
+        assert yield_label is True
+        yield _Turn(0.0, 1.1), None, "voice-B"
+        yield _Turn(0.8, 2.0), None, "voice-A"
+        yield _Turn(2.0, 3.0), None, "voice-B"
+
+
 def test_annotation_is_canonicalized_to_stable_session_speaker_ids() -> None:
     assert sd._annotation_to_segments(_Annotation()) == [
         {"start": 0.0, "end": 1.0, "speaker_id": "SPEAKER_00"},
@@ -159,7 +167,7 @@ def test_model_status_requires_complete_payload_and_revision_marker(tmp_path: Pa
     assert status["revision"] == "abc123"
 
 
-def test_diarizer_uses_exclusive_output_and_exact_known_speaker_count(monkeypatch, tmp_path) -> None:
+def test_diarizer_returns_regular_and_exclusive_with_shared_speaker_ids(monkeypatch, tmp_path) -> None:
     captured = {}
 
     class _Waveform:
@@ -179,6 +187,7 @@ def test_diarizer_uses_exclusive_output_and_exact_known_speaker_count(monkeypatc
 
     class _Output:
         exclusive_speaker_diarization = _Annotation()
+        speaker_diarization = _RegularAnnotation()
 
     class _Pipeline:
         def __call__(self, payload, **kwargs):
@@ -193,4 +202,8 @@ def test_diarizer_uses_exclusive_output_and_exact_known_speaker_count(monkeypatc
 
     assert captured["kwargs"] == {"num_speakers": 4}
     assert captured["payload"]["sample_rate"] == 16000
-    assert result[0]["speaker_id"] == "SPEAKER_00"
+    assert result.exclusive_segments[0]["speaker_id"] == "SPEAKER_00"
+    assert result.exclusive_segments[1]["speaker_id"] == "SPEAKER_01"
+    assert result.speaker_segments[0]["speaker_id"] == "SPEAKER_00"
+    assert result.speaker_segments[1]["speaker_id"] == "SPEAKER_01"
+    assert result.speaker_segments[0]["end"] == 1.1
