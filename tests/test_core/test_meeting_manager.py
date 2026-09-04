@@ -12,6 +12,7 @@ from core.audio_inputs import AudioInputResolver
 import core.meeting_capture as capture_module
 import core.meeting_manager as meeting_module
 from core.meeting_manager import MeetingManager
+from core.speaker_diarization import DiarizationResult
 from core.transcript_history import TranscriptHistoryStore
 
 
@@ -127,7 +128,11 @@ class _Diarizer:
         self.calls.append((str(path), int(num_speakers)))
         if progress:
             progress(100)
-        return [{"start": 0.0, "end": 0.5, "speaker_id": "SPEAKER_00"}]
+        timeline = [{"start": 0.0, "end": 0.5, "speaker_id": "SPEAKER_00"}]
+        return DiarizationResult(
+            exclusive_segments=timeline,
+            speaker_segments=[dict(item) for item in timeline],
+        )
 
 
 def _manager(
@@ -215,6 +220,9 @@ def test_meeting_start_finish_processes_to_reviewable_session(monkeypatch, tmp_p
     review = combined["meeting"]["review_segments"]
     assert review[0]["speaker_id"] == "SPEAKER_00"
     assert review[0]["raw_text"] == "Ciao a tutti"
+    assert combined["meeting"]["speaker_diarization_segments"] == [
+        {"start": 0.0, "end": 0.5, "speaker_id": "SPEAKER_00"}
+    ]
     assert Path(combined["meeting"]["recording"]["path"]).is_file()
 
 
