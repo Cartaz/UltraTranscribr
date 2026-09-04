@@ -41,4 +41,37 @@ Le reti neurali di Community-1 vengono eseguite sul runtime condiviso PyTorch XP
 
 Il modello Community-1 viene scaricato una sola volta nella cache XDG dell'applicazione e poi caricato da disco. Il repository ufficiale Hugging Face è gated: prima del primo download l'utente deve accettarne le condizioni e autenticare localmente `huggingface-hub`; il token non viene salvato nelle impostazioni di UltraTranscribr.
 
-Python mantiene stato, lifecycle, persistenza, routing e device ownership canonici. Il bridge QWebChannel valida e serializza soltanto gli input `startMeetingRealtime` e `startMeetingFile`; la UI mantiene esclusivamente stato temporaneo di presentazione.
+## Ricalcolo su una Riunione già trascritta
+
+La review espone **Ricalcola diarizzazione** finché il FLAC canonico della Riunione esiste. Il ricalcolo è una pipeline distinta solo nel lifecycle, non nell'algoritmo di diarizzazione:
+
+```text
+FLAC canonico persistito -----------+
+                                    |
+segmenti Whisper persistiti --------+--> Community-1 / XPU
+                                             |
+                                             v
+                              exclusive speaker diarization
+                                             |
+                               stabilizzazione speaker ID
+                                             |
+                                      align_speakers
+                                             |
+                              ripristino correzioni manuali
+                                             |
+                                   replace-on-success
+```
+
+Whisper non viene avviato in questo percorso. Il numero di interlocutori può essere cambiato prima del ricalcolo (`0` = automatico, massimo 20) e viene persistito soltanto insieme a un nuovo risultato valido.
+
+Il precedente output viene quindi trattato come last-known-good: diarizzazione, review, nomi speaker e stato persistiti non vengono cancellati prima dell'inferenza. Se Community-1 fallisce o il ricalcolo viene annullato, il risultato precedente rimane disponibile. Solo dopo successo `MeetingStore.set_diarization` sostituisce atomicamente diarizzazione/review e aggiorna il numero di interlocutori.
+
+Poiché i cluster Community-1 sono locali alla singola esecuzione, un rerun può rinumerarli. UltraTranscribr confronta il nuovo timeline con quello precedente tramite sovrapposizione temporale e applica un mapping uno-a-uno deterministico verso gli ID `SPEAKER_xx` esistenti. In questo modo i nomi manuali restano associati, per quanto supportato dal nuovo clustering, allo stesso timeline vocale. Le correzioni manuali del testo vengono invece riapplicate solo quando timestamp e `raw_text` identificano ancora lo stesso segmento Whisper.
+
+Se l'audio è stato eliminato manualmente o dalla retention automatica, la sola trascrizione non contiene informazione acustica sufficiente e il ricalcolo non viene esposto come disponibile.
+
+## Ownership e bridge
+
+Python mantiene stato, lifecycle, persistenza, routing e device ownership canonici. `MeetingManager` possiede sia la prima analisi sia il lifecycle di ricalcolo e condivide una sola routine `_compute_diarization`, evitando due implementazioni dell'algoritmo. `MeetingStore` è l'unico punto che valida il percorso audio persistito e aggiorna il sidecar della Riunione.
+
+Il bridge QWebChannel valida e serializza soltanto gli input `startMeetingRealtime`, `startMeetingFile` e `rerunMeetingDiarization`; la UI mantiene esclusivamente stato temporaneo di presentazione.
