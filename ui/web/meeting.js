@@ -121,7 +121,8 @@ function meetingEnsureUI() {
           <details><summary>Transcript raw originale</summary><div id="meeting-raw" class="meeting-raw transcript"></div></details>
         </section>
         <section class="card">
-          <div class="card-head"><div><p class="kicker">TESTO REVISIONATO</p><h2>Interventi</h2></div><small>Le modifiche non sovrascrivono Whisper raw.</small></div>
+          <div class="card-head"><div><p class="kicker">TESTO REVISIONATO</p><h2>Interventi</h2></div><small>Speaker e testo possono essere corretti senza modificare il raw Whisper.</small></div>
+          <p class="help">Le nuove trascrizioni usano i timestamp parola-per-parola per separare cambi di interlocutore dentro lo stesso segmento Whisper. Le riunioni più vecchie restano modificabili manualmente.</p>
           <div id="meeting-review-list" class="meeting-review-list"></div>
         </section>
       </div>`;
@@ -476,6 +477,20 @@ function meetingRenderReviewSources(metadata) {
   box.append(list);
 }
 
+function meetingKnownSpeakerIds(metadata) {
+  const ids = new Set();
+  (metadata.diarization_segments || []).forEach(item => item.speaker_id && ids.add(item.speaker_id));
+  (metadata.speaker_diarization_segments || []).forEach(item => item.speaker_id && ids.add(item.speaker_id));
+  Object.keys(metadata.speaker_names || {}).forEach(id => ids.add(id));
+  (metadata.review_segments || []).forEach(item => {
+    if (item.speaker_id) ids.add(item.speaker_id);
+    if (item.speaker_override) ids.add(item.speaker_override);
+    (item.speaker_candidates || []).forEach(id => ids.add(id));
+    (item.overlap_speakers || []).forEach(id => ids.add(id));
+  });
+  return [...ids].filter(id => String(id).startsWith("SPEAKER_")).sort();
+}
+
 function meetingRenderReview() {
   const meeting = meetingCurrent;
   const metadata = meeting?.meeting;
@@ -487,16 +502,11 @@ function meetingRenderReview() {
   meetingReviewHasAudio = false;
   meetingRenderReviewSources(metadata);
 
-  const speakerIds = new Set();
-  (metadata.diarization_segments || []).forEach(item => item.speaker_id && speakerIds.add(item.speaker_id));
-  (metadata.review_segments || []).forEach(item => {
-    if (item.speaker_id) speakerIds.add(item.speaker_id);
-    (item.speaker_candidates || []).forEach(id => speakerIds.add(id));
-  });
   const names = metadata.speaker_names || {};
+  const speakerIds = meetingKnownSpeakerIds(metadata);
   const speakerBox = $("meeting-speakers");
   speakerBox.replaceChildren();
-  [...speakerIds].sort().forEach(id => {
+  speakerIds.forEach(id => {
     const row = document.createElement("label");
     row.className = "meeting-speaker-row";
     const caption = document.createElement("strong");
@@ -526,8 +536,17 @@ function meetingRenderReview() {
     list.append(empty);
   }
   review.forEach((item, index) => {
+    const manual = String(item.speaker_override || "");
+    const autoSpeaker = String(item.speaker_id || "");
+    const effective = manual || autoSpeaker;
+    const hasOverlap = Array.isArray(item.overlap_speakers) && item.overlap_speakers.length > 1;
+    const unresolved = !!item.uncertain && !manual;
+
     const row = document.createElement("article");
-    row.className = "meeting-review-segment" + (item.uncertain ? " meeting-uncertain" : "");
+    row.className = "meeting-review-segment";
+    row.classList.toggle("meeting-uncertain", unresolved);
+    row.classList.toggle("meeting-overlap", hasOverlap);
+
     const head = document.createElement("div");
     head.className = "meeting-review-head";
     const seek = document.createElement("button");
@@ -537,10 +556,49 @@ function meetingRenderReview() {
       const audio = $("meeting-audio");
       if (audio?.src) audio.currentTime = Number(item.start) || 0;
     };
-    const speaker = document.createElement("span");
-    speaker.className = "meeting-review-speaker";
-    speaker.textContent = meetingSpeakerLabel(item.speaker_id, names) + (item.uncertain ? " · incerto" : "");
-    head.append(seek, speaker);
+
+    const speakerControls = document.createElement("div");
+    speakerControls.className = "meeting-review-speaker-controls";
+    const status = document.createElement("span");
+    status.className = "meeting-review-speaker";
+    if (manual) status.textContent = `${meetingSpeakerLabel(effective, names)} · manuale`;
+    else if (item.uncertain) status.textContent = "Speaker ? · incerto";
+    else status.textContent = meetingSpeakerLabel(effective, names);
+
+    const select = document.createElement("select");
+    select.className = "meeting-speaker-select";
+    select.setAttribute("aria-label", `Speaker segmento ${index + 1}`);
+    const automatic = document.createElement("option");
+    automatic.value = "";
+    automatic.textContent = `Automatico · ${item.uncertain ? "Speaker ?" : meetingSpeakerLabel(autoSpeaker, names)}`;
+    select.append(automatic);
+    speakerIds.forEach(id => {
+      const option = document.createElement("option");
+      option.value = id;
+      option.textContent = meetingSpeakerLabel(id, names);
+      select.append(option);
+    });
+    select.value = manual;
+    select.onchange = () => call("setMeetingSegmentSpeaker", [meeting.id, index, select.value], raw => {
+      const response = json(raw);
+      if (response?.ok) {
+        meetingCurrent = response.meeting;
+        meetingRenderReview();
+        notice(select.value ? "Speaker corretto manualmente" : "Assegnazione speaker riportata su Automatico");
+      } else showError(response?.error || "Speaker non salvato", "meeting");
+    });
+    speakerControls.append(status, select);
+    head.append(seek, speakerControls);
+
+    if (hasOverlap) {
+      const overlap = document.createElement("p");
+      overlap.className = "meeting-overlap-warning";
+      overlap.textContent = `Parlato sovrapposto rilevato: ${item.overlap_speakers.map(id => meetingSpeakerLabel(id, names)).join(" + ")}. Verifica ascoltando l'audio.`;
+      row.append(head, overlap);
+    } else {
+      row.append(head);
+    }
+
     const textarea = document.createElement("textarea");
     textarea.value = item.text || "";
     textarea.setAttribute("aria-label", `Testo segmento ${index + 1}`);
@@ -554,7 +612,7 @@ function meetingRenderReview() {
         notice("Correzione salvata; il transcript raw è invariato");
       } else showError(response?.error || "Correzione non salvata", "meeting");
     });
-    row.append(head, textarea, save);
+    row.append(textarea, save);
     list.append(row);
   });
 

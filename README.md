@@ -16,8 +16,10 @@ La configurazione di riferimento è CachyOS/Arch Linux con GPU Intel e due runti
 - Riunioni realtime multi-sorgente oppure da registrazione audio/video esistente.
 - Fino a 8 sorgenti realtime conservate come tracce FLAC separate e sincronizzate.
 - Diarizzazione locale ad alta accuratezza con `pyannote/speaker-diarization-community-1`.
-- Numero di interlocutori noto opzionale e `exclusive_speaker_diarization` per la riconciliazione con Whisper.
-- Ricalcolo della sola diarizzazione su riunioni già trascritte, riusando audio e segmenti Whisper persistiti.
+- Timestamp Whisper parola-per-parola per separare cambi di interlocutore anche dentro un singolo segmento di trascrizione.
+- `exclusive_speaker_diarization` per assegnare il testo e diarizzazione regolare per segnalare il parlato realmente sovrapposto.
+- Numero di interlocutori noto opzionale e ricalcolo della sola diarizzazione su riunioni già trascritte.
+- Correzione manuale dello speaker per ogni intervento, inclusi i casi `Speaker ?`, senza sovrascrivere il risultato automatico.
 - Nomi speaker e correzioni manuali senza creare una libreria biometrica/voiceprint.
 - Cronologia persistente, recovery audio e retention configurabile.
 - UI Dark Neumorphism con stato canonico mantenuto in Python.
@@ -99,25 +101,40 @@ microfono / sistema / applicazioni        file audio/video
                                  |
                                  v
                     Whisper large-v3 / SYCL
+                 segmenti + timestamp parole
                                  |
                                  v
                  pyannote Community-1 / XPU
           segmentation + speaker embeddings + VBx
+                       /                 \
+                      v                   v
+       exclusive diarization       regular diarization
+         assegna le parole        rileva overlap reale
+                      \                   /
+                       v                 v
+                    allineamento word-level
                                  |
                                  v
-                  exclusive speaker diarization
-                                 |
-                                 v
-                  allineamento / review / export
+                         review / export
 ```
 
 Se il numero di interlocutori è noto viene passato direttamente a Community-1; `0` mantiene il conteggio automatico. UltraTranscribr assegna identificatori tecnici `SPEAKER_00`, `SPEAKER_01`, ecc. e non tenta di riconoscere l'identità reale delle persone. I nomi vengono aggiunti manualmente nella review e non viene mantenuta alcuna libreria di campioni vocali.
+
+### Allineamento speaker e review
+
+Per le nuove trascrizioni UltraTranscribr conserva i timestamp parola-per-parola restituiti da whisper.cpp. Ogni parola viene riconciliata con la timeline `exclusive_speaker_diarization`: se un singolo segmento Whisper contiene prima una domanda di uno speaker e subito dopo la risposta di un altro, la review viene spezzata automaticamente al cambio interlocutore invece di assegnare l'intero blocco a una sola persona.
+
+La timeline Community-1 regolare viene conservata separatamente e viene usata soltanto per rilevare sovrapposizioni acustiche reali, cioè intervalli in cui due speaker parlano contemporaneamente. In questi casi la review mostra un avviso e richiede controllo umano: da una singola traccia mono non è sempre possibile attribuire in modo affidabile ogni parola quando due persone parlano nello stesso istante.
+
+Ogni intervento della review dispone inoltre di una scelta speaker manuale. L'override è persistito separatamente da `speaker_id`, quindi non cancella l'assegnazione automatica ed è possibile tornare a **Automatico**. Lo stesso meccanismo permette di risolvere manualmente i segmenti `Speaker ?`. Export TXT/SRT/VTT usa l'override quando presente.
+
+Le riunioni create prima dell'introduzione dei timestamp parola-per-parola continuano a funzionare con l'allineamento segment-level storico. Un semplice ricalcolo della diarizzazione non può inventare word timestamps che non erano stati salvati, ma la correzione manuale dello speaker resta disponibile.
 
 ### Ricalcolo della diarizzazione
 
 Dalla review di una Riunione è possibile scegliere nuovamente il numero di interlocutori e usare **Ricalcola diarizzazione**. Questo percorso non avvia whisper.cpp: riusa il FLAC canonico conservato e i segmenti Whisper timestampati già persistiti, quindi sostituisce soltanto la diarizzazione e il relativo allineamento speaker.
 
-Il risultato precedente viene sostituito solo dopo un ricalcolo completato con successo. Se Community-1 fallisce o l'operazione viene annullata, review e diarizzazione già salvate restano utilizzabili. Le correzioni manuali del testo vengono riapplicate quando il segmento Whisper raw è ancora lo stesso; gli ID speaker vengono inoltre stabilizzati per sovrapposizione temporale con la diarizzazione precedente, così i nomi manuali restano associati per quanto possibile allo stesso interlocutore.
+Il risultato precedente viene sostituito solo dopo un ricalcolo completato con successo. Se Community-1 fallisce o l'operazione viene annullata, review e diarizzazione già salvate restano utilizzabili. Le correzioni manuali di testo e speaker vengono riapplicate quando la loro identità di provenienza Whisper è ancora compatibile; gli ID speaker vengono inoltre stabilizzati per sovrapposizione temporale con la diarizzazione precedente, così i nomi manuali restano associati per quanto possibile allo stesso interlocutore.
 
 Il ricalcolo richiede che l'audio della Riunione sia ancora conservato. Dopo **Elimina audio** o dopo la retention automatica, la sola trascrizione testuale non è sufficiente per eseguire nuovamente Community-1.
 

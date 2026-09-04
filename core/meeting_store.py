@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from config.constants import AppMeta
-from core.speaker_diarization import speaker_label
+from core.meeting_alignment import effective_speaker_id, speaker_label
 from core.transcript_export import render_export
 from core.transcript_history import TranscriptHistoryStore
 
@@ -63,6 +63,7 @@ class MeetingStore:
                 "processing_status": "recording" if mode == "realtime" else "preparing_file",
                 "num_speakers": max(0, int(num_speakers)),
                 "diarization_segments": [],
+                "speaker_diarization_segments": [],
                 "speaker_names": {},
                 "review_segments": [],
             },
@@ -76,6 +77,7 @@ class MeetingStore:
         if metadata is None or history is None:
             return None
         metadata.setdefault("acquisition", {"mode": "realtime", "sources": []})
+        metadata.setdefault("speaker_diarization_segments", [])
         return {**history, "meeting": metadata}
 
     def set_status(self, session_id: str, status: str, *, terminal: bool = False) -> None:
@@ -110,11 +112,14 @@ class MeetingStore:
         *,
         diarization_segments: list[dict[str, Any]],
         review_segments: list[dict[str, Any]],
+        speaker_diarization_segments: Optional[list[dict[str, Any]]] = None,
         num_speakers: Optional[int] = None,
     ) -> None:
         with self._lock:
             data = self._require(session_id)
             data["diarization_segments"] = list(diarization_segments)
+            if speaker_diarization_segments is not None:
+                data["speaker_diarization_segments"] = list(speaker_diarization_segments)
             data["review_segments"] = list(review_segments)
             if num_speakers is not None:
                 data["num_speakers"] = max(0, int(num_speakers))
@@ -156,6 +161,41 @@ class MeetingStore:
                 raise IndexError("segmento riunione non valido")
             item = dict(segments[idx])
             item["text"] = str(text or "").strip()
+            segments[idx] = item
+            data["review_segments"] = segments
+            self._write(session_id, data)
+
+    def set_review_speaker_override(
+        self,
+        session_id: str,
+        index: int,
+        speaker_id: str,
+    ) -> None:
+        """Persist a manual review assignment without replacing model output."""
+        override = str(speaker_id or "").strip()
+        if override and not override.startswith("SPEAKER_"):
+            raise ValueError("speaker id non valido")
+        with self._lock:
+            data = self._require(session_id)
+            segments = list(data.get("review_segments") or [])
+            idx = int(index)
+            if idx < 0 or idx >= len(segments):
+                raise IndexError("segmento riunione non valido")
+            if override:
+                known = {
+                    str(item.get("speaker_id") or "")
+                    for key in ("diarization_segments", "speaker_diarization_segments")
+                    for item in data.get(key) or []
+                    if str(item.get("speaker_id") or "")
+                }
+                known.update(str(key) for key in (data.get("speaker_names") or {}))
+                if override not in known:
+                    raise ValueError("speaker non presente nella riunione")
+            item = dict(segments[idx])
+            if override:
+                item["speaker_override"] = override
+            else:
+                item.pop("speaker_override", None)
             segments[idx] = item
             data["review_segments"] = segments
             self._write(session_id, data)
@@ -202,7 +242,9 @@ class MeetingStore:
             text = str(item.get("text") or "").strip()
             if not text:
                 continue
-            lines.append(f"{speaker_label(item.get('speaker_id'), names)}: {text}")
+            lines.append(
+                f"{speaker_label(effective_speaker_id(item), names)}: {text}"
+            )
         return "\n\n".join(lines)
 
     def export(self, session_id: str, target: Path | str, fmt: str) -> Path:
@@ -223,7 +265,7 @@ class MeetingStore:
                 text = str(item.get("text") or "").strip()
                 if not text:
                     continue
-                label = speaker_label(item.get("speaker_id"), names)
+                label = speaker_label(effective_speaker_id(item), names)
                 segments.append(
                     {
                         "start": item.get("start", 0.0),

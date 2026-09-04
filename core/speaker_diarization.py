@@ -1,8 +1,9 @@
 """High-accuracy local speaker diarization for Meeting sessions.
 
 The Meeting pipeline uses pyannote Community-1 on the shared PyTorch Intel XPU
-runtime. Community-1's exclusive diarization is used for transcript
-reconciliation; there is no lightweight/CPU diarization fallback.
+runtime. Both regular and exclusive diarization are retained: exclusive timing
+owns transcript assignment, while regular timing exposes true overlapping
+speech for review. There is no lightweight/CPU diarization fallback.
 """
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ import logging
 import os
 import shutil
 import threading
-from collections import defaultdict, deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -19,8 +20,14 @@ import numpy as np
 import soundfile as sf
 
 from config.constants import AppMeta, ProcessDefaults
+from core.meeting_alignment import (
+    align_speakers,
+    preserve_review_edits,
+    preserve_review_text,
+    speaker_label,
+    stabilize_speaker_ids,
+)
 from core.torch_xpu import get_torch_xpu_device
-from core.transcript_export import normalize_segments
 
 logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[str, int], None]
@@ -29,6 +36,14 @@ COMMUNITY_REPO_ID = "pyannote/speaker-diarization-community-1"
 COMMUNITY_MODEL_NAME = "community-1"
 _MARKER_NAME = ".ultratranscribr-model.json"
 _REQUIRED_DIRECTORIES = ("segmentation", "embedding", "plda")
+
+
+@dataclass(frozen=True)
+class DiarizationResult:
+    """Serializable timing returned by one Community-1 inference."""
+
+    exclusive_segments: list[dict[str, Any]]
+    speaker_segments: list[dict[str, Any]]
 
 
 class DiarizationModelManager:
@@ -140,7 +155,7 @@ class DiarizationModelManager:
 
 
 class SpeakerDiarizer:
-    """Run pyannote Community-1 on XPU and return exclusive speaker turns."""
+    """Run pyannote Community-1 on XPU and return both diarization timelines."""
 
     def __init__(self, models: Optional[DiarizationModelManager] = None) -> None:
         self.models = models or DiarizationModelManager()
@@ -174,7 +189,7 @@ class SpeakerDiarizer:
         *,
         num_speakers: int = -1,
         progress: Optional[Callable[[int], None]] = None,
-    ) -> list[dict[str, Any]]:
+    ) -> DiarizationResult:
         pipeline = self._get_pipeline()
         device = get_torch_xpu_device()
         del device
@@ -211,15 +226,36 @@ class SpeakerDiarizer:
         exclusive = getattr(output, "exclusive_speaker_diarization", None)
         if exclusive is None:
             raise RuntimeError("Community-1 non ha restituito exclusive_speaker_diarization")
-        segments = _annotation_to_segments(exclusive)
-        if not segments:
+        speaker_ids: dict[str, str] = {}
+        exclusive_segments = _annotation_to_segments(exclusive, speaker_ids=speaker_ids)
+        if not exclusive_segments:
             raise RuntimeError("Community-1 non ha rilevato segmenti vocali")
+
+        regular = getattr(output, "speaker_diarization", None)
+        if regular is None:
+            logger.warning(
+                "Community-1 non ha restituito speaker_diarization; "
+                "rilevamento overlap non disponibile"
+            )
+            speaker_segments = [dict(item) for item in exclusive_segments]
+        else:
+            speaker_segments = _annotation_to_segments(regular, speaker_ids=speaker_ids)
+            if not speaker_segments:
+                speaker_segments = [dict(item) for item in exclusive_segments]
+
         if progress:
             progress(100)
-        return segments
+        return DiarizationResult(
+            exclusive_segments=exclusive_segments,
+            speaker_segments=speaker_segments,
+        )
 
 
-def _annotation_to_segments(annotation: Any) -> list[dict[str, Any]]:
+def _annotation_to_segments(
+    annotation: Any,
+    *,
+    speaker_ids: Optional[dict[str, str]] = None,
+) -> list[dict[str, Any]]:
     rows: list[tuple[float, float, str]] = []
     if hasattr(annotation, "itertracks"):
         iterator = annotation.itertracks(yield_label=True)
@@ -240,10 +276,10 @@ def _annotation_to_segments(annotation: Any) -> list[dict[str, Any]]:
                 rows.append((start, end, str(label)))
 
     rows.sort(key=lambda item: (item[0], item[1], item[2]))
-    speaker_ids: dict[str, str] = {}
+    mapping = speaker_ids if speaker_ids is not None else {}
     output: list[dict[str, Any]] = []
     for start, end, raw_label in rows:
-        speaker = speaker_ids.setdefault(raw_label, f"SPEAKER_{len(speaker_ids):02d}")
+        speaker = mapping.setdefault(raw_label, f"SPEAKER_{len(mapping):02d}")
         output.append(
             {
                 "start": round(start, 3),
@@ -252,193 +288,3 @@ def _annotation_to_segments(annotation: Any) -> list[dict[str, Any]]:
             }
         )
     return output
-
-
-def align_speakers(
-    transcript_segments: list[dict[str, Any]],
-    diarization_segments: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Create editable review segments while preserving raw Whisper segments.
-
-    The supplied diarization is Community-1's exclusive speaker timeline, which
-    is specifically intended for reconciliation with transcription timestamps.
-    A Whisper segment can still straddle a real speaker hand-off; temporal
-    overlap therefore remains explicit and ambiguous assignments are marked.
-    """
-    transcript = normalize_segments(transcript_segments)
-    diarization = [
-        {
-            "start": max(0.0, float(item.get("start", 0.0))),
-            "end": max(0.0, float(item.get("end", 0.0))),
-            "speaker_id": str(item.get("speaker_id") or ""),
-        }
-        for item in diarization_segments
-        if float(item.get("end", 0.0)) > float(item.get("start", 0.0))
-        and str(item.get("speaker_id") or "")
-    ]
-    output: list[dict[str, Any]] = []
-    for segment in transcript:
-        start = float(segment["start"])
-        end = float(segment["end"])
-        overlaps: dict[str, float] = {}
-        for turn in diarization:
-            overlap = max(0.0, min(end, turn["end"]) - max(start, turn["start"]))
-            if overlap > 0:
-                speaker = turn["speaker_id"]
-                overlaps[speaker] = overlaps.get(speaker, 0.0) + overlap
-        ranked = sorted(overlaps.items(), key=lambda item: (-item[1], item[0]))
-        speaker_id: Optional[str] = ranked[0][0] if ranked else None
-        uncertain = False
-        candidates = [speaker for speaker, _ in ranked[:2]]
-        if len(ranked) > 1 and ranked[0][1] > 0:
-            uncertain = ranked[1][1] / ranked[0][1] >= 0.8
-            if uncertain:
-                speaker_id = None
-        text = str(segment.get("text") or "").strip()
-        output.append(
-            {
-                "start": start,
-                "end": end,
-                "raw_text": text,
-                "text": text,
-                "speaker_id": speaker_id,
-                "uncertain": uncertain,
-                "speaker_candidates": candidates,
-            }
-        )
-    return output
-
-
-def stabilize_speaker_ids(
-    previous_segments: list[dict[str, Any]],
-    new_segments: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Map new diarization clusters onto prior speaker IDs by temporal overlap.
-
-    Community-1 cluster labels are session-local. Re-running the same audio can
-    therefore number otherwise-identical speakers differently. A deterministic
-    one-to-one overlap match keeps existing manual speaker names attached to the
-    most similar voice timeline. New unmatched clusters receive fresh IDs that
-    cannot accidentally inherit an old name.
-    """
-
-    previous = _valid_diarization_segments(previous_segments)
-    current = _valid_diarization_segments(new_segments)
-    if not previous or not current:
-        return [dict(item) for item in new_segments]
-
-    scores: dict[tuple[str, str], float] = defaultdict(float)
-    old_ids = {item["speaker_id"] for item in previous}
-    new_ids = {item["speaker_id"] for item in current}
-    for new in current:
-        for old in previous:
-            overlap = max(
-                0.0,
-                min(float(new["end"]), float(old["end"]))
-                - max(float(new["start"]), float(old["start"])),
-            )
-            if overlap > 0:
-                scores[(new["speaker_id"], old["speaker_id"])] += overlap
-
-    mapping: dict[str, str] = {}
-    used_old: set[str] = set()
-    ranked = sorted(
-        (
-            (score, new_id, old_id)
-            for (new_id, old_id), score in scores.items()
-            if score > 0
-        ),
-        key=lambda item: (-item[0], item[2], item[1]),
-    )
-    for _score, new_id, old_id in ranked:
-        if new_id in mapping or old_id in used_old:
-            continue
-        mapping[new_id] = old_id
-        used_old.add(old_id)
-
-    reserved = set(old_ids)
-    next_number = 0
-    for new_id in sorted(new_ids):
-        if new_id in mapping:
-            continue
-        while f"SPEAKER_{next_number:02d}" in reserved:
-            next_number += 1
-        stable = f"SPEAKER_{next_number:02d}"
-        mapping[new_id] = stable
-        reserved.add(stable)
-        next_number += 1
-
-    output: list[dict[str, Any]] = []
-    for item in new_segments:
-        row = dict(item)
-        speaker_id = str(row.get("speaker_id") or "")
-        if speaker_id in mapping:
-            row["speaker_id"] = mapping[speaker_id]
-        output.append(row)
-    return output
-
-
-def preserve_review_text(
-    previous_review: list[dict[str, Any]],
-    new_review: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Carry manual text edits across a diarization-only rerun.
-
-    Edits are reused only when start/end timestamps and raw Whisper text still
-    identify the same transcript segment. This prevents a stale correction from
-    being applied if the raw transcript ever changes independently.
-    """
-
-    indexed: dict[tuple[float, float, str], deque[str]] = defaultdict(deque)
-    for item in previous_review:
-        key = _review_identity(item)
-        indexed[key].append(str(item.get("text") or ""))
-
-    output: list[dict[str, Any]] = []
-    for item in new_review:
-        row = dict(item)
-        bucket = indexed.get(_review_identity(row))
-        if bucket:
-            row["text"] = bucket.popleft()
-        output.append(row)
-    return output
-
-
-def _valid_diarization_segments(
-    segments: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    output: list[dict[str, Any]] = []
-    for item in segments:
-        try:
-            start = max(0.0, float(item.get("start", 0.0)))
-            end = max(start, float(item.get("end", 0.0)))
-        except (TypeError, ValueError):
-            continue
-        speaker_id = str(item.get("speaker_id") or "").strip()
-        if end <= start or not speaker_id:
-            continue
-        output.append({"start": start, "end": end, "speaker_id": speaker_id})
-    return output
-
-
-def _review_identity(item: dict[str, Any]) -> tuple[float, float, str]:
-    try:
-        start = round(float(item.get("start", 0.0)), 3)
-        end = round(float(item.get("end", 0.0)), 3)
-    except (TypeError, ValueError):
-        start = end = 0.0
-    raw = str(item.get("raw_text") or "").strip()
-    return start, end, raw
-
-
-def speaker_label(speaker_id: Optional[str], names: dict[str, str]) -> str:
-    if not speaker_id:
-        return "Speaker ?"
-    custom = str(names.get(speaker_id) or "").strip()
-    if custom:
-        return custom
-    try:
-        number = int(str(speaker_id).rsplit("_", 1)[-1]) + 1
-    except ValueError:
-        return str(speaker_id)
-    return f"Speaker {number}"

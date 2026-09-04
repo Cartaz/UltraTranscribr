@@ -12,6 +12,12 @@ from config.settings import AudioSource, Settings
 from core.audio_inputs import AudioInputResolver, AudioInputSelection
 from core.event_bus import EventBus
 from core.file_transcriber import FileTranscriberThread
+from core.meeting_alignment import (
+    align_speakers,
+    build_speaker_id_mapping,
+    preserve_review_edits,
+    remap_speaker_ids,
+)
 from core.meeting_capture import (
     MeetingCaptureSession,
     MeetingRecordingBundle,
@@ -20,13 +26,7 @@ from core.meeting_capture import (
 )
 from core.meeting_store import MeetingStore
 from core.microphone_recording import MicrophoneRecorder, RecordingInfo
-from core.speaker_diarization import (
-    DiarizationModelManager,
-    SpeakerDiarizer,
-    align_speakers,
-    preserve_review_text,
-    stabilize_speaker_ids,
-)
+from core.speaker_diarization import DiarizationModelManager, SpeakerDiarizer
 from core.transcript_history import TranscriptHistoryStore
 from core.whisper_backend import WhisperBackend
 
@@ -539,6 +539,19 @@ class MeetingManager:
         self._emit("meeting_review_changed", session_id)
         return meeting
 
+    def set_segment_speaker(
+        self,
+        session_id: str,
+        index: int,
+        speaker_id: str,
+    ) -> dict[str, Any]:
+        self.store.set_review_speaker_override(session_id, index, speaker_id)
+        meeting = self.store.get(session_id)
+        if meeting is None:
+            raise KeyError("riunione non trovata")
+        self._emit("meeting_review_changed", session_id)
+        return meeting
+
     def delete_audio(self, session_id: str) -> bool:
         deleted = self.store.delete_audio(session_id)
         self._emit("meeting_review_changed", session_id)
@@ -647,7 +660,7 @@ class MeetingManager:
             if not raw_segments:
                 raise RuntimeError("Whisper non ha prodotto segmenti timestampati")
 
-            diarization, review = self._compute_diarization(
+            diarization, speaker_diarization, review = self._compute_diarization(
                 runtime,
                 info.path,
                 raw_segments,
@@ -658,6 +671,7 @@ class MeetingManager:
             self.store.set_diarization(
                 runtime.id,
                 diarization_segments=diarization,
+                speaker_diarization_segments=speaker_diarization,
                 review_segments=review,
                 num_speakers=runtime.num_speakers,
             )
@@ -685,7 +699,7 @@ class MeetingManager:
     ) -> None:
         try:
             assert runtime.recording is not None
-            diarization, review = self._compute_diarization(
+            diarization, speaker_diarization, review = self._compute_diarization(
                 runtime,
                 runtime.recording.path,
                 raw_segments,
@@ -700,6 +714,7 @@ class MeetingManager:
             self.store.set_diarization(
                 runtime.id,
                 diarization_segments=diarization,
+                speaker_diarization_segments=speaker_diarization,
                 review_segments=review,
                 num_speakers=runtime.num_speakers,
             )
@@ -736,7 +751,7 @@ class MeetingManager:
         persist_transient_status: bool,
         previous_diarization: Optional[list[dict[str, Any]]] = None,
         previous_review: Optional[list[dict[str, Any]]] = None,
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
         runtime.status = (
             "downloading_diarization"
             if not self.models.status()["ready"]
@@ -751,24 +766,28 @@ class MeetingManager:
             lambda label, percent: self._model_progress(runtime, label, percent)
         )
         if runtime.stop_event.is_set() or self._shutdown_event.is_set():
-            return [], []
+            return [], [], []
 
         runtime.status = "diarizing"
         runtime.diarization_progress = 0
         if persist_transient_status:
             self.store.set_status(runtime.id, runtime.status)
         self._emit("meeting_updated", self._snapshot(runtime))
-        diarization = self.diarizer.run(
+        result = self.diarizer.run(
             audio_path,
             num_speakers=runtime.num_speakers if runtime.num_speakers > 0 else -1,
             progress=lambda percent: self._diarization_progress(runtime, percent),
         )
+        diarization = list(result.exclusive_segments)
+        speaker_diarization = list(result.speaker_segments)
         if previous_diarization:
-            diarization = stabilize_speaker_ids(previous_diarization, diarization)
-        review = align_speakers(raw_segments, diarization)
+            mapping = build_speaker_id_mapping(previous_diarization, diarization)
+            diarization = remap_speaker_ids(diarization, mapping)
+            speaker_diarization = remap_speaker_ids(speaker_diarization, mapping)
+        review = align_speakers(raw_segments, diarization, speaker_diarization)
         if previous_review:
-            review = preserve_review_text(previous_review, review)
-        return diarization, review
+            review = preserve_review_edits(previous_review, review)
+        return diarization, speaker_diarization, review
 
     def _transcription_event(self, runtime: MeetingRuntime, event: str, payload: Any) -> None:
         if runtime.stop_event.is_set() or self._shutdown_event.is_set():
