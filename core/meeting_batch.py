@@ -54,6 +54,7 @@ class MeetingBatchCoordinator:
 
     _ACTIVE_STATUSES = {"starting", "running", "cancelling"}
     _TERMINAL_PHASES = {"completed", "error", "cancelled", "interrupted"}
+    _MAX_SPEAKERS = 20
 
     def __init__(
         self,
@@ -90,42 +91,28 @@ class MeetingBatchCoordinator:
                 for job in self._jobs
             )
 
-    def enqueue(
-        self,
-        paths: list[str],
-        *,
-        language: str,
-        num_speakers: int,
-    ) -> list[dict[str, Any]]:
+    def enqueue(self, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Append fully configured jobs and start the FIFO worker.
+
+        Each entry carries its own language and speaker-count settings. Validation
+        happens for the whole request before mutating queue state, so a malformed
+        row cannot leave a partially enqueued batch behind.
+        """
         if self._closed:
             raise RuntimeError("coda riunioni chiusa")
 
-        candidates: list[str] = []
-        seen: set[str] = set()
-        for raw in paths:
-            path = Path(str(raw)).expanduser()
-            if not path.is_file():
-                raise FileNotFoundError(f"file non trovato: {path}")
-            normalized = str(path)
-            if normalized in seen:
-                continue
-            seen.add(normalized)
-            candidates.append(normalized)
-        if not candidates:
+        normalized = self._normalize_entries(entries)
+        if not normalized:
             return self.list_jobs()
 
-        count = int(num_speakers)
-        if count < 0 or count > 20:
-            raise ValueError("Il numero di interlocutori deve essere tra 0 e 20")
-
         with self._lock:
-            for path in candidates:
+            for entry in normalized:
                 self._jobs.append(
                     MeetingBatchJob(
                         id=uuid.uuid4().hex[:12],
-                        path=path,
-                        language=str(language),
-                        num_speakers=count,
+                        path=entry["path"],
+                        language=entry["language"],
+                        num_speakers=entry["num_speakers"],
                     )
                 )
         self._emit_changed()
@@ -169,6 +156,48 @@ class MeetingBatchCoordinator:
         for event, handler in self._subscriptions:
             self._unsubscribe(event, handler)
         self._tasks.close()
+
+    def _normalize_entries(
+        self,
+        entries: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not isinstance(entries, list):
+            raise ValueError("elenco riunioni non valido")
+
+        normalized: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise ValueError("configurazione riunione non valida")
+            path = Path(str(entry.get("path") or "")).expanduser()
+            if not path.is_file():
+                raise FileNotFoundError(f"file non trovato: {path}")
+            resolved_path = str(path)
+            if resolved_path in seen:
+                continue
+            seen.add(resolved_path)
+
+            language = str(entry.get("language") or "").strip()
+            if not language:
+                raise ValueError(f"lingua non valida per {path.name}")
+            try:
+                count = int(entry.get("num_speakers", 0))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"numero interlocutori non valido per {path.name}"
+                ) from exc
+            if count < 0 or count > self._MAX_SPEAKERS:
+                raise ValueError(
+                    f"Il numero di interlocutori per {path.name} deve essere tra 0 e {self._MAX_SPEAKERS}"
+                )
+            normalized.append(
+                {
+                    "path": resolved_path,
+                    "language": language,
+                    "num_speakers": count,
+                }
+            )
+        return normalized
 
     def _maybe_start_next_async(self) -> None:
         with self._lock:
