@@ -13,8 +13,51 @@ def _timestamp(seconds: float, *, vtt: bool) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}{separator}{millis:03d}"
 
 
+def _normalize_words(
+    words: Any,
+    *,
+    segment_start: float,
+    segment_end: float,
+) -> list[dict[str, Any]]:
+    """Validate optional Whisper word timing without changing its display text."""
+    if not isinstance(words, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for raw in words:
+        if not isinstance(raw, dict):
+            continue
+        word = str(raw.get("word") or "")
+        if not word.strip():
+            continue
+        try:
+            start = max(segment_start, float(raw.get("start", segment_start)))
+            end = min(segment_end, max(start, float(raw.get("end", start))))
+        except (TypeError, ValueError):
+            continue
+        if start > segment_end or end < segment_start:
+            continue
+        item: dict[str, Any] = {
+            "word": word,
+            "start": start,
+            "end": max(start, end),
+        }
+        try:
+            probability = float(raw.get("probability"))
+        except (TypeError, ValueError):
+            probability = None
+        if probability is not None:
+            item["probability"] = probability
+        result.append(item)
+    result.sort(key=lambda item: (item["start"], item["end"]))
+    return result
+
+
 def normalize_segments(segments: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return validated, ordered subtitle segments without mutating input."""
+    """Return validated, ordered transcript/subtitle segments without mutating input.
+
+    Optional Whisper word timestamps are preserved as presentation-neutral timing
+    metadata. Subtitle renderers simply ignore the extra field.
+    """
     result: list[dict[str, Any]] = []
     seen: set[tuple[int, int, str]] = set()
     for raw in segments:
@@ -32,7 +75,15 @@ def normalize_segments(segments: Iterable[dict[str, Any]]) -> list[dict[str, Any
         if key in seen:
             continue
         seen.add(key)
-        result.append({"start": start, "end": end, "text": text})
+        item: dict[str, Any] = {"start": start, "end": end, "text": text}
+        words = _normalize_words(
+            raw.get("words"),
+            segment_start=start,
+            segment_end=end,
+        )
+        if words:
+            item["words"] = words
+        result.append(item)
     result.sort(key=lambda item: (item["start"], item["end"], item["text"]))
     return result
 
