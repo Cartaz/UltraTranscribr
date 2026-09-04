@@ -6,7 +6,7 @@ let meetingHistoryId = null;
 let meetingTimerAnchor = 0;
 let meetingTimerBase = 0;
 let meetingMode = "realtime";
-let meetingFilePaths = [];
+let meetingFileDrafts = [];
 let meetingBatchQueue = [];
 let meetingMicrophones = [];
 let meetingMonitors = [];
@@ -80,7 +80,12 @@ function meetingEnsureUI() {
             <div><label for="meeting-language">Lingua</label><input id="meeting-language" type="text" value="auto"></div>
             <div><label for="meeting-speaker-count">Interlocutori</label><input id="meeting-speaker-count" type="number" min="0" max="20" value="0"></div>
           </div>
-          <p class="help">0 = rilevamento automatico degli interlocutori. In batch lingua e numero interlocutori vengono applicati a tutte le registrazioni selezionate.</p>
+          <p class="help" id="meeting-common-help">0 = rilevamento automatico degli interlocutori.</p>
+          <div id="meeting-batch-drafts-wrap" class="meeting-batch-drafts-wrap" hidden>
+            <div class="card-head meeting-batch-drafts-head"><div><p class="kicker">CONFIGURAZIONE BATCH</p><h3>Impostazioni per registrazione</h3></div></div>
+            <p class="help">Lingua e interlocutori sono indipendenti per ogni file. I valori sopra vengono copiati come predefiniti quando selezioni le registrazioni.</p>
+            <div id="meeting-batch-drafts" class="meeting-batch-drafts"></div>
+          </div>
           <div class="actions">
             <button id="meeting-start" class="button selected" type="button">Avvia riunione</button>
             <button id="meeting-finish" class="button" type="button" disabled>Termina e analizza</button>
@@ -252,23 +257,99 @@ function meetingRenderRuntime(runtime) {
     const missingStream = state.source === "application" && !$("live-stream")?.value;
     $("live-start").disabled = active || !!state.file || missingStream;
   }
+  meetingRenderBatchDrafts();
+}
+
+function meetingBatchDefaults() {
+  const language = $("meeting-language")?.value.trim() || state.boot?.settings?.language || "auto";
+  const rawCount = Number($("meeting-speaker-count")?.value);
+  const numSpeakers = Number.isFinite(rawCount) ? Math.max(0, Math.min(20, Math.trunc(rawCount))) : 0;
+  return {language, num_speakers: numSpeakers};
 }
 
 function meetingUpdateFileSelection() {
   const input = $("meeting-file-path");
   if (!input) return;
-  if (!meetingFilePaths.length) {
+  const paths = meetingFileDrafts.map(item => item.path);
+  if (!paths.length) {
     input.value = "";
     input.placeholder = "Nessun file selezionato";
     input.title = "";
-  } else if (meetingFilePaths.length === 1) {
-    input.value = meetingFilePaths[0];
-    input.title = meetingFilePaths[0];
+  } else if (paths.length === 1) {
+    input.value = paths[0];
+    input.title = paths[0];
   } else {
-    input.value = `${meetingFilePaths.length} registrazioni selezionate`;
-    input.title = meetingFilePaths.join("\n");
+    input.value = `${paths.length} registrazioni selezionate`;
+    input.title = paths.join("\n");
   }
+  meetingRenderBatchDrafts();
   meetingUpdateModePresentation();
+}
+
+function meetingRenderBatchDrafts() {
+  const wrapper = $("meeting-batch-drafts-wrap");
+  const list = $("meeting-batch-drafts");
+  if (!wrapper || !list) return;
+  wrapper.hidden = meetingMode !== "file" || !meetingFileDrafts.length;
+  list.replaceChildren();
+  if (!meetingFileDrafts.length) return;
+  const locked = meetingIsBusy();
+
+  meetingFileDrafts.forEach((draft, index) => {
+    const row = document.createElement("div");
+    row.className = "meeting-batch-draft-item";
+
+    const info = document.createElement("div");
+    info.className = "meeting-batch-draft-file";
+    const title = document.createElement("strong");
+    title.textContent = meetingFileName(draft.path);
+    title.title = draft.path;
+    const path = document.createElement("small");
+    path.textContent = draft.path;
+    info.append(title, path);
+
+    const languageField = document.createElement("label");
+    languageField.className = "meeting-batch-draft-field";
+    const languageCaption = document.createElement("span");
+    languageCaption.textContent = "Lingua";
+    const languageInput = document.createElement("input");
+    languageInput.type = "text";
+    languageInput.value = draft.language;
+    languageInput.disabled = locked;
+    languageInput.setAttribute("aria-label", `Lingua ${title.textContent}`);
+    languageInput.oninput = () => { draft.language = languageInput.value; };
+    languageField.append(languageCaption, languageInput);
+
+    const speakersField = document.createElement("label");
+    speakersField.className = "meeting-batch-draft-field";
+    const speakersCaption = document.createElement("span");
+    speakersCaption.textContent = "Interlocutori";
+    const speakersInput = document.createElement("input");
+    speakersInput.type = "number";
+    speakersInput.min = "0";
+    speakersInput.max = "20";
+    speakersInput.value = String(draft.num_speakers);
+    speakersInput.disabled = locked;
+    speakersInput.setAttribute("aria-label", `Interlocutori ${title.textContent}`);
+    speakersInput.oninput = () => {
+      const value = Number(speakersInput.value);
+      if (Number.isFinite(value)) draft.num_speakers = Math.max(0, Math.min(20, Math.trunc(value)));
+    };
+    speakersField.append(speakersCaption, speakersInput);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Rimuovi";
+    remove.disabled = locked;
+    remove.setAttribute("aria-label", `Rimuovi ${title.textContent} dal batch`);
+    remove.onclick = () => {
+      meetingFileDrafts.splice(index, 1);
+      meetingUpdateFileSelection();
+    };
+
+    row.append(info, languageField, speakersField, remove);
+    list.append(row);
+  });
 }
 
 function meetingUpdateModePresentation() {
@@ -277,11 +358,21 @@ function meetingUpdateModePresentation() {
   if ($("meeting-realtime-inputs")) $("meeting-realtime-inputs").hidden = meetingMode !== "realtime";
   if ($("meeting-file-input")) $("meeting-file-input").hidden = meetingMode !== "file";
   if ($("meeting-batch-card")) $("meeting-batch-card").hidden = meetingMode !== "file";
+  const languageLabel = document.querySelector('label[for="meeting-language"]');
+  const speakersLabel = document.querySelector('label[for="meeting-speaker-count"]');
+  if (languageLabel) languageLabel.textContent = meetingMode === "file" ? "Lingua predefinita" : "Lingua";
+  if (speakersLabel) speakersLabel.textContent = meetingMode === "file" ? "Interlocutori predefiniti" : "Interlocutori";
+  if ($("meeting-common-help")) {
+    $("meeting-common-help").textContent = meetingMode === "file"
+      ? "0 = rilevamento automatico. Questi valori sono predefiniti: dopo la selezione puoi modificarli separatamente per ogni registrazione."
+      : "0 = rilevamento automatico degli interlocutori.";
+  }
   if ($("meeting-start")) {
     $("meeting-start").textContent = meetingMode === "file"
-      ? (meetingFilePaths.length > 1 ? `Accoda ${meetingFilePaths.length} riunioni` : "Accoda registrazione")
+      ? (meetingFileDrafts.length > 1 ? `Avvia batch (${meetingFileDrafts.length})` : "Analizza registrazione")
       : "Avvia riunione";
   }
+  meetingRenderBatchDrafts();
 }
 
 function meetingSetMode(mode) {
@@ -409,8 +500,31 @@ function meetingRealtimePayload() {
 function meetingPickFile() {
   call("chooseAudioFiles", [], raw => {
     const selected = json(raw);
-    meetingFilePaths = [...new Set((Array.isArray(selected) ? selected : []).map(String).filter(Boolean))];
+    if (!Array.isArray(selected)) return;
+    const defaults = meetingBatchDefaults();
+    const previous = new Map(meetingFileDrafts.map(item => [item.path, item]));
+    meetingFileDrafts = [...new Set(selected.map(String).filter(Boolean))].map(path => {
+      const existing = previous.get(path);
+      return existing || {
+        path,
+        language: defaults.language,
+        num_speakers: defaults.num_speakers,
+      };
+    });
     meetingUpdateFileSelection();
+  });
+}
+
+function meetingConfiguredBatch() {
+  const fallback = meetingBatchDefaults();
+  return meetingFileDrafts.map(draft => {
+    const language = String(draft.language || "").trim() || fallback.language;
+    const rawCount = Number(draft.num_speakers);
+    const numSpeakers = Number.isFinite(rawCount) ? Math.trunc(rawCount) : 0;
+    if (numSpeakers < 0 || numSpeakers > 20) {
+      throw new Error(`Interlocutori non validi per ${meetingFileName(draft.path)}: usa un valore tra 0 e 20`);
+    }
+    return {path: draft.path, language, num_speakers: numSpeakers};
   });
 }
 
@@ -418,21 +532,28 @@ function meetingStart() {
   const language = $("meeting-language").value.trim() || state.boot?.settings?.language || "auto";
   const count = Math.max(0, Number($("meeting-speaker-count").value) || 0);
   if (meetingMode === "file") {
-    if (!meetingFilePaths.length) {
+    if (!meetingFileDrafts.length) {
       showError("Seleziona almeno una registrazione audio o video", "meeting");
       return;
     }
-    const selected = [...meetingFilePaths];
-    call("enqueueMeetingBatch", [JSON.stringify(selected), language, count], result => {
+    let configured;
+    try {
+      configured = meetingConfiguredBatch();
+    } catch (error) {
+      showError(error?.message || String(error), "meeting");
+      return;
+    }
+    call("enqueueMeetingBatch", [JSON.stringify(configured)], result => {
       const response = json(result);
       if (!response?.ok) {
         showError(response?.error || "Impossibile accodare le registrazioni", "meeting");
         return;
       }
-      meetingFilePaths = [];
+      const selectedCount = configured.length;
+      meetingFileDrafts = [];
       meetingUpdateFileSelection();
       meetingRenderBatchQueue(response.jobs || []);
-      notice(selected.length === 1 ? "Registrazione aggiunta alla coda Riunioni" : `${selected.length} registrazioni aggiunte alla coda Riunioni`);
+      notice(selectedCount === 1 ? "Registrazione aggiunta alla coda Riunioni" : `${selectedCount} registrazioni aggiunte alla coda Riunioni`);
     });
     return;
   }
@@ -490,8 +611,8 @@ function meetingRenderBatchQueue(items) {
     title.title = job.path || "";
     const detail = document.createElement("small");
     const phase = job.phase && job.phase !== job.status ? ` · ${meetingStatus(job.phase)}` : "";
-    const speakers = Number(job.num_speakers) > 0 ? ` · ${job.num_speakers} interlocutori` : " · interlocutori auto";
-    detail.textContent = `${meetingBatchStatus(job.status)}${phase}${speakers}${job.error ? ` · ${job.error}` : ""}`;
+    const speakers = Number(job.num_speakers) > 0 ? `${job.num_speakers} interlocutori` : "interlocutori auto";
+    detail.textContent = `${meetingBatchStatus(job.status)}${phase} · ${job.language || "auto"} · ${speakers}${job.error ? ` · ${job.error}` : ""}`;
     info.append(title, detail);
 
     const progress = document.createElement("div");
