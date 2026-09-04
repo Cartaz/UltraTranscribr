@@ -261,6 +261,17 @@ class BackendBridge(QObject):
         except Exception as exc:
             return self._error(exc)
 
+    @Slot(str, int, result=str)
+    def rerunMeetingDiarization(self, session_id: str, num_speakers: int) -> str:
+        try:
+            meeting = self._application.rerun_meeting_diarization(
+                session_id.strip(),
+                num_speakers=int(num_speakers),
+            )
+            return self._ok(meeting=meeting)
+        except Exception as exc:
+            return self._error(exc)
+
     @Slot(result=str)
     def finishMeeting(self) -> str:
         try:
