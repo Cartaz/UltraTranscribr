@@ -52,7 +52,11 @@ def test_application_service_owns_only_boundary_cleanup() -> None:
     service.close()
     service.close()
 
-    assert events == ["tasks"]
+    assert events == [
+        "unsubscribe:meeting_updated",
+        "unsubscribe:history_changed",
+        "tasks",
+    ]
 
 
 def test_application_service_releases_subscriptions_before_owned_tasks() -> None:
@@ -66,7 +70,12 @@ def test_application_service_releases_subscriptions_before_owned_tasks() -> None
     service.close()
 
     assert controller.subscriptions == []
-    assert events == ["unsubscribe:live_session_updated", "tasks"]
+    assert events == [
+        "unsubscribe:meeting_updated",
+        "unsubscribe:history_changed",
+        "unsubscribe:live_session_updated",
+        "tasks",
+    ]
     with pytest.raises(RuntimeError, match="chiuso"):
         service.subscribe("history_changed", handler)
 
@@ -82,7 +91,11 @@ def test_application_service_explicit_unsubscribe_updates_owned_registry() -> No
     service.close()
 
     assert controller.subscriptions == []
-    assert events == ["unsubscribe:history_changed"]
+    assert events == [
+        "unsubscribe:history_changed",
+        "unsubscribe:meeting_updated",
+        "unsubscribe:history_changed",
+    ]
 
 
 def test_composition_root_owns_runtime_shutdown_after_application_cleanup() -> None:
@@ -99,3 +112,4 @@ def test_composition_root_owns_runtime_shutdown_after_application_cleanup() -> N
     assert "self._closed = False" in application
     assert "self._subscriptions" in application
     assert "self.controller.unsubscribe(event, handler)" in application
+    assert "self.meeting_batch.close()" in application

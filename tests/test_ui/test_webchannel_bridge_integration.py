@@ -158,6 +158,11 @@ class _FakeController:
     def subscribe(self, event, handler) -> None:
         self.subscriptions.setdefault(event, []).append(handler)
 
+    def unsubscribe(self, event, handler) -> None:
+        handlers = self.subscriptions.get(event, [])
+        if handler in handlers:
+            handlers.remove(handler)
+
     def list_models(self):
         return [{"id": "medium", "model": "medium", "installed": True}]
 

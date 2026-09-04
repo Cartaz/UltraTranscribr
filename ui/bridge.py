@@ -67,6 +67,8 @@ class BackendBridge(QObject):
         "meeting_completed",
         "meeting_error",
         "meeting_review_changed",
+        "meeting_queue_changed",
+        "meeting_queue_job_updated",
     )
 
     _MEDIA_FILTER = (
@@ -260,6 +262,42 @@ class BackendBridge(QObject):
             return self._ok(meeting=meeting)
         except Exception as exc:
             return self._error(exc)
+
+    @Slot(str, result=str)
+    def enqueueMeetingBatch(self, jobs_json: str) -> str:
+        try:
+            decoded = json.loads(jobs_json)
+            if not isinstance(decoded, list):
+                raise ValueError("elenco riunioni non valido")
+            entries: list[dict[str, Any]] = []
+            for item in decoded:
+                if not isinstance(item, dict):
+                    raise ValueError("configurazione riunione non valida")
+                entries.append(
+                    {
+                        "path": str(item.get("path") or "").strip(),
+                        "language": str(item.get("language") or "").strip(),
+                        "num_speakers": item.get("num_speakers", 0),
+                    }
+                )
+            jobs = self._application.enqueue_meeting_files(entries)
+            return self._ok(jobs=jobs)
+        except Exception as exc:
+            return self._error(exc)
+
+    @Slot(result=str)
+    def listMeetingQueue(self) -> str:
+        return json.dumps(
+            self._application.list_meeting_queue(), ensure_ascii=False, default=str
+        )
+
+    @Slot(result=str)
+    def cancelMeetingQueue(self) -> str:
+        return self._ok(jobs=self._application.cancel_meeting_queue())
+
+    @Slot(result=str)
+    def clearFinishedMeetingQueue(self) -> str:
+        return self._ok(jobs=self._application.clear_finished_meeting_queue())
 
     @Slot(str, int, result=str)
     def rerunMeetingDiarization(self, session_id: str, num_speakers: int) -> str:
