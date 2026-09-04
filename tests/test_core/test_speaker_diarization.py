@@ -44,6 +44,73 @@ def test_align_speakers_marks_near_equal_overlap_uncertain() -> None:
     assert review[0]["speaker_candidates"] == ["SPEAKER_00", "SPEAKER_01"]
 
 
+def test_rerun_stabilizes_swapped_cluster_ids_by_temporal_overlap() -> None:
+    previous = [
+        {"start": 0.0, "end": 4.0, "speaker_id": "SPEAKER_00"},
+        {"start": 4.0, "end": 8.0, "speaker_id": "SPEAKER_01"},
+    ]
+    rerun = [
+        {"start": 0.0, "end": 4.0, "speaker_id": "SPEAKER_01"},
+        {"start": 4.0, "end": 8.0, "speaker_id": "SPEAKER_00"},
+    ]
+
+    stable = sd.stabilize_speaker_ids(previous, rerun)
+
+    assert stable == previous
+
+
+def test_rerun_assigns_fresh_id_to_unmatched_new_speaker() -> None:
+    previous = [
+        {"start": 0.0, "end": 2.0, "speaker_id": "SPEAKER_00"},
+        {"start": 2.0, "end": 4.0, "speaker_id": "SPEAKER_01"},
+    ]
+    rerun = [
+        {"start": 0.0, "end": 2.0, "speaker_id": "SPEAKER_01"},
+        {"start": 2.0, "end": 4.0, "speaker_id": "SPEAKER_00"},
+        {"start": 4.0, "end": 6.0, "speaker_id": "SPEAKER_02"},
+    ]
+
+    stable = sd.stabilize_speaker_ids(previous, rerun)
+
+    assert stable[0]["speaker_id"] == "SPEAKER_00"
+    assert stable[1]["speaker_id"] == "SPEAKER_01"
+    assert stable[2]["speaker_id"] == "SPEAKER_02"
+
+
+def test_rerun_preserves_manual_text_only_for_same_raw_segment() -> None:
+    previous = [
+        {
+            "start": 0.0,
+            "end": 1.0,
+            "raw_text": "Ciao mondo",
+            "text": "Ciao a tutti",
+            "speaker_id": "SPEAKER_00",
+        }
+    ]
+    rerun = [
+        {
+            "start": 0.0,
+            "end": 1.0,
+            "raw_text": "Ciao mondo",
+            "text": "Ciao mondo",
+            "speaker_id": "SPEAKER_01",
+        },
+        {
+            "start": 1.0,
+            "end": 2.0,
+            "raw_text": "Nuovo segmento",
+            "text": "Nuovo segmento",
+            "speaker_id": "SPEAKER_01",
+        },
+    ]
+
+    preserved = sd.preserve_review_text(previous, rerun)
+
+    assert preserved[0]["text"] == "Ciao a tutti"
+    assert preserved[0]["speaker_id"] == "SPEAKER_01"
+    assert preserved[1]["text"] == "Nuovo segmento"
+
+
 def test_manual_speaker_names_only_change_display_label() -> None:
     names = {"SPEAKER_00": "Marco"}
     assert speaker_label("SPEAKER_00", names) == "Marco"
