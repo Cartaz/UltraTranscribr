@@ -110,12 +110,27 @@ class MeetingStore:
         *,
         diarization_segments: list[dict[str, Any]],
         review_segments: list[dict[str, Any]],
+        num_speakers: Optional[int] = None,
     ) -> None:
         with self._lock:
             data = self._require(session_id)
             data["diarization_segments"] = list(diarization_segments)
             data["review_segments"] = list(review_segments)
+            if num_speakers is not None:
+                data["num_speakers"] = max(0, int(num_speakers))
             self._write(session_id, data)
+
+    def recording_path(self, session_id: str) -> Optional[Path]:
+        """Return the validated canonical Meeting audio path when it still exists."""
+        with self._lock:
+            data = self._require(session_id)
+            raw = str((data.get("recording") or {}).get("path") or "").strip()
+        if not raw:
+            return None
+        try:
+            return self._resolve_recording_path(raw, require_exists=True)
+        except FileNotFoundError:
+            return None
 
     def set_speaker_name(self, session_id: str, speaker_id: str, name: str) -> None:
         key = str(speaker_id or "").strip()
