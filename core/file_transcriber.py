@@ -257,8 +257,62 @@ class FileTranscriberThread(threading.Thread):
                 continue
             if start < cutoff:
                 start = cutoff
-            result.append({"start": start, "end": end, "text": text})
+            item: dict[str, Any] = {"start": start, "end": end, "text": text}
+            words = cls._normalize_chunk_words(
+                raw.get("words"),
+                chunk_offset_s=chunk_offset_s,
+                committed_before_s=cutoff,
+                segment_start=start,
+                segment_end=end,
+            )
+            if words:
+                item["words"] = words
+            result.append(item)
         return normalize_segments(result)
+
+    @staticmethod
+    def _normalize_chunk_words(
+        raw_words: Any,
+        *,
+        chunk_offset_s: float,
+        committed_before_s: float,
+        segment_start: float,
+        segment_end: float,
+    ) -> list[dict[str, Any]]:
+        if not isinstance(raw_words, list):
+            return []
+        words: list[dict[str, Any]] = []
+        for raw in raw_words:
+            if not isinstance(raw, dict):
+                continue
+            word = str(raw.get("word") or "")
+            if not word.strip():
+                continue
+            try:
+                start = float(chunk_offset_s) + float(raw.get("start", 0.0))
+                end = float(chunk_offset_s) + float(raw.get("end", raw.get("start", 0.0)))
+            except (TypeError, ValueError):
+                continue
+            if end <= committed_before_s + 0.001:
+                continue
+            start = max(segment_start, committed_before_s, start)
+            end = min(segment_end, max(start, end))
+            if start > segment_end:
+                continue
+            item: dict[str, Any] = {
+                "word": word,
+                "start": start,
+                "end": max(start, end),
+            }
+            try:
+                probability = float(raw.get("probability"))
+            except (TypeError, ValueError):
+                probability = None
+            if probability is not None:
+                item["probability"] = probability
+            words.append(item)
+        words.sort(key=lambda item: (item["start"], item["end"]))
+        return words
 
     @staticmethod
     def _segment_time_seconds(raw: dict[str, Any]) -> tuple[float, float] | None:
