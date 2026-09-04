@@ -103,6 +103,32 @@ def test_uncertain_word_assignment_can_remain_explicit_for_manual_review() -> No
     assert review[0]["speaker_candidates"] == ["SPEAKER_00", "SPEAKER_01"]
 
 
+def test_certain_words_do_not_split_when_only_secondary_candidate_changes() -> None:
+    transcript = [
+        {
+            "start": 0.0,
+            "end": 1.6,
+            "text": "Una frase continua",
+            "words": [
+                {"word": " Una", "start": 0.05, "end": 0.35},
+                {"word": " frase", "start": 0.55, "end": 0.85},
+                {"word": " continua", "start": 1.05, "end": 1.35},
+            ],
+        }
+    ]
+    exclusive = [
+        {"start": 0.0, "end": 1.6, "speaker_id": "SPEAKER_00"},
+        {"start": 0.1, "end": 0.14, "speaker_id": "SPEAKER_01"},
+        {"start": 1.1, "end": 1.14, "speaker_id": "SPEAKER_02"},
+    ]
+
+    review = align_speakers(transcript, exclusive)
+
+    assert len(review) == 1
+    assert review[0]["speaker_id"] == "SPEAKER_00"
+    assert review[0]["raw_text"] == "Una frase continua"
+
+
 def test_manual_text_and_speaker_override_survive_same_word_group_rerun() -> None:
     previous = [
         {
