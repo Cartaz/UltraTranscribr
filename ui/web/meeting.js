@@ -6,7 +6,8 @@ let meetingHistoryId = null;
 let meetingTimerAnchor = 0;
 let meetingTimerBase = 0;
 let meetingMode = "realtime";
-let meetingFilePath = "";
+let meetingFilePaths = [];
+let meetingBatchQueue = [];
 let meetingMicrophones = [];
 let meetingMonitors = [];
 let meetingStreams = [];
@@ -15,9 +16,17 @@ let meetingSources = [{ source: "microphone", selected_input: "", stream_id: nul
 
 views.meeting = "RIUNIONE";
 
-function meetingIsBusy() {
+function meetingRuntimeIsBusy() {
   const runtime = state.meetingRuntime;
   return !!runtime && !["completed", "error", "cancelled", "interrupted"].includes(String(runtime.status));
+}
+
+function meetingBatchIsBusy() {
+  return meetingBatchQueue.some(job => ["queued", "starting", "running", "cancelling"].includes(String(job?.status)));
+}
+
+function meetingIsBusy() {
+  return meetingRuntimeIsBusy() || meetingBatchIsBusy();
 }
 
 function meetingEnsureUI() {
@@ -62,16 +71,16 @@ function meetingEnsureUI() {
           </div>
 
           <div id="meeting-file-input" hidden>
-            <label for="meeting-file-path">Registrazione audio o video</label>
-            <div class="picker"><input id="meeting-file-path" type="text" readonly placeholder="Nessun file selezionato"><button id="meeting-pick-file" type="button">Seleziona</button></div>
-            <p class="help">Il media viene normalizzato in FLAC mono 16 kHz e passa nella stessa trascrizione finale + diarizzazione delle riunioni realtime.</p>
+            <label for="meeting-file-path">Registrazioni audio o video</label>
+            <div class="picker"><input id="meeting-file-path" type="text" readonly placeholder="Nessun file selezionato"><button id="meeting-pick-file" type="button">Seleziona file</button></div>
+            <p class="help">Puoi selezionare più registrazioni. Verranno elaborate una alla volta con la stessa pipeline Whisper + Community-1, evitando inferenze GPU concorrenti.</p>
           </div>
 
           <div class="fields two meeting-common-fields">
             <div><label for="meeting-language">Lingua</label><input id="meeting-language" type="text" value="auto"></div>
             <div><label for="meeting-speaker-count">Interlocutori</label><input id="meeting-speaker-count" type="number" min="0" max="20" value="0"></div>
           </div>
-          <p class="help">0 = rilevamento automatico degli interlocutori.</p>
+          <p class="help">0 = rilevamento automatico degli interlocutori. In batch lingua e numero interlocutori vengono applicati a tutte le registrazioni selezionate.</p>
           <div class="actions">
             <button id="meeting-start" class="button selected" type="button">Avvia riunione</button>
             <button id="meeting-finish" class="button" type="button" disabled>Termina e analizza</button>
@@ -94,6 +103,15 @@ function meetingEnsureUI() {
           <p class="help" id="meeting-model-note">La prima diarizzazione scarica Community-1 da Hugging Face; dopo il download il modello viene riutilizzato localmente.</p>
         </section>
       </div>
+
+      <section class="card meeting-batch-card" id="meeting-batch-card" hidden>
+        <div class="card-head">
+          <div><p class="kicker">BATCH</p><h2>Coda riunioni</h2></div>
+          <div class="toolbar"><button id="meeting-batch-clear" type="button">Pulisci completate</button><button id="meeting-batch-cancel" type="button">Annulla coda</button></div>
+        </div>
+        <p class="help">La coda è FIFO e usa una sola pipeline alla volta. Un errore su una registrazione viene annotato e le successive continuano automaticamente.</p>
+        <div id="meeting-batch-list" class="meeting-batch-list" aria-live="polite"><p class="empty-state">Coda vuota.</p></div>
+      </section>
 
       <section class="card">
         <div class="card-head"><div><p class="kicker">ARCHIVIO</p><h2>Riunioni recenti</h2></div><div class="toolbar"><button id="meeting-refresh-list" type="button">Aggiorna</button></div></div>
@@ -154,6 +172,11 @@ function meetingDuration(seconds) {
   return [h, m, s].map(value => String(value).padStart(2, "0")).join(":");
 }
 
+function meetingFileName(path) {
+  const parts = String(path || "").split(/[\\/]/);
+  return parts[parts.length - 1] || String(path || "");
+}
+
 function meetingSetProgress(id, value) {
   const bar = $(id);
   if (!bar) return;
@@ -179,15 +202,28 @@ function meetingStatus(value) {
   })[String(value)] || label(value || "Idle");
 }
 
+function meetingBatchStatus(value) {
+  return ({queued: "In coda", starting: "Avvio", running: "In esecuzione", cancelling: "Annullamento", completed: "Completata", error: "Errore", cancelled: "Annullata"})[String(value)] || String(value || "—");
+}
+
 function meetingRenderRuntime(runtime) {
   state.meetingRuntime = runtime || null;
-  const active = meetingIsBusy();
+  const runtimeActive = meetingRuntimeIsBusy();
+  const batchActive = meetingBatchIsBusy();
+  const active = runtimeActive || batchActive;
   if ($("meeting-start")) $("meeting-start").disabled = active || state.live || state.file;
   if ($("meeting-finish")) $("meeting-finish").disabled = !runtime || runtime.mode !== "realtime" || runtime.status !== "recording";
-  if ($("meeting-cancel")) $("meeting-cancel").disabled = !active;
+  if ($("meeting-cancel")) $("meeting-cancel").disabled = !runtimeActive || batchActive;
+  if ($("meeting-mode-realtime")) $("meeting-mode-realtime").disabled = active;
+  if ($("meeting-mode-file")) $("meeting-mode-file").disabled = active;
+  if ($("meeting-pick-file")) $("meeting-pick-file").disabled = active;
+  if ($("meeting-language")) $("meeting-language").disabled = active;
+  if ($("meeting-speaker-count")) $("meeting-speaker-count").disabled = active;
   if ($("meeting-rerun-diarization")) $("meeting-rerun-diarization").disabled = active || !meetingReviewHasAudio;
   if ($("meeting-review-speaker-count")) $("meeting-review-speaker-count").disabled = active;
-  if ($("meeting-status")) $("meeting-status").textContent = runtime ? meetingStatus(runtime.status) : "Idle";
+  if ($("meeting-batch-cancel")) $("meeting-batch-cancel").disabled = !batchActive;
+  if ($("meeting-batch-clear")) $("meeting-batch-clear").disabled = !meetingBatchQueue.some(job => ["completed", "error", "cancelled"].includes(String(job?.status)));
+  if ($("meeting-status")) $("meeting-status").textContent = runtime ? meetingStatus(runtime.status) : (batchActive ? "Coda riunioni" : "Idle");
   if ($("meeting-model")) $("meeting-model").textContent = runtime?.model ? (modelLabels[runtime.model] || runtime.model) : "—";
   if ($("meeting-language-value")) $("meeting-language-value").textContent = runtime?.language || "—";
   if ($("meeting-source-count")) {
@@ -218,14 +254,40 @@ function meetingRenderRuntime(runtime) {
   }
 }
 
-function meetingSetMode(mode) {
-  if (meetingIsBusy()) return;
-  meetingMode = mode === "file" ? "file" : "realtime";
+function meetingUpdateFileSelection() {
+  const input = $("meeting-file-path");
+  if (!input) return;
+  if (!meetingFilePaths.length) {
+    input.value = "";
+    input.placeholder = "Nessun file selezionato";
+    input.title = "";
+  } else if (meetingFilePaths.length === 1) {
+    input.value = meetingFilePaths[0];
+    input.title = meetingFilePaths[0];
+  } else {
+    input.value = `${meetingFilePaths.length} registrazioni selezionate`;
+    input.title = meetingFilePaths.join("\n");
+  }
+  meetingUpdateModePresentation();
+}
+
+function meetingUpdateModePresentation() {
   $("meeting-mode-realtime")?.classList.toggle("selected", meetingMode === "realtime");
   $("meeting-mode-file")?.classList.toggle("selected", meetingMode === "file");
   if ($("meeting-realtime-inputs")) $("meeting-realtime-inputs").hidden = meetingMode !== "realtime";
   if ($("meeting-file-input")) $("meeting-file-input").hidden = meetingMode !== "file";
-  if ($("meeting-start")) $("meeting-start").textContent = meetingMode === "file" ? "Analizza registrazione" : "Avvia riunione";
+  if ($("meeting-batch-card")) $("meeting-batch-card").hidden = meetingMode !== "file";
+  if ($("meeting-start")) {
+    $("meeting-start").textContent = meetingMode === "file"
+      ? (meetingFilePaths.length > 1 ? `Accoda ${meetingFilePaths.length} riunioni` : "Accoda registrazione")
+      : "Avvia riunione";
+  }
+}
+
+function meetingSetMode(mode) {
+  if (meetingIsBusy()) return;
+  meetingMode = mode === "file" ? "file" : "realtime";
+  meetingUpdateModePresentation();
 }
 
 function meetingSourceOptions(source) {
@@ -345,9 +407,10 @@ function meetingRealtimePayload() {
 }
 
 function meetingPickFile() {
-  call("chooseAudioFile", [], path => {
-    meetingFilePath = String(path || "");
-    if ($("meeting-file-path")) $("meeting-file-path").value = meetingFilePath;
+  call("chooseAudioFiles", [], raw => {
+    const selected = json(raw);
+    meetingFilePaths = [...new Set((Array.isArray(selected) ? selected : []).map(String).filter(Boolean))];
+    meetingUpdateFileSelection();
   });
 }
 
@@ -355,18 +418,21 @@ function meetingStart() {
   const language = $("meeting-language").value.trim() || state.boot?.settings?.language || "auto";
   const count = Math.max(0, Number($("meeting-speaker-count").value) || 0);
   if (meetingMode === "file") {
-    if (!meetingFilePath) {
-      showError("Seleziona una registrazione audio o video", "meeting");
+    if (!meetingFilePaths.length) {
+      showError("Seleziona almeno una registrazione audio o video", "meeting");
       return;
     }
-    call("startMeetingFile", [meetingFilePath, language, count], result => {
+    const selected = [...meetingFilePaths];
+    call("enqueueMeetingBatch", [JSON.stringify(selected), language, count], result => {
       const response = json(result);
       if (!response?.ok) {
-        showError(response?.error || "Impossibile analizzare la registrazione", "meeting");
+        showError(response?.error || "Impossibile accodare le registrazioni", "meeting");
         return;
       }
-      meetingRenderRuntime(response.meeting);
-      notice("Preparazione della registrazione avviata");
+      meetingFilePaths = [];
+      meetingUpdateFileSelection();
+      meetingRenderBatchQueue(response.jobs || []);
+      notice(selected.length === 1 ? "Registrazione aggiunta alla coda Riunioni" : `${selected.length} registrazioni aggiunte alla coda Riunioni`);
     });
     return;
   }
@@ -400,6 +466,95 @@ function meetingFinish() {
     meetingRenderRuntime(response.meeting);
     notice("Chiusura delle sorgenti in corso. Trascrizione finale e diarizzazione partiranno automaticamente.");
   });
+}
+
+function meetingRenderBatchQueue(items) {
+  meetingBatchQueue = Array.isArray(items) ? items : [];
+  const list = $("meeting-batch-list");
+  if (!list) return;
+  list.replaceChildren();
+  if (!meetingBatchQueue.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "Coda vuota.";
+    list.append(empty);
+    meetingRenderRuntime(state.meetingRuntime);
+    return;
+  }
+  meetingBatchQueue.forEach(job => {
+    const row = document.createElement("div");
+    row.className = `meeting-batch-item status-${job.status || "queued"}`;
+    const info = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = meetingFileName(job.path);
+    title.title = job.path || "";
+    const detail = document.createElement("small");
+    const phase = job.phase && job.phase !== job.status ? ` · ${meetingStatus(job.phase)}` : "";
+    const speakers = Number(job.num_speakers) > 0 ? ` · ${job.num_speakers} interlocutori` : " · interlocutori auto";
+    detail.textContent = `${meetingBatchStatus(job.status)}${phase}${speakers}${job.error ? ` · ${job.error}` : ""}`;
+    info.append(title, detail);
+
+    const progress = document.createElement("div");
+    progress.className = "meeting-batch-progress-stack";
+    for (const [caption, value] of [["Whisper", job.transcription_progress], ["Speaker", job.diarization_progress]]) {
+      const line = document.createElement("div");
+      const labelNode = document.createElement("small");
+      const pct = Math.max(0, Math.min(100, Number(value) || 0));
+      labelNode.textContent = `${caption} ${Math.round(pct)}%`;
+      const bar = document.createElement("div");
+      bar.className = "progress meeting-batch-progress";
+      bar.setAttribute("role", "progressbar");
+      bar.setAttribute("aria-valuemin", "0");
+      bar.setAttribute("aria-valuemax", "100");
+      bar.setAttribute("aria-valuenow", String(Math.round(pct)));
+      const fill = document.createElement("span");
+      fill.style.width = `${pct}%`;
+      bar.append(fill);
+      line.append(labelNode, bar);
+      progress.append(line);
+    }
+    row.append(info, progress);
+    list.append(row);
+  });
+  meetingRenderRuntime(state.meetingRuntime);
+}
+
+function meetingUpdateBatchJob(job) {
+  if (!job?.id) return;
+  const index = meetingBatchQueue.findIndex(item => item.id === job.id);
+  if (index >= 0) meetingBatchQueue[index] = job;
+  else meetingBatchQueue.push(job);
+  meetingRenderBatchQueue(meetingBatchQueue);
+}
+
+function meetingCancelBatch() {
+  if (!meetingBatchIsBusy()) return;
+  if (!window.confirm("Annullare la riunione in corso e tutte quelle ancora in coda? Le riunioni già completate resteranno salvate.")) return;
+  call("cancelMeetingQueue", [], raw => {
+    const response = json(raw);
+    if (!response?.ok) {
+      showError(response?.error || "Impossibile annullare la coda Riunioni", "meeting");
+      return;
+    }
+    meetingRenderBatchQueue(response.jobs || []);
+    notice("Annullamento coda Riunioni richiesto");
+  });
+}
+
+function meetingClearFinishedBatch() {
+  call("clearFinishedMeetingQueue", [], raw => {
+    const response = json(raw);
+    if (!response?.ok) {
+      showError(response?.error || "Impossibile pulire la coda Riunioni", "meeting");
+      return;
+    }
+    meetingRenderBatchQueue(response.jobs || []);
+  });
+}
+
+function meetingBatchJobForSession(sessionId) {
+  const key = String(sessionId || "");
+  return meetingBatchQueue.find(job => String(job?.session_id || "") === key) || null;
 }
 
 function meetingClearReview(sessionId) {
@@ -746,6 +901,8 @@ const meetingModule = {
     $("meeting-mode-realtime").onclick = () => meetingSetMode("realtime");
     $("meeting-mode-file").onclick = () => meetingSetMode("file");
     $("meeting-pick-file").onclick = meetingPickFile;
+    $("meeting-batch-clear").onclick = meetingClearFinishedBatch;
+    $("meeting-batch-cancel").onclick = meetingCancelBatch;
     $("meeting-refresh-list").onclick = meetingRefreshList;
     $("meeting-start").onclick = meetingStart;
     $("meeting-finish").onclick = meetingFinish;
@@ -760,8 +917,9 @@ const meetingModule = {
       switchView("meeting");
       meetingLoad(meetingHistoryId);
     };
-    meetingSetMode(meetingMode);
+    meetingUpdateModePresentation();
     meetingRenderSources();
+    meetingRenderBatchQueue([]);
   },
   hydrate(bootstrap) {
     meetingEnsureUI();
@@ -770,7 +928,11 @@ const meetingModule = {
     meetingMicrophones = (bootstrap.devices || []).filter(device => !!device?.is_mic);
     meetingMonitors = (bootstrap.devices || []).filter(device => !!device?.is_monitor);
     meetingStreams = bootstrap.playbackStreams || [];
+    meetingBatchQueue = Array.isArray(bootstrap.meetingQueue) ? bootstrap.meetingQueue : [];
+    if (meetingBatchIsBusy()) meetingMode = "file";
+    meetingUpdateModePresentation();
     meetingRenderSources();
+    meetingRenderBatchQueue(meetingBatchQueue);
     meetingRenderRuntime(bootstrap.meetingRuntime || null);
     sourceUI();
   },
@@ -788,7 +950,7 @@ const meetingModule = {
       return true;
     }
     if (meetingIsBusy()) {
-      notice("Termina la riunione prima di aggiungere una sessione Live", true);
+      notice("Termina la riunione o la coda Riunioni prima di aggiungere una sessione Live", true);
       return true;
     }
     if (state.source === "application" && !input) {
@@ -813,15 +975,30 @@ const meetingModule = {
       meetingRenderRuntime(value);
       return true;
     }
+    if (name === "meeting_queue_changed") {
+      meetingRenderBatchQueue(value);
+      return true;
+    }
+    if (name === "meeting_queue_job_updated") {
+      meetingUpdateBatchJob(value);
+      return true;
+    }
     if (name === "meeting_completed") {
+      const batchJob = meetingBatchJobForSession(value);
       const rediarized = state.meetingRuntime?.operation === "rediarization";
       meetingRefreshList();
-      meetingLoad(String(value));
-      notice(rediarized ? "Diarizzazione ricalcolata; trascrizione e correzioni manuali sono state conservate" : "Riunione pronta per la revisione");
+      if (batchJob) {
+        notice(`Riunione completata: ${meetingFileName(batchJob.path)}. La coda prosegue automaticamente.`);
+      } else {
+        meetingLoad(String(value));
+        notice(rediarized ? "Diarizzazione ricalcolata; trascrizione e correzioni manuali sono state conservate" : "Riunione pronta per la revisione");
+      }
       return true;
     }
     if (name === "meeting_error") {
-      showError(value?.error || "Errore riunione", "meeting");
+      const batchJob = meetingBatchJobForSession(value?.session_id);
+      if (batchJob) notice(`Errore in ${meetingFileName(batchJob.path)}; la coda proverà la registrazione successiva`, true);
+      else showError(value?.error || "Errore riunione", "meeting");
       meetingRefreshList();
       return true;
     }
