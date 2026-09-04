@@ -71,6 +71,14 @@ def harness():
         queue.close()
 
 
+def _entry(path: Path, language: str = "it", speakers: int = 0) -> dict[str, Any]:
+    return {
+        "path": str(path),
+        "language": language,
+        "num_speakers": speakers,
+    }
+
+
 def _finish(manager: _FakeMeetingManager, session_id: str, status: str, error: str = "") -> None:
     manager.emit(
         "meeting_updated",
@@ -86,29 +94,44 @@ def _finish(manager: _FakeMeetingManager, session_id: str, status: str, error: s
     manager.emit("history_changed", session_id)
 
 
-def test_batch_runs_recorded_meetings_fifo_and_freezes_job_inputs(harness, tmp_path: Path) -> None:
+def test_batch_runs_fifo_with_independent_per_file_settings(harness, tmp_path: Path) -> None:
     manager, queue, _ = harness
     first = tmp_path / "one.wav"
     second = tmp_path / "two.wav"
+    third = tmp_path / "three.wav"
     first.write_bytes(b"one")
     second.write_bytes(b"two")
+    third.write_bytes(b"three")
 
     queue.enqueue(
-        [str(first), str(second)],
-        language="it",
-        num_speakers=4,
+        [
+            _entry(first, "it", 5),
+            _entry(second, "it", 4),
+            _entry(third, "en", 9),
+        ]
     )
 
-    assert manager.starts == [(str(first), "it", 4)]
-    assert [job["status"] for job in queue.list_jobs()] == ["running", "queued"]
+    assert manager.starts == [(str(first), "it", 5)]
+    jobs = queue.list_jobs()
+    assert [job["status"] for job in jobs] == ["running", "queued", "queued"]
+    assert [(job["language"], job["num_speakers"]) for job in jobs] == [
+        ("it", 5),
+        ("it", 4),
+        ("en", 9),
+    ]
 
     _finish(manager, "meeting-1", "completed")
-
-    assert manager.starts == [(str(first), "it", 4), (str(second), "it", 4)]
-    assert [job["status"] for job in queue.list_jobs()] == ["completed", "running"]
+    assert manager.starts[-1] == (str(second), "it", 4)
 
     _finish(manager, "meeting-2", "completed")
-    assert [job["status"] for job in queue.list_jobs()] == ["completed", "completed"]
+    assert manager.starts[-1] == (str(third), "en", 9)
+
+    _finish(manager, "meeting-3", "completed")
+    assert [job["status"] for job in queue.list_jobs()] == [
+        "completed",
+        "completed",
+        "completed",
+    ]
     assert queue.is_busy() is False
 
 
@@ -116,7 +139,7 @@ def test_batch_tracks_both_pipeline_progresses(harness, tmp_path: Path) -> None:
     manager, queue, emitted = harness
     source = tmp_path / "meeting.flac"
     source.write_bytes(b"audio")
-    queue.enqueue([str(source)], language="auto", num_speakers=0)
+    queue.enqueue([_entry(source, "auto", 0)])
 
     manager.emit(
         "meeting_updated",
@@ -142,7 +165,7 @@ def test_failed_job_does_not_stop_following_meetings(harness, tmp_path: Path) ->
     second = tmp_path / "good.wav"
     first.write_bytes(b"bad")
     second.write_bytes(b"good")
-    queue.enqueue([str(first), str(second)], language="it", num_speakers=0)
+    queue.enqueue([_entry(first), _entry(second, speakers=4)])
 
     _finish(manager, "meeting-1", "error", "forced failure")
 
@@ -150,17 +173,17 @@ def test_failed_job_does_not_stop_following_meetings(harness, tmp_path: Path) ->
     assert jobs[0]["status"] == "error"
     assert jobs[0]["error"] == "forced failure"
     assert jobs[1]["status"] == "running"
-    assert manager.starts[-1][0] == str(second)
+    assert manager.starts[-1] == (str(second), "it", 4)
 
 
 def test_cancel_stops_active_and_marks_pending_jobs_cancelled(harness, tmp_path: Path) -> None:
     manager, queue, _ = harness
-    paths = []
+    entries = []
     for index in range(3):
         path = tmp_path / f"{index}.wav"
         path.write_bytes(b"audio")
-        paths.append(str(path))
-    queue.enqueue(paths, language="it", num_speakers=2)
+        entries.append(_entry(path, speakers=index + 2))
+    queue.enqueue(entries)
 
     queue.cancel(clear_pending=True)
 
@@ -174,24 +197,44 @@ def test_cancel_stops_active_and_marks_pending_jobs_cancelled(harness, tmp_path:
     assert queue.is_busy() is False
 
 
-def test_enqueue_deduplicates_one_request_and_rejects_missing_files(harness, tmp_path: Path) -> None:
+def test_enqueue_deduplicates_one_request_and_keeps_first_configuration(harness, tmp_path: Path) -> None:
     _, queue, _ = harness
     source = tmp_path / "same.wav"
     source.write_bytes(b"audio")
 
     jobs = queue.enqueue(
-        [str(source), str(source)],
-        language="it",
-        num_speakers=0,
+        [
+            _entry(source, "it", 5),
+            _entry(source, "en", 9),
+        ]
     )
+
     assert len(jobs) == 1
+    assert jobs[0]["language"] == "it"
+    assert jobs[0]["num_speakers"] == 5
+
+
+def test_enqueue_validates_whole_request_before_mutating_queue(harness, tmp_path: Path) -> None:
+    _, queue, _ = harness
+    valid = tmp_path / "valid.wav"
+    valid.write_bytes(b"audio")
 
     with pytest.raises(FileNotFoundError):
         queue.enqueue(
-            [str(tmp_path / "missing.wav")],
-            language="it",
-            num_speakers=0,
+            [
+                _entry(valid, "it", 4),
+                _entry(tmp_path / "missing.wav", "it", 5),
+            ]
         )
+    assert queue.list_jobs() == []
+
+    with pytest.raises(ValueError, match="tra 0 e 20"):
+        queue.enqueue([_entry(valid, "it", 21)])
+    assert queue.list_jobs() == []
+
+    with pytest.raises(ValueError, match="lingua"):
+        queue.enqueue([_entry(valid, "", 4)])
+    assert queue.list_jobs() == []
 
 
 def test_clear_finished_keeps_only_actionable_jobs(harness, tmp_path: Path) -> None:
@@ -200,7 +243,7 @@ def test_clear_finished_keeps_only_actionable_jobs(harness, tmp_path: Path) -> N
     second = tmp_path / "two.wav"
     first.write_bytes(b"one")
     second.write_bytes(b"two")
-    queue.enqueue([str(first), str(second)], language="it", num_speakers=0)
+    queue.enqueue([_entry(first), _entry(second)])
     _finish(manager, "meeting-1", "completed")
 
     jobs = queue.clear_finished()
