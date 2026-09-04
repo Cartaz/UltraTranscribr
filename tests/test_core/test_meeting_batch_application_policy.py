@@ -66,29 +66,56 @@ def service():
         application.close()
 
 
+def _job(path: Path, *, language: str = "it", speakers: int = 0) -> dict[str, object]:
+    return {
+        "path": str(path),
+        "language": language,
+        "num_speakers": speakers,
+    }
+
+
 def test_meeting_batch_enqueue_rejects_competing_workflows(service, tmp_path: Path) -> None:
     controller, application = service
     source = tmp_path / "meeting.wav"
     source.write_bytes(b"audio")
+    entries = [_job(source)]
 
     controller.file_batch.busy = True
     with pytest.raises(RuntimeError, match="coda File"):
-        application.enqueue_meeting_files([str(source)], language="it", num_speakers=0)
+        application.enqueue_meeting_files(entries)
     controller.file_batch.busy = False
 
     controller.live_count = 1
     with pytest.raises(RuntimeError, match="Live, File o Dettatura"):
-        application.enqueue_meeting_files([str(source)], language="it", num_speakers=0)
+        application.enqueue_meeting_files(entries)
     controller.live_count = 0
 
     controller.file_busy = True
     with pytest.raises(RuntimeError, match="Live, File o Dettatura"):
-        application.enqueue_meeting_files([str(source)], language="it", num_speakers=0)
+        application.enqueue_meeting_files(entries)
     controller.file_busy = False
 
     controller.dictation = True
     with pytest.raises(RuntimeError, match="Live, File o Dettatura"):
-        application.enqueue_meeting_files([str(source)], language="it", num_speakers=0)
+        application.enqueue_meeting_files(entries)
+
+
+def test_application_defaults_blank_per_file_language_in_python(service, tmp_path: Path) -> None:
+    _, application = service
+    source = tmp_path / "meeting.wav"
+    source.write_bytes(b"audio")
+    captured = []
+    application.meeting_batch.enqueue = lambda entries: captured.extend(entries) or entries  # type: ignore[method-assign]
+
+    application.enqueue_meeting_files([_job(source, language="", speakers=9)])
+
+    assert captured == [
+        {
+            "path": str(source),
+            "language": "it",
+            "num_speakers": 9,
+        }
+    ]
 
 
 def test_active_meeting_batch_blocks_manual_meeting_and_file_workflows(service) -> None:
