@@ -66,14 +66,24 @@ Avvio canonico:
 2. PyTorch e torchaudio Intel XPU pinning stabile;
 3. TorchCodec compatibile richiesto da pyannote;
 4. `pyannote.audio` e `demucs-infer`;
-5. `whisper.cpp` compilato con SYCL;
+5. il ref configurato di `whisper.cpp` compilato con SYCL, inclusi `whisper-server`, `parakeet-cli` e `parakeet-quantize`;
 6. modello Whisper predefinito `large-v3` e modello VAD;
 7. integrazione desktop;
 8. self-check finale dell'ambiente.
 
 Demucs non è più un componente opzionale dell'installazione. L'opzione **Isola voce** resta una scelta dell'utente durante la trascrizione musicale, ma quando viene richiesta deve funzionare sul runtime XPU: UltraTranscribr non continua silenziosamente sul file originale e non ripiega sulla CPU.
 
-Per forzare la ricompilazione di whisper.cpp:
+Per impostazione predefinita l'installer risolve `master` di `ggml-org/whisper.cpp` alla SHA più recente disponibile al momento dell'installazione. La SHA effettivamente installata viene registrata in `.venv/.ultratranscribr-whisper-revision`: se al successivo `./install.sh` la revisione e la configurazione di build non sono cambiate, la compilazione viene saltata; se upstream è avanzato, viene pulita e ricompilata soltanto la directory di build di whisper.cpp, senza ricreare la `.venv` Python.
+
+Per usare un tag, branch o commit specifico invece dell'ultimo `master`:
+
+```bash
+ULTRATRANSCRIBR_WHISPER_REF=v1.9.3 ./install.sh
+```
+
+È possibile passare anche una SHA completa. Questo override è utile per riprodurre una build nota o bloccare temporaneamente un aggiornamento upstream problematico.
+
+Per forzare la ricompilazione della revisione selezionata:
 
 ```bash
 ULTRATRANSCRIBR_FORCE_REBUILD=1 ./install.sh
