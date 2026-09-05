@@ -28,11 +28,23 @@ def test_install_script_skips_unchanged_expensive_steps() -> None:
     source = (ROOT / "install.sh").read_text(encoding="utf-8")
     assert "REQ_MARKER=" in source
     assert "BUILD_MARKER=" in source
+    assert "WHISPER_REVISION_MARKER=" in source
     assert "requirements_imports_ok" in source
     assert "whisper_build_is_current" in source
     assert "salto pip install" in source
     assert "salto configurazione e build" in source
     assert "ULTRATRANSCRIBR_FORCE_REBUILD" in source
+
+
+def test_installer_tracks_latest_whisper_ref_by_exact_revision() -> None:
+    source = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    assert 'WHISPER_REF="${ULTRATRANSCRIBR_WHISPER_REF:-master}"' in source
+    assert "\nPIN=" not in source
+    assert 'git -C "$WCPP" fetch --force --depth 1 origin "$WHISPER_REF"' in source
+    assert "rev-parse 'FETCH_HEAD^{commit}'" in source
+    assert 'build_key "$WHISPER_REVISION"' in source
+    assert 'printf \'%s\\n\' "$revision" > "$WHISPER_REVISION_MARKER"' in source
 
 
 def test_installer_runs_final_environment_check_without_oneapi_ld_pollution() -> None:
@@ -52,13 +64,26 @@ def test_installer_scopes_oneapi_to_whisper_build_subshell() -> None:
     assert "Inizializzazione Intel oneAPI fallita" in source
 
 
-def test_installer_reuses_whisper_build_and_builds_only_server_target() -> None:
+def test_installer_reuses_build_and_builds_whisper_and_parakeet_targets() -> None:
     source = (ROOT / "install.sh").read_text(encoding="utf-8")
 
-    assert 'if [[ "$FORCE_REBUILD" == "1" ]]; then\n    rm -rf "$WCPP/build"' in source
-    assert 'prepare_whisper_source\n  rm -rf "$WCPP/build"' not in source
     assert "-DWHISPER_BUILD_TESTS=OFF" in source
-    assert 'cmake --build "$WCPP/build" --target whisper-server' in source
+    assert 'cmake --build "$WCPP/build"' in source
+    assert "--target whisper-server parakeet-cli parakeet-quantize" in source
+    assert 'install -Dm755 "$server" "$VENV/bin/whisper-server"' in source
+    assert 'install -Dm755 "$parakeet" "$VENV/bin/parakeet-cli"' in source
+    assert 'install -Dm755 "$parakeet_quantize" "$VENV/bin/parakeet-quantize"' in source
+    assert 'compgen -G "$VENV/lib/libparakeet.so*"' in source
+
+
+def test_installer_cleans_only_whisper_build_when_revision_changes() -> None:
+    source = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    assert '"$installed_revision" != "$revision"' in source
+    assert 'rm -rf "$WCPP/build"' in source
+    assert 'rm -rf "$VENV"' in source
+    assert 'rm -rf "$VENV"\n    "$py" -m venv "$VENV"' in source
+    assert 'rm -rf "$VENV"\n  install_python_dependencies' not in source
 
 
 def test_installer_preserves_whisper_shared_library_soname_symlinks() -> None:
@@ -75,7 +100,9 @@ def test_installer_verifies_whisper_with_shared_runtime_helper() -> None:
 
     assert "from core.whisper_gpu_detect import verify_sycl_binary" in source
     assert "verify_installed_whisper" in source
+    assert "verify_installed_parakeet" in source
     assert "whisper-server SYCL non eseguibile con il runtime oneAPI corrente" in source
+    assert "parakeet-cli SYCL non eseguibile con il runtime oneAPI corrente" in source
 
 
 def test_installer_uses_the_canonical_default_model() -> None:
