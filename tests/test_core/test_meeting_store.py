@@ -127,6 +127,46 @@ def test_meeting_exports_use_manual_names_and_reviewed_text(tmp_path: Path) -> N
     assert vtt.read_text(encoding="utf-8").startswith("WEBVTT")
 
 
+def test_meeting_txt_export_merges_consecutive_effective_speaker_blocks(tmp_path: Path) -> None:
+    _, store, session_id = _meeting(tmp_path)
+    store.set_diarization(
+        session_id,
+        diarization_segments=[
+            {"start": 0.0, "end": 3.0, "speaker_id": "SPEAKER_00"},
+            {"start": 3.0, "end": 5.0, "speaker_id": "SPEAKER_01"},
+        ],
+        review_segments=[
+            {"start": 0.0, "end": 1.0, "text": "ciao", "speaker_id": "SPEAKER_00"},
+            {"start": 1.0, "end": 2.0, "text": "come", "speaker_id": "SPEAKER_00"},
+            {"start": 2.0, "end": 3.0, "text": "stai?", "speaker_id": "SPEAKER_01", "speaker_override": "SPEAKER_00"},
+            {"start": 3.0, "end": 4.0, "text": "bene", "speaker_id": "SPEAKER_01"},
+            {"start": 4.0, "end": 5.0, "text": "tu?", "speaker_id": "SPEAKER_01"},
+        ],
+    )
+
+    assert store.rendered_text(session_id) == (
+        "Speaker 1: ciao come stai?\n\n"
+        "Speaker 2: bene tu?"
+    )
+
+
+def test_meeting_txt_export_keeps_unknown_speaker_blocks_separate(tmp_path: Path) -> None:
+    _, store, session_id = _meeting(tmp_path)
+    store.set_diarization(
+        session_id,
+        diarization_segments=[],
+        review_segments=[
+            {"start": 0.0, "end": 1.0, "text": "forse uno", "speaker_id": None},
+            {"start": 1.0, "end": 2.0, "text": "forse due", "speaker_id": None},
+        ],
+    )
+
+    assert store.rendered_text(session_id) == (
+        "Speaker ?: forse uno\n\n"
+        "Speaker ?: forse due"
+    )
+
+
 def test_recording_path_returns_only_existing_canonical_audio(tmp_path: Path, monkeypatch) -> None:
     _, store, session_id = _meeting(tmp_path)
     recordings = tmp_path / "recordings"
