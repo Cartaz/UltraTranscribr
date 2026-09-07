@@ -66,14 +66,16 @@ Avvio canonico:
 2. PyTorch e torchaudio Intel XPU pinning stabile;
 3. TorchCodec compatibile richiesto da pyannote;
 4. `pyannote.audio` e `demucs-infer`;
-5. il ref configurato di `whisper.cpp` compilato con SYCL, inclusi `whisper-server`, `parakeet-cli` e `parakeet-quantize`;
+5. il ref configurato di `whisper.cpp` compilato con SYCL e il runtime `whisper-server`;
 6. modello Whisper predefinito `large-v3` e modello VAD;
 7. integrazione desktop;
 8. self-check finale dell'ambiente.
 
+Le installazioni precedenti che contenevano gli strumenti sperimentali Parakeet vengono migrate automaticamente: `install.sh` rimuove `parakeet-cli`, `parakeet-quantize` e le relative librerie dalla `.venv`. Parakeet non fa parte del runtime applicativo supportato.
+
 Demucs non è più un componente opzionale dell'installazione. L'opzione **Isola voce** resta una scelta dell'utente durante la trascrizione musicale, ma quando viene richiesta deve funzionare sul runtime XPU: UltraTranscribr non continua silenziosamente sul file originale e non ripiega sulla CPU.
 
-Per impostazione predefinita l'installer risolve `master` di `ggml-org/whisper.cpp` alla SHA più recente disponibile al momento dell'installazione. La SHA effettivamente installata viene registrata in `.venv/.ultratranscribr-whisper-revision`: se al successivo `./install.sh` la revisione e la configurazione di build non sono cambiate, la compilazione viene saltata; se upstream è avanzato, viene pulita e ricompilata soltanto la directory di build di whisper.cpp, senza ricreare la `.venv` Python.
+Per impostazione predefinita l'installer risolve `master` di `ggml-org/whisper.cpp` alla SHA più recente disponibile al momento dell'installazione. La SHA effettivamente installata viene registrata in `.venv/.ultratranscribr-whisper-revision`: se al successivo `./install.sh` la revisione e la configurazione di build non sono cambiate, la compilazione viene saltata; se upstream è avanzato o cambia la configurazione di build, viene pulita e ricompilata soltanto la directory di build di whisper.cpp, senza ricreare la `.venv` Python.
 
 Per usare un tag, branch o commit specifico invece dell'ultimo `master`:
 
@@ -145,7 +147,9 @@ Per le nuove trascrizioni UltraTranscribr conserva i timestamp parola-per-parola
 
 La timeline Community-1 regolare viene conservata separatamente e viene usata soltanto per rilevare sovrapposizioni acustiche reali, cioè intervalli in cui due speaker parlano contemporaneamente. In questi casi la review mostra un avviso e richiede controllo umano: da una singola traccia mono non è sempre possibile attribuire in modo affidabile ogni parola quando due persone parlano nello stesso istante.
 
-Ogni intervento della review dispone inoltre di una scelta speaker manuale. L'override è persistito separatamente da `speaker_id`, quindi non cancella l'assegnazione automatica ed è possibile tornare a **Automatico**. Lo stesso meccanismo permette di risolvere manualmente i segmenti `Speaker ?`. Export TXT/SRT/VTT usa l'override quando presente.
+Ogni intervento della review dispone inoltre di una scelta speaker manuale. L'override è persistito separatamente da `speaker_id`, quindi non cancella l'assegnazione automatica ed è possibile tornare a **Automatico**. Lo stesso meccanismo permette di risolvere manualmente i segmenti `Speaker ?`.
+
+L'export TXT usa lo speaker effettivo dopo eventuali override e unisce i frammenti consecutivi attribuiti allo stesso interlocutore in un unico blocco leggibile. I segmenti senza speaker certo restano separati. Gli export SRT/VTT mantengono invece i segmenti temporali originali per non creare sottotitoli eccessivamente lunghi.
 
 Le riunioni create prima dell'introduzione dei timestamp parola-per-parola continuano a funzionare con l'allineamento segment-level storico. Un semplice ricalcolo della diarizzazione non può inventare word timestamps che non erano stati salvati, ma la correzione manuale dello speaker resta disponibile.
 

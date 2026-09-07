@@ -237,14 +237,21 @@ class MeetingStore:
             raise KeyError("riunione non trovata")
         metadata = meeting["meeting"]
         names = dict(metadata.get("speaker_names") or {})
-        lines: list[str] = []
+        blocks: list[tuple[Optional[str], list[str]]] = []
         for item in metadata.get("review_segments") or []:
             text = str(item.get("text") or "").strip()
             if not text:
                 continue
-            lines.append(
-                f"{speaker_label(effective_speaker_id(item), names)}: {text}"
-            )
+            speaker_id = effective_speaker_id(item)
+            if speaker_id is not None and blocks and blocks[-1][0] == speaker_id:
+                blocks[-1][1].append(text)
+                continue
+            blocks.append((speaker_id, [text]))
+
+        lines = [
+            f"{speaker_label(speaker_id, names)}: {' '.join(parts)}"
+            for speaker_id, parts in blocks
+        ]
         return "\n\n".join(lines)
 
     def export(self, session_id: str, target: Path | str, fmt: str) -> Path:
