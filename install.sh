@@ -86,7 +86,7 @@ build_key() {
   local revision="$1"
   {
     printf '%s\n' "$revision"
-    printf '%s\n' 'GGML_SYCL=ON|Release|icx|icpx|whisper-server|parakeet-cli|parakeet-quantize'
+    printf '%s\n' 'GGML_SYCL=ON|Release|icx|icpx|whisper-server'
     icx --version | head -1
     icpx --version | head -1
     cmake --version | head -1
@@ -144,8 +144,12 @@ verify_installed_whisper() {
   verify_installed_sycl_binary "$VENV/bin/whisper-server"
 }
 
-verify_installed_parakeet() {
-  verify_installed_sycl_binary "$VENV/bin/parakeet-cli"
+remove_legacy_parakeet_runtime() {
+  rm -f \
+    "$VENV/bin/parakeet-cli" \
+    "$VENV/bin/parakeet-quantize" \
+    "$VENV/lib"/libparakeet.so* \
+    2>/dev/null || true
 }
 
 whisper_build_is_current() {
@@ -153,16 +157,12 @@ whisper_build_is_current() {
   local revision="$2"
   [[ "$FORCE_REBUILD" != "1" ]] || return 1
   [[ -x "$VENV/bin/whisper-server" ]] || return 1
-  [[ -x "$VENV/bin/parakeet-cli" ]] || return 1
-  [[ -x "$VENV/bin/parakeet-quantize" ]] || return 1
   [[ -f "$BUILD_MARKER" ]] || return 1
   [[ -f "$WHISPER_REVISION_MARKER" ]] || return 1
   [[ "$(cat "$BUILD_MARKER")" == "$key" ]] || return 1
   [[ "$(cat "$WHISPER_REVISION_MARKER")" == "$revision" ]] || return 1
   compgen -G "$VENV/lib/libggml-sycl.so*" >/dev/null || return 1
-  compgen -G "$VENV/lib/libparakeet.so*" >/dev/null || return 1
   verify_installed_whisper >/dev/null 2>&1 || return 1
-  verify_installed_parakeet >/dev/null 2>&1 || return 1
   return 0
 }
 
@@ -188,33 +188,20 @@ prepare_whisper_source() {
 }
 
 verify_built_whisper_runtime() {
-  local build_bin="$WCPP/build/bin"
-  local binary
-
-  for binary in "$build_bin/whisper-server" "$build_bin/parakeet-cli"; do
-    [[ -x "$binary" ]] || die "Binary whisper.cpp mancante: $binary"
-    LD_LIBRARY_PATH="$build_bin:${LD_LIBRARY_PATH:-}" "$binary" --help >/dev/null 2>&1 \
-      || die "Binary whisper.cpp non avviabile: $binary"
-    ldd "$binary" 2>/dev/null | grep -Eq 'libggml-sycl|libsycl' \
-      || die "Binary whisper.cpp senza linkage SYCL: $binary"
-  done
-
-  [[ -x "$build_bin/parakeet-quantize" ]] \
-    || die "parakeet-quantize non trovato nella build"
+  local server="$WCPP/build/bin/whisper-server"
+  [[ -x "$server" ]] || die "Binary whisper.cpp mancante: $server"
+  LD_LIBRARY_PATH="$WCPP/build/bin:${LD_LIBRARY_PATH:-}" "$server" --help >/dev/null 2>&1 \
+    || die "Binary whisper.cpp non avviabile: $server"
+  ldd "$server" 2>/dev/null | grep -Eq 'libggml-sycl|libsycl' \
+    || die "Binary whisper.cpp senza linkage SYCL: $server"
 }
 
 package_whisper_runtime() {
   local build_bin="$WCPP/build/bin"
   local server="$build_bin/whisper-server"
-  local parakeet="$build_bin/parakeet-cli"
-  local parakeet_quantize="$build_bin/parakeet-quantize"
   [[ -x "$server" ]] || die "whisper-server non trovato nella build"
-  [[ -x "$parakeet" ]] || die "parakeet-cli non trovato nella build"
-  [[ -x "$parakeet_quantize" ]] || die "parakeet-quantize non trovato nella build"
 
   install -Dm755 "$server" "$VENV/bin/whisper-server"
-  install -Dm755 "$parakeet" "$VENV/bin/parakeet-cli"
-  install -Dm755 "$parakeet_quantize" "$VENV/bin/parakeet-quantize"
   mkdir -p "$VENV/lib"
   rm -f \
     "$VENV/lib"/libggml*.so* \
@@ -227,14 +214,13 @@ package_whisper_runtime() {
     cp -a "$library" "$VENV/lib/"
     copied=1
   done < <(
-    find "$build_bin" -maxdepth 1 -name 'lib*.so*' \
+    find "$build_bin" -maxdepth 1 \
+      \( -name 'libggml*.so*' -o -name 'libwhisper.so*' \) \
       \( -type f -o -type l \) -print0
   )
   [[ "$copied" == "1" ]] || die "Librerie whisper.cpp non trovate nella build"
   compgen -G "$VENV/lib/libggml-sycl.so*" >/dev/null \
     || die "libggml-sycl non installata"
-  compgen -G "$VENV/lib/libparakeet.so*" >/dev/null \
-    || die "libparakeet non installata"
 }
 
 build_whisper_runtime() {
@@ -246,11 +232,17 @@ build_whisper_runtime() {
   fi
 
   local installed_revision=""
+  local installed_key=""
   if [[ -f "$WHISPER_REVISION_MARKER" ]]; then
     installed_revision="$(cat "$WHISPER_REVISION_MARKER")"
   fi
+  if [[ -f "$BUILD_MARKER" ]]; then
+    installed_key="$(cat "$BUILD_MARKER")"
+  fi
 
-  if [[ "$FORCE_REBUILD" == "1" || "$installed_revision" != "$revision" ]]; then
+  if [[ "$FORCE_REBUILD" == "1" \
+        || "$installed_revision" != "$revision" \
+        || "$installed_key" != "$key" ]]; then
     log "Pulizia build whisper.cpp: revisione o configurazione da aggiornare."
     rm -rf "$WCPP/build"
   fi
@@ -266,17 +258,14 @@ build_whisper_runtime() {
     -DCMAKE_BUILD_TYPE=Release \
     || die "Configurazione CMake fallita"
   cmake --build "$WCPP/build" \
-    --target whisper-server parakeet-cli parakeet-quantize \
+    --target whisper-server \
     --config Release -j"$(nproc)" \
-    || die "Build whisper.cpp/Parakeet fallita"
+    || die "Build whisper.cpp fallita"
 
   verify_built_whisper_runtime
   package_whisper_runtime
   if ! verify_installed_whisper; then
     die "whisper-server SYCL non eseguibile con il runtime oneAPI corrente"
-  fi
-  if ! verify_installed_parakeet; then
-    die "parakeet-cli SYCL non eseguibile con il runtime oneAPI corrente"
   fi
   printf '%s\n' "$key" > "$BUILD_MARKER"
   printf '%s\n' "$revision" > "$WHISPER_REVISION_MARKER"
@@ -376,6 +365,7 @@ main() {
   fi
 
   install_python_dependencies
+  remove_legacy_parakeet_runtime
   build_whisper_stack
   ensure_default_models
   install_desktop_integration
