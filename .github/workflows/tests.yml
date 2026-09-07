@@ -29,19 +29,16 @@ jobs:
       - run: node --check ui/web/settings_cleanup.js
       - run: node --check ui/web/file_history.js
       - run: node --check ui/web/meeting.js
-      - name: Diagnose config + core
+      - name: Diagnose baseline before root contracts
         continue-on-error: true
-        run: pytest -q tests/test_config tests/test_core
-      - name: Diagnose config + core + UI
+        run: pytest -q tests/test_config tests/test_core tests/test_docs tests/test_ui
+      - name: Diagnose roadmap before UI
         continue-on-error: true
-        run: pytest -q tests/test_config tests/test_core tests/test_ui
-      - name: Diagnose config + core + UI + docs
+        run: pytest -q tests/test_config tests/test_core tests/test_docs tests/test_final_roadmap_features.py tests/test_ui
+      - name: Diagnose installer before UI
         continue-on-error: true
-        run: pytest -q tests/test_config tests/test_core tests/test_ui tests/test_docs
-      - name: Diagnose all minus installer contract
+        run: pytest -q tests/test_config tests/test_core tests/test_docs tests/test_installation_contract.py tests/test_ui
+      - name: Diagnose both root contracts before UI
         continue-on-error: true
-        run: pytest -q tests/test_config tests/test_core tests/test_ui tests/test_docs tests/test_final_roadmap_features.py
-      - name: Diagnose all minus roadmap contract
-        continue-on-error: true
-        run: pytest -q tests/test_config tests/test_core tests/test_ui tests/test_docs tests/test_installation_contract.py
+        run: pytest -q tests/test_config tests/test_core tests/test_docs tests/test_final_roadmap_features.py tests/test_installation_contract.py tests/test_ui
       - run: pytest -q
