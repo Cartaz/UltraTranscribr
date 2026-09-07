@@ -37,16 +37,21 @@ def test_full_review_rerenders_can_preserve_inner_list_scroll_position() -> None
     assert "meetingRenderReviewPreservingListPosition();" in web
 
 
-def test_meeting_review_editor_uses_page_scroll_and_compact_rows() -> None:
+def test_meeting_review_editor_uses_fixed_scroll_and_dense_rows() -> None:
     css = CSS.read_text(encoding="utf-8")
     review_rule = css.split(".meeting-review-list{", 1)[1].split("}", 1)[0]
     segment_rule = css.split(".meeting-review-segment{", 1)[1].split("}", 1)[0]
+    head_rule = css.split(".meeting-review-head{", 1)[1].split("}", 1)[0]
+    controls_rule = css.split(".meeting-review-speaker-controls{", 1)[1].split("}", 1)[0]
 
-    assert "max-height" not in review_rule
-    assert "overflow" not in review_rule
-    assert "gap:10px" in review_rule
-    assert "padding:12px" in segment_rule
-    assert ".meeting-review-segment textarea{min-height:60px;resize:vertical}" in css
+    assert "max-height:520px" in review_rule
+    assert "overflow:auto" in review_rule
+    assert "gap:6px" in review_rule
+    assert "padding:8px 9px" in segment_rule
+    assert "align-items:center" in head_rule
+    assert "margin-bottom:4px" in head_rule
+    assert "display:flex" in controls_rule
+    assert ".meeting-review-segment textarea{min-height:44px" in css
 
 
 def test_meeting_archive_exposes_confirmed_per_session_deletion() -> None:
