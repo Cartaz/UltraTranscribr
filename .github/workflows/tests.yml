@@ -29,13 +29,22 @@ jobs:
       - run: node --check ui/web/settings_cleanup.js
       - run: node --check ui/web/file_history.js
       - run: node --check ui/web/meeting.js
+      - name: Diagnose config tests
+        continue-on-error: true
+        run: pytest -q tests/test_config
+      - name: Diagnose core tests
+        continue-on-error: true
+        run: pytest -q tests/test_core
+      - name: Diagnose UI tests
+        continue-on-error: true
+        run: pytest -q tests/test_ui
+      - name: Diagnose docs tests
+        continue-on-error: true
+        run: pytest -q tests/test_docs
+      - name: Diagnose roadmap contract
+        continue-on-error: true
+        run: pytest -q tests/test_final_roadmap_features.py
       - name: Diagnose installer contract
         continue-on-error: true
         run: pytest -q tests/test_installation_contract.py
-      - name: Diagnose meeting store
-        continue-on-error: true
-        run: pytest -q tests/test_core/test_meeting_store.py
-      - name: Diagnose meeting review UI
-        continue-on-error: true
-        run: pytest -q tests/test_ui/test_meeting_review_navigation_contract.py
       - run: pytest -q
