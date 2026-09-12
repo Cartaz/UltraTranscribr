@@ -46,7 +46,10 @@ def test_meeting_supports_realtime_multisource_file_and_review() -> None:
         "finishMeeting",
         "getMeetingAudioUrl",
         "setMeetingSpeakerName",
-        "editMeetingSegment",
+        "editMeetingSegments",
+        'id="meeting-review-save-all"',
+        "meetingReviewDirty",
+        "setMeetingReviewDirty",
         "currentTime = Number(item.start)",
         "Transcript raw originale",
         "Salva correzione",
@@ -65,6 +68,28 @@ def test_meeting_supports_realtime_multisource_file_and_review() -> None:
     assert "def startMeeting(" not in bridge
     assert "def start_meeting(" not in application
     assert "len(decoded) > 8" in bridge
+    assert "def editMeetingSegments" in bridge
+    assert "self._application.edit_meeting_segments(" in bridge
+    assert "def edit_meeting_segments" in application
+    assert "self.meeting.edit_segments(" in application
+
+
+def test_meeting_review_save_all_tracks_unsaved_text_without_touching_raw() -> None:
+    source = (WEB / "meeting.js").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    store = (ROOT / "core" / "meeting_store.py").read_text(encoding="utf-8")
+
+    assert "const meetingReviewDirty = new Map()" in source
+    assert 'call("editMeetingSegments", [sessionId, JSON.stringify(snapshot)]' in source
+    assert 'call("setMeetingReviewDirty", [dirty])' in source
+    assert "meetingReviewDirty.get(item.index) === item.text" in source
+    assert "Salva tutto · ${count}" in source
+    assert "Salva le correzioni del testo prima di esportare" in source
+    assert "meetingReviewDirty.size" in source
+    assert "meetingReviewDirtyChanged = Signal(bool)" in bridge
+    assert "def setMeetingReviewDirty" in bridge
+    assert "def edit_review_segments" in store
+    assert "self._write(session_id, data)" in store
 
 
 def test_meeting_review_can_rerun_only_diarization_from_saved_artifacts() -> None:
@@ -78,6 +103,7 @@ def test_meeting_review_can_rerun_only_diarization_from_saved_artifacts() -> Non
     assert "rerunMeetingDiarization" in source
     assert "Whisper non viene rilanciato" in source
     assert "correzioni manuali" in source
+    assert "Salva le correzioni del testo prima di ricalcolare la diarizzazione" in source
     assert "modelli ONNX locali" not in source
     assert "def rerunMeetingDiarization" in bridge
     assert "self._application.rerun_meeting_diarization(" in bridge

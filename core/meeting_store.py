@@ -152,18 +152,38 @@ class MeetingStore:
             data["speaker_names"] = names
             self._write(session_id, data)
 
-    def edit_review_segment(self, session_id: str, index: int, text: str) -> None:
+    def edit_review_segments(
+        self,
+        session_id: str,
+        edits: dict[int, str],
+    ) -> None:
+        """Persist multiple review edits with one validated atomic sidecar write."""
+        normalized = {int(index): str(text or "").strip() for index, text in edits.items()}
+        if not normalized:
+            return
         with self._lock:
             data = self._require(session_id)
             segments = list(data.get("review_segments") or [])
-            idx = int(index)
-            if idx < 0 or idx >= len(segments):
-                raise IndexError("segmento riunione non valido")
-            item = dict(segments[idx])
-            item["text"] = str(text or "").strip()
-            segments[idx] = item
+            for idx in normalized:
+                if idx < 0 or idx >= len(segments):
+                    raise IndexError("segmento riunione non valido")
+
+            changed = False
+            for idx, text in normalized.items():
+                item = dict(segments[idx])
+                if str(item.get("text") or "") == text:
+                    continue
+                item["text"] = text
+                segments[idx] = item
+                changed = True
+
+            if not changed:
+                return
             data["review_segments"] = segments
             self._write(session_id, data)
+
+    def edit_review_segment(self, session_id: str, index: int, text: str) -> None:
+        self.edit_review_segments(session_id, {int(index): text})
 
     def set_review_speaker_override(
         self,

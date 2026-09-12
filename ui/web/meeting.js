@@ -12,6 +12,9 @@ let meetingMicrophones = [];
 let meetingMonitors = [];
 let meetingStreams = [];
 let meetingReviewHasAudio = false;
+let meetingReviewSaving = false;
+let meetingReviewDirtyReported = false;
+const meetingReviewDirty = new Map();
 let meetingSources = [{ source: "microphone", selected_input: "", stream_id: null, label: "" }];
 
 views.meeting = "RIUNIONE";
@@ -144,8 +147,14 @@ function meetingEnsureUI() {
           <details><summary>Transcript raw originale</summary><div id="meeting-raw" class="meeting-raw transcript"></div></details>
         </section>
         <section class="card">
-          <div class="card-head"><div><p class="kicker">TESTO REVISIONATO</p><h2>Interventi</h2></div><small>Speaker e testo possono essere corretti senza modificare il raw Whisper.</small></div>
-          <p class="help">Le nuove trascrizioni usano i timestamp parola-per-parola per separare cambi di interlocutore dentro lo stesso segmento Whisper. Le riunioni più vecchie restano modificabili manualmente.</p>
+          <div class="card-head">
+            <div><p class="kicker">TESTO REVISIONATO</p><h2>Interventi</h2></div>
+            <div class="toolbar">
+              <small id="meeting-review-dirty-status">Tutte le modifiche salvate</small>
+              <button id="meeting-review-save-all" class="button selected" type="button" disabled>Salva tutto</button>
+            </div>
+          </div>
+          <p class="help">Speaker e testo possono essere corretti senza modificare il raw Whisper. Le nuove trascrizioni usano i timestamp parola-per-parola per separare cambi di interlocutore dentro lo stesso segmento Whisper. Le riunioni più vecchie restano modificabili manualmente.</p>
           <div id="meeting-review-list" class="meeting-review-list"></div>
         </section>
       </div>`;
@@ -680,6 +689,8 @@ function meetingBatchJobForSession(sessionId) {
 
 function meetingClearReview(sessionId) {
   if (meetingCurrent?.id !== String(sessionId)) return;
+  meetingReviewDirty.clear();
+  meetingReviewSyncDirtyState();
   const audio = $("meeting-audio");
   if (audio) {
     audio.pause();
@@ -763,13 +774,85 @@ function meetingSpeakerLabel(id, names) {
   return Number.isFinite(tail) ? `Speaker ${tail + 1}` : id;
 }
 
+function meetingReviewSyncDirtyState() {
+  const count = meetingReviewDirty.size;
+  const dirty = count > 0;
+  const button = $("meeting-review-save-all");
+  if (button) {
+    button.disabled = meetingReviewSaving || !dirty;
+    button.textContent = dirty ? `Salva tutto · ${count}` : "Salva tutto";
+  }
+  const status = $("meeting-review-dirty-status");
+  if (status) {
+    status.textContent = meetingReviewSaving
+      ? `Salvataggio di ${count} modifiche…`
+      : dirty
+        ? `${count} modifiche non salvate`
+        : "Tutte le modifiche salvate";
+  }
+  document.querySelectorAll(".meeting-review-save").forEach(buttonNode => {
+    const index = Number(buttonNode.dataset.index);
+    buttonNode.disabled = meetingReviewSaving || !meetingReviewDirty.has(index);
+  });
+  if (meetingReviewDirtyReported !== dirty) {
+    meetingReviewDirtyReported = dirty;
+    call("setMeetingReviewDirty", [dirty]);
+  }
+}
+
+function meetingReviewTrackEdit(index, value, canonicalText) {
+  const draft = String(value ?? "");
+  if (draft === String(canonicalText ?? "")) meetingReviewDirty.delete(index);
+  else meetingReviewDirty.set(index, draft);
+  meetingReviewSyncDirtyState();
+}
+
+function meetingSaveReviewEdits(entries, successMessage) {
+  if (!meetingCurrent?.id || meetingReviewSaving || !entries.length) return;
+  const sessionId = meetingCurrent.id;
+  const snapshot = entries.map(item => ({index: Number(item.index), text: String(item.text ?? "")}));
+  meetingReviewSaving = true;
+  meetingReviewSyncDirtyState();
+  call("editMeetingSegments", [sessionId, JSON.stringify(snapshot)], raw => {
+    meetingReviewSaving = false;
+    const response = json(raw);
+    if (!response?.ok) {
+      meetingReviewSyncDirtyState();
+      showError(response?.error || "Correzioni non salvate", "meeting");
+      return;
+    }
+    meetingCurrent = response.meeting;
+    snapshot.forEach(item => {
+      if (meetingReviewDirty.get(item.index) === item.text) meetingReviewDirty.delete(item.index);
+    });
+    meetingReviewSyncDirtyState();
+    meetingRenderReviewPreservingListPosition();
+    notice(successMessage);
+  });
+}
+
+function meetingSaveAllReviewEdits() {
+  const edits = [...meetingReviewDirty.entries()].map(([index, text]) => ({index, text}));
+  meetingSaveReviewEdits(edits, edits.length === 1 ? "Correzione salvata" : `${edits.length} correzioni salvate`);
+}
+
 function meetingLoad(sessionId) {
-  call("getMeetingSession", [sessionId], result => {
+  const target = String(sessionId || "");
+  if (!target) return;
+  if (meetingCurrent?.id && meetingCurrent.id !== target && meetingReviewDirty.size) {
+    const discard = window.confirm(
+      `Ci sono ${meetingReviewDirty.size} modifiche non salvate. Aprire un'altra riunione e scartarle?`
+    );
+    if (!discard) return;
+  }
+  call("getMeetingSession", [target], result => {
     const meeting = json(result);
     if (!meeting?.meeting) {
       showError("Dati riunione non disponibili", "meeting");
       return;
     }
+    meetingReviewDirty.clear();
+    meetingReviewSyncDirtyState();
     meetingCurrent = meeting;
     meetingRenderReview();
   });
@@ -943,22 +1026,25 @@ function meetingRenderReview() {
     }
 
     const textarea = document.createElement("textarea");
-    textarea.value = item.text || "";
+    const canonicalText = String(item.text || "");
+    textarea.value = meetingReviewDirty.has(index) ? meetingReviewDirty.get(index) : canonicalText;
     textarea.setAttribute("aria-label", `Testo segmento ${index + 1}`);
     const save = document.createElement("button");
     save.type = "button";
+    save.className = "meeting-review-save";
+    save.dataset.index = String(index);
     save.textContent = "Salva correzione";
-    save.onclick = () => call("editMeetingSegment", [meeting.id, index, textarea.value], raw => {
-      const response = json(raw);
-      if (response?.ok) {
-        meetingCurrent = response.meeting;
-        notice("Correzione salvata; il transcript raw è invariato");
-      } else showError(response?.error || "Correzione non salvata", "meeting");
-    });
+    save.disabled = meetingReviewSaving || !meetingReviewDirty.has(index);
+    textarea.oninput = () => meetingReviewTrackEdit(index, textarea.value, canonicalText);
+    save.onclick = () => meetingSaveReviewEdits(
+      [{index, text: textarea.value}],
+      "Correzione salvata; il transcript raw è invariato",
+    );
     row.append(textarea, save);
     list.append(row);
   });
 
+  meetingReviewSyncDirtyState();
   call("getMeetingAudioUrl", [meeting.id], url => {
     const audio = $("meeting-audio");
     if (!audio) return;
@@ -974,6 +1060,10 @@ function meetingRenderReview() {
 
 function meetingRerunDiarization() {
   if (!meetingCurrent?.id || !meetingReviewHasAudio || meetingIsBusy()) return;
+  if (meetingReviewDirty.size) {
+    notice("Salva le correzioni del testo prima di ricalcolare la diarizzazione", true);
+    return;
+  }
   const count = Math.max(0, Number($("meeting-review-speaker-count")?.value) || 0);
   call("rerunMeetingDiarization", [meetingCurrent.id, count], raw => {
     const response = json(raw);
@@ -988,6 +1078,10 @@ function meetingRerunDiarization() {
 
 function meetingExport(formatName) {
   if (!meetingCurrent?.id) return;
+  if (meetingReviewDirty.size) {
+    notice("Salva le correzioni del testo prima di esportare la riunione", true);
+    return;
+  }
   call("exportMeetingFormat", [meetingCurrent.id, formatName], raw => {
     const response = json(raw);
     if (response?.cancelled) return;
@@ -1029,6 +1123,7 @@ const meetingModule = {
     $("meeting-finish").onclick = meetingFinish;
     $("meeting-cancel").onclick = () => call("cancelMeeting", [], raw => meetingRenderRuntime(json(raw)?.meeting));
     $("meeting-rerun-diarization").onclick = meetingRerunDiarization;
+    $("meeting-review-save-all").onclick = meetingSaveAllReviewEdits;
     $("meeting-export-txt").onclick = () => meetingExport("txt");
     $("meeting-export-srt").onclick = () => meetingExport("srt");
     $("meeting-export-vtt").onclick = () => meetingExport("vtt");
@@ -1041,6 +1136,7 @@ const meetingModule = {
     meetingUpdateModePresentation();
     meetingRenderSources();
     meetingRenderBatchQueue([]);
+    meetingReviewSyncDirtyState();
   },
   hydrate(bootstrap) {
     meetingEnsureUI();

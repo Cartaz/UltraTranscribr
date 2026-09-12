@@ -83,6 +83,50 @@ def test_manual_review_edit_and_speaker_name_never_overwrite_raw(tmp_path: Path)
     assert history.get_session(session_id)["segments"][0]["text"] == "Testo raw"
 
 
+def test_batch_review_edits_use_one_atomic_sidecar_write(tmp_path: Path, monkeypatch) -> None:
+    history, store, session_id = _meeting(tmp_path)
+    writes = []
+    original_write = store._write
+
+    def counted_write(target_session_id, data):
+        writes.append(target_session_id)
+        original_write(target_session_id, data)
+
+    monkeypatch.setattr(store, "_write", counted_write)
+    store.edit_review_segments(
+        session_id,
+        {0: "Prima correzione", 1: "Seconda correzione"},
+    )
+
+    combined = store.get(session_id)
+    assert combined is not None
+    assert writes == [session_id]
+    assert [item["text"] for item in combined["meeting"]["review_segments"]] == [
+        "Prima correzione",
+        "Seconda correzione",
+    ]
+    assert history.get_session(session_id)["text"] == "Testo raw originale"
+
+
+def test_batch_review_edits_validate_every_index_before_writing(tmp_path: Path, monkeypatch) -> None:
+    _, store, session_id = _meeting(tmp_path)
+    before = store.get(session_id)["meeting"]["review_segments"]
+    writes = []
+    original_write = store._write
+
+    def counted_write(target_session_id, data):
+        writes.append(target_session_id)
+        original_write(target_session_id, data)
+
+    monkeypatch.setattr(store, "_write", counted_write)
+    with pytest.raises(IndexError, match="segmento riunione non valido"):
+        store.edit_review_segments(session_id, {0: "Non deve passare", 99: "Indice invalido"})
+
+    after = store.get(session_id)["meeting"]["review_segments"]
+    assert writes == []
+    assert after == before
+
+
 def test_diarization_update_can_change_count_without_clearing_speaker_names(tmp_path: Path) -> None:
     _, store, session_id = _meeting(tmp_path)
     store.set_speaker_name(session_id, "SPEAKER_00", "Marco")

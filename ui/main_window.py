@@ -17,7 +17,7 @@ from PySide6.QtGui import (
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWidgets import QApplication, QMainWindow
+from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox
 
 from config.constants import AppMeta, UIConstraints
 from core.application_service import ApplicationService
@@ -135,6 +135,7 @@ class MainWindow(QMainWindow):
         self._application = application
         self._tray_icon = None
         self._closing = False
+        self._meeting_review_dirty = False
         self._geometry_tracking_ready = False
         self._geometry_save_timer = QTimer(self)
         self._geometry_save_timer.setSingleShot(True)
@@ -144,6 +145,7 @@ class MainWindow(QMainWindow):
         self._restore_window_geometry(application.desktop_state())
         self._bridge = BackendBridge(application, self)
         self._bridge.eventReceived.connect(self._observe_backend_event)
+        self._bridge.meetingReviewDirtyChanged.connect(self._set_meeting_review_dirty)
         self._log_handler = BridgeLogHandler(self._bridge)
         logging.getLogger().addHandler(self._log_handler)
         self._web_view = DropAwareWebView(self)
@@ -205,8 +207,27 @@ class MainWindow(QMainWindow):
         self._persist_window_geometry()
         logging.getLogger().removeHandler(self._log_handler)
 
+    def _set_meeting_review_dirty(self, dirty: bool) -> None:
+        self._meeting_review_dirty = bool(dirty)
+
+    def _confirm_discard_unsaved_meeting_review(self) -> bool:
+        if not self._meeting_review_dirty:
+            return True
+        choice = QMessageBox.warning(
+            self,
+            "Modifiche non salvate",
+            "Ci sono correzioni della riunione non ancora salvate. "
+            "Usa ‘Salva tutto’ per conservarle.\n\n"
+            "Uscire comunque senza salvarle?",
+            QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return choice == QMessageBox.StandardButton.Discard
+
     def force_quit(self) -> None:
         if self._closing:
+            return
+        if not self._confirm_discard_unsaved_meeting_review():
             return
         self._prepare_shutdown()
         app = QApplication.instance()
@@ -224,6 +245,10 @@ class MainWindow(QMainWindow):
             self._geometry_save_timer.stop()
             self._persist_window_geometry()
             self.hide()
+            event.ignore()
+            return
+
+        if not self._confirm_discard_unsaved_meeting_review():
             event.ignore()
             return
 

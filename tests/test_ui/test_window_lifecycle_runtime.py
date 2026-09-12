@@ -60,6 +60,21 @@ def test_close_path_requires_explicit_tray_readiness_contract() -> None:
     assert "app.quit()" in source
 
 
+def test_unsaved_meeting_review_blocks_real_shutdown_until_confirmed() -> None:
+    source = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+
+    assert "meetingReviewDirtyChanged = Signal(bool)" in bridge
+    assert "def setMeetingReviewDirty" in bridge
+    assert "self._bridge.meetingReviewDirtyChanged.connect" in source
+    assert "_confirm_discard_unsaved_meeting_review" in source
+    assert "QMessageBox.StandardButton.Discard" in source
+    assert "if not self._confirm_discard_unsaved_meeting_review():" in source
+    assert source.index("if tray_ready:") < source.rindex(
+        "if not self._confirm_discard_unsaved_meeting_review():"
+    )
+
+
 def test_terminal_signals_route_through_qt_shutdown() -> None:
     source = (ROOT / "main.py").read_text(encoding="utf-8")
 

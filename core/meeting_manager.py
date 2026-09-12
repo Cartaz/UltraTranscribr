@@ -531,13 +531,20 @@ class MeetingManager:
         self._emit("meeting_review_changed", session_id)
         return meeting
 
-    def edit_segment(self, session_id: str, index: int, text: str) -> dict[str, Any]:
-        self.store.edit_review_segment(session_id, index, text)
+    def edit_segments(
+        self,
+        session_id: str,
+        edits: dict[int, str],
+    ) -> dict[str, Any]:
+        self.store.edit_review_segments(session_id, edits)
         meeting = self.store.get(session_id)
         if meeting is None:
             raise KeyError("riunione non trovata")
         self._emit("meeting_review_changed", session_id)
         return meeting
+
+    def edit_segment(self, session_id: str, index: int, text: str) -> dict[str, Any]:
+        return self.edit_segments(session_id, {int(index): text})
 
     def set_segment_speaker(
         self,

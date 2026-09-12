@@ -22,6 +22,7 @@ class BackendBridge(QObject):
     eventReceived = Signal(str, str)
     logReceived = Signal(str, str, str)
     windowResizeRequested = Signal(int, int)
+    meetingReviewDirtyChanged = Signal(bool)
 
     _EVENTS = (
         "backend_status_changed",
@@ -143,9 +144,7 @@ class BackendBridge(QObject):
     @Slot(result=str)
     def listPlaybackStreams(self) -> str:
         return json.dumps(
-            self._application.list_playback_streams(),
-            ensure_ascii=False,
-            default=str,
+            self._application.list_playback_streams(), ensure_ascii=False, default=str
         )
 
     @Slot(str, str, result=str)
@@ -346,6 +345,35 @@ class BackendBridge(QObject):
             return self._ok(meeting=meeting)
         except Exception as exc:
             return self._error(exc)
+
+    @Slot(str, str, result=str)
+    def editMeetingSegments(self, session_id: str, edits_json: str) -> str:
+        try:
+            decoded = json.loads(edits_json)
+            if not isinstance(decoded, list) or not decoded:
+                raise ValueError("elenco correzioni riunione non valido")
+            edits: dict[int, str] = {}
+            for item in decoded:
+                if not isinstance(item, dict):
+                    raise ValueError("correzione riunione non valida")
+                raw_index = item.get("index")
+                if isinstance(raw_index, bool) or not isinstance(raw_index, int):
+                    raise ValueError("indice correzione riunione non valido")
+                if raw_index < 0:
+                    raise ValueError("indice correzione riunione non valido")
+                if raw_index in edits:
+                    raise ValueError("indice correzione riunione duplicato")
+                edits[raw_index] = str(item.get("text") or "")
+            meeting = self._application.edit_meeting_segments(
+                session_id.strip(), edits
+            )
+            return self._ok(meeting=meeting)
+        except Exception as exc:
+            return self._error(exc)
+
+    @Slot(bool)
+    def setMeetingReviewDirty(self, dirty: bool) -> None:
+        self.meetingReviewDirtyChanged.emit(bool(dirty))
 
     @Slot(str, int, str, result=str)
     def editMeetingSegment(self, session_id: str, index: int, text: str) -> str:

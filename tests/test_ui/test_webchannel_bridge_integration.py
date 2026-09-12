@@ -262,6 +262,17 @@ def test_bootstrap_contains_real_multi_session_runtime(monkeypatch) -> None:
     assert controller.discovery_requests[-1] == (True, True)
 
 
+def test_bridge_reports_meeting_review_dirty_state(monkeypatch) -> None:
+    bridge, _controller, _application = _bridge(monkeypatch)
+    received = []
+    bridge.meetingReviewDirtyChanged.connect(received.append)
+
+    bridge.setMeetingReviewDirty(True)
+    bridge.setMeetingReviewDirty(False)
+
+    assert received == [True, False]
+
+
 def test_bridge_forwards_session_event_as_json(monkeypatch) -> None:
     bridge, controller, _application = _bridge(monkeypatch)
     received = []

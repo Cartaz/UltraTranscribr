@@ -537,10 +537,15 @@ class ApplicationService:
     ) -> dict[str, Any]:
         return self.meeting.set_speaker_name(session_id, speaker_id, name)
 
+    def edit_meeting_segments(
+        self, session_id: str, edits: dict[int, str]
+    ) -> dict[str, Any]:
+        return self.meeting.edit_segments(session_id, edits)
+
     def edit_meeting_segment(
         self, session_id: str, index: int, text: str
     ) -> dict[str, Any]:
-        return self.meeting.edit_segment(session_id, index, text)
+        return self.edit_meeting_segments(session_id, {int(index): text})
 
     def set_meeting_segment_speaker(
         self, session_id: str, index: int, speaker_id: str
