@@ -1,6 +1,7 @@
 """Incremental session models and Live commands."""
 
 from PySide6.QtCore import Property, Signal, Slot
+
 from ui.adapters.base import Adapter
 from ui.models import RecordModel
 

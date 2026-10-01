@@ -1,7 +1,8 @@
 """Stable-role Qt models; snapshots and drafts stay in Python."""
 
 from copy import deepcopy
-from PySide6.QtCore import QAbstractListModel, QModelIndex, Property, Qt, Signal, Slot
+
+from PySide6.QtCore import Property, QAbstractListModel, QModelIndex, Qt, Signal, Slot
 
 
 class RecordModel(QAbstractListModel):

@@ -2,7 +2,8 @@
 
 import logging
 from pathlib import Path
-from PySide6.QtCore import QObject, Property, Qt, Signal, Slot, QTimer
+
+from PySide6.QtCore import Property, QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QFileDialog
 

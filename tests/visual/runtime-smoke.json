@@ -1,0 +1,21 @@
+{
+  "gpu_detection_fixture": true,
+  "inference_exercised": false,
+  "views": [
+    "live",
+    "file",
+    "meeting",
+    "history",
+    "settings",
+    "logs"
+  ],
+  "memory_kib": {
+    "Rss": 289040,
+    "Pss": 248260,
+    "Private_Clean": 36632,
+    "Private_Dirty": 172688
+  },
+  "webengine_modules": [],
+  "exit_code": 0,
+  "remaining_threads": []
+}

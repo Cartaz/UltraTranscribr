@@ -1,6 +1,7 @@
 """File queue and local file selection."""
 
 from PySide6.QtCore import Property, QUrl, Signal, Slot
+
 from ui.adapters.base import Adapter, choose_files
 from ui.models import RecordModel
 

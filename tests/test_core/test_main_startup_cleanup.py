@@ -1,7 +1,9 @@
 """Partial composition failures must still release accepted service resources."""
 
 from unittest.mock import MagicMock
+
 import pytest
+
 import main
 
 

@@ -1,9 +1,12 @@
 """Runtime regressions for QML adapters against the real application and stores."""
 
 import threading
-from PySide6.QtCore import QObject, QThread, Qt, QUrl
+
+from conftest import visual_child, wait_until
+from PySide6.QtCore import QObject, Qt, QThread, QUrl
+from PySide6.QtQml import QQmlEngine, QQmlExpression
 from PySide6.QtTest import QTest
-from conftest import wait_until, visual_child
+
 from ui.models import RecordModel
 from ui.native.dictation_overlay import DictationOverlay
 
@@ -31,6 +34,7 @@ def seed_meeting(controller, count=2):
             for i in range(count)
         ],
     )
+    store.set_speaker_name(sid, "SPEAKER_00", "Speaker 1")
     store.set_status(sid, "completed", terminal=True)
     return sid
 
@@ -50,7 +54,7 @@ def test_record_model_retains_identity_and_copies_nested_values():
 
 
 def test_worker_events_are_delivered_on_gui_thread(quick_window):
-    app, window, service, controller, messages = quick_window
+    app, window, _service, _controller, _messages = quick_window
     live = window.runtime.live
     threads = []
     live.changed.connect(lambda: threads.append(QThread.currentThread()))
@@ -133,7 +137,7 @@ def test_model_errors_release_operation_state(quick_window):
 
 
 def test_history_reads_derived_strings_and_persists_rename(quick_window):
-    app, window, service, controller, messages = quick_window
+    _app, window, _service, controller, _messages = quick_window
     sid = controller.history.create_session(
         kind="file", model="medium", language="it", source_path="fixture.wav"
     )
@@ -166,7 +170,7 @@ def test_drop_rejects_remote_urls_and_preserves_local_files(quick_window, tmp_pa
 
 
 def test_single_segment_save_keeps_other_drafts_and_raw_text(quick_window):
-    app, window, service, controller, messages = quick_window
+    _app, window, service, controller, _messages = quick_window
     sid = seed_meeting(controller)
     meeting = window.runtime.meeting
     meeting._load_review(service.get_meeting(sid))
@@ -187,7 +191,7 @@ def test_single_segment_save_keeps_other_drafts_and_raw_text(quick_window):
 
 
 def test_edits_during_pending_save_survive_completion(quick_window, monkeypatch):
-    app, window, service, controller, messages = quick_window
+    _app, window, service, controller, _messages = quick_window
     sid = seed_meeting(controller)
     meeting = window.runtime.meeting
     meeting._load_review(service.get_meeting(sid))
@@ -218,7 +222,7 @@ def test_edits_during_pending_save_survive_completion(quick_window, monkeypatch)
 
 
 def test_failed_save_preserves_edits_and_clears_busy(quick_window, monkeypatch):
-    app, window, service, controller, messages = quick_window
+    _app, window, service, controller, _messages = quick_window
     meeting = window.runtime.meeting
     meeting._load_review(service.get_meeting(seed_meeting(controller)))
 
@@ -277,3 +281,111 @@ def test_overlay_never_takes_focus_and_disposes_idempotently(quick_window):
     finally:
         overlay.close()
         overlay.close()
+
+
+def test_default_source_setting_updates_live_picker(quick_window):
+    window = quick_window[1]
+    settings = window.runtime.settings
+    settings.edit("audio_source", "microphone")
+    settings.save()
+    wait_until(
+        lambda: not settings.saving and window.runtime.sources.source == "microphone"
+    )
+
+
+def test_speaker_override_can_return_to_automatic_without_losing_text_draft(
+    quick_window,
+):
+    _app, window, service, controller, _messages = quick_window
+    sid = seed_meeting(controller)
+    meeting = window.runtime.meeting
+    meeting._load_review(service.get_meeting(sid))
+    meeting.editText(0, "correzione non salvata")
+    meeting.setSpeaker(0, "SPEAKER_00")
+    wait_until(lambda: not meeting.saving)
+    assert meeting.segments.get(0)["speaker_choice"] == "SPEAKER_00"
+    meeting.setSpeaker(0, "")
+    wait_until(lambda: not meeting.saving)
+    assert meeting.segments.get(0)["speaker_choice"] == ""
+    assert meeting.segments.get(0)["speaker_options"][0]["value"] == ""
+    assert meeting.segments.get(0)["draft_text"] == "correzione non salvata"
+
+
+def test_delayed_postprocess_does_not_replace_new_history_selection(
+    quick_window, monkeypatch
+):
+    app, window, service, controller, _messages = quick_window
+    first = seed_meeting(controller)
+    second = seed_meeting(controller)
+    archive = window.runtime.archive
+    archive.select(first)
+    wait_until(lambda: archive.selected.get("id") == first)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def delayed(session, profile):
+        entered.set()
+        assert release.wait(3)
+        controller.history.save_derived_output(session, profile, "generato")
+
+    monkeypatch.setattr(service, "generate_postprocess", delayed)
+    archive.generate("clean")
+    try:
+        wait_until(entered.is_set)
+        archive.select(second)
+        wait_until(lambda: archive.selected.get("id") == second)
+    finally:
+        release.set()
+    wait_until(lambda: service._tasks.active_count == 0)
+    app.processEvents()
+    assert archive.selected["id"] == second and archive.profile == "raw"
+
+
+def test_raw_profile_is_available_in_real_picker(quick_window):
+    _app, window, _service, _controller, _messages = quick_window
+    archive = window.runtime.archive
+    assert archive.profiles.get(0) == {"id": "raw", "label": "Originale"}
+    assert {r["id"] for r in archive.profiles.rows()} == {"raw", "clean", "paragraphs"}
+
+
+def test_long_review_can_scroll_to_all_content(quick_window):
+    app, window, service, controller, messages = quick_window
+    window.runtime.meeting._load_review(
+        service.get_meeting(seed_meeting(controller, 150))
+    )
+    window._window.setProperty("view", "meeting")
+    app.processEvents()
+    page = window._window.findChild(QObject, "meetingPage")
+    wait_until(lambda: page.property("contentHeight") > page.property("height"))
+    flick = page.property("contentItem")
+    flick.setProperty("contentY", 600)
+    app.processEvents()
+    assert flick.property("contentY") > 500
+    assert not any(
+        "Binding loop" in m or "recursive rearrange" in m for m in messages
+    ), messages
+
+
+def test_user_supplied_labels_are_rendered_as_plain_text(quick_window):
+    app, window, _service, controller, _messages = quick_window
+    sid = seed_meeting(controller)
+    label = "<b>Nome letterale</b>"
+    controller.history.set_name(sid, label)
+    window.runtime.archive.select(sid)
+    wait_until(lambda: window.runtime.archive.selected.get("id") == sid)
+    window._window.setProperty("view", "history")
+    app.processEvents()
+    matching = [
+        item
+        for item in window._window.findChildren(QObject)
+        if item.metaObject().className() == "QQuickText"
+        and item.property("text") == label
+    ]
+    assert matching
+    for item in matching:
+        expression = QQmlExpression(
+            QQmlEngine.contextForObject(item), item, "textFormat === 0"
+        )
+        result = expression.evaluate()
+        assert not expression.hasError()
+        assert result[0] if isinstance(result, tuple) else result

@@ -1,9 +1,9 @@
 """Real Qt Quick/service fixtures with isolated persistence and no inference."""
 
-from pathlib import Path
 import pytest
 from PySide6.QtCore import QEventLoop, QTimer, qInstallMessageHandler
 from PySide6.QtWidgets import QApplication
+
 from config.constants import AppMeta
 from config.settings import Settings
 from core.app_controller import AppController

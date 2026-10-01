@@ -1,13 +1,16 @@
 """Qt Quick desktop shell, native tray and deterministic window lifecycle."""
 
 from __future__ import annotations
+
 import logging
 from pathlib import Path
+
 import shiboken6
 from PySide6.QtCore import QEvent, QObject, QRect, Qt, QTimer, QUrl
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickWindow
 from PySide6.QtWidgets import QApplication, QMessageBox
+
 from config.constants import AppMeta, UIConstraints
 from core.application_service import ApplicationService
 from ui.quick_runtime import QuickRuntime

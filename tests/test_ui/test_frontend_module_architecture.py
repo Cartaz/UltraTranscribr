@@ -313,5 +313,5 @@ def test_main_window_uses_focused_qml_runtime_and_application_service() -> None:
     text = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
     assert "from ui.quick_runtime import QuickRuntime" in text
     assert "from core.application_service import ApplicationService" in text
-    assert "QuickRuntime(application,self)" in text
+    assert "QuickRuntime(application, self)" in text
     assert "BackendBridge(controller" not in text

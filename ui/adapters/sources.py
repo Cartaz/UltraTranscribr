@@ -1,6 +1,7 @@
 """Audio discovery presentation, keeping selection stable across refreshes."""
 
 from PySide6.QtCore import Property, Signal, Slot
+
 from ui.adapters.base import Adapter
 from ui.models import RecordModel
 

@@ -56,7 +56,7 @@ def test_application_controller_owns_runtime_services_and_shutdown() -> None:
     assert "self.meeting = controller.meeting" in application
     assert "self.file_batch = controller.file_batch" in application
     assert "application = ApplicationService(controller)" in main
-    assert "QuickRuntime(application,self)" in shell
+    assert "QuickRuntime(application, self)" in shell
     assert "closePowerUser" not in shell
 
 

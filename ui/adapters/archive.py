@@ -1,6 +1,7 @@
 """History, recovery, recordings and asynchronous export."""
 
 from PySide6.QtCore import Property, QTimer, QUrl, Signal, Slot
+
 from ui.adapters.base import Adapter, export_session
 from ui.models import RecordModel
 
@@ -126,10 +127,19 @@ class ArchiveAdapter(Adapter):
     @Slot(str)
     def generate(self, profile):
         session_id = self._selected.get("id", "")
+        generation = self._selection_generation
+
+        def receive(_):
+            if (
+                generation == self._selection_generation
+                and self._selected.get("id") == session_id
+            ):
+                self.select(session_id, profile)
+
         self.background(
             "qml-postprocess",
             lambda: self.application.generate_postprocess(session_id, profile),
-            lambda _: self.select(session_id, profile),
+            receive,
         )
 
     @Slot(str)

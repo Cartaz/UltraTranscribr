@@ -1,6 +1,7 @@
 """Local Qt Quick dictation overlay that never steals keyboard focus."""
 
 from pathlib import Path
+
 import shiboken6
 from PySide6.QtCore import QObject, QUrl
 from PySide6.QtGui import QCursor, QGuiApplication

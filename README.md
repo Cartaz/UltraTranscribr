@@ -245,3 +245,5 @@ MIT.
 Verifica locale: `QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software pytest -q` e `pyside6-qmllint --unqualified info -I ui/qml ui/qml/*.qml`. Il rendering software serve ai test funzionali; gli screenshot degli effetti richiedono il renderer grafico Qt Quick.
 
 Per rigenerare lo shader: `pyside6-qsb --qt6 -o ui/qml/shaders/inset.frag.qsb ui/qml/shaders/inset.frag`. Per catturare le schermate con dati isolati: `python tools/capture_ui.py --output tests/visual/after`. Il fixture sostituisce esclusivamente il rilevamento GPU: non esegue inferenza e non introduce un fallback CPU nel programma.
+
+Audit e limiti di accettazione del porting: [docs/QML_AUDIT_2026-10-01.md](docs/QML_AUDIT_2026-10-01.md).

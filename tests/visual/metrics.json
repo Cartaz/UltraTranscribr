@@ -1,0 +1,247 @@
+{
+  "method": "All pixels, RGB channels, no masks, no registration, no threshold; timestamps/IDs can vary in populated captures. MAE/RMSE are descriptive and are not acceptance thresholds.",
+  "comparisons": [
+    {
+      "case": "empty",
+      "name": "file-1200x800-dpr2",
+      "size": [
+        2400,
+        1600
+      ],
+      "mae_rgb_0_255": 3.1256,
+      "rmse_rgb_0_255": 15.8906,
+      "identical_pixels_percent": 64.8467
+    },
+    {
+      "case": "empty",
+      "name": "file-1200x800",
+      "size": [
+        1200,
+        800
+      ],
+      "mae_rgb_0_255": 2.892,
+      "rmse_rgb_0_255": 13.9624,
+      "identical_pixels_percent": 64.1393
+    },
+    {
+      "case": "empty",
+      "name": "history-1200x800-dpr2",
+      "size": [
+        2400,
+        1600
+      ],
+      "mae_rgb_0_255": 2.2747,
+      "rmse_rgb_0_255": 13.5692,
+      "identical_pixels_percent": 71.9895
+    },
+    {
+      "case": "empty",
+      "name": "history-1200x800",
+      "size": [
+        1200,
+        800
+      ],
+      "mae_rgb_0_255": 2.0259,
+      "rmse_rgb_0_255": 11.4636,
+      "identical_pixels_percent": 70.8316
+    },
+    {
+      "case": "empty",
+      "name": "live-1200x800-dpr2",
+      "size": [
+        2400,
+        1600
+      ],
+      "mae_rgb_0_255": 3.4352,
+      "rmse_rgb_0_255": 18.511,
+      "identical_pixels_percent": 69.981
+    },
+    {
+      "case": "empty",
+      "name": "live-1200x800",
+      "size": [
+        1200,
+        800
+      ],
+      "mae_rgb_0_255": 3.3064,
+      "rmse_rgb_0_255": 16.6551,
+      "identical_pixels_percent": 68.956
+    },
+    {
+      "case": "empty",
+      "name": "logs-1200x800-dpr2",
+      "size": [
+        2400,
+        1600
+      ],
+      "mae_rgb_0_255": 1.8328,
+      "rmse_rgb_0_255": 12.9754,
+      "identical_pixels_percent": 77.9945
+    },
+    {
+      "case": "empty",
+      "name": "logs-1200x800",
+      "size": [
+        1200,
+        800
+      ],
+      "mae_rgb_0_255": 1.6845,
+      "rmse_rgb_0_255": 11.2127,
+      "identical_pixels_percent": 77.3073
+    },
+    {
+      "case": "empty",
+      "name": "meeting-1200x800-dpr2",
+      "size": [
+        2400,
+        1600
+      ],
+      "mae_rgb_0_255": 4.5391,
+      "rmse_rgb_0_255": 21.5733,
+      "identical_pixels_percent": 65.1177
+    },
+    {
+      "case": "empty",
+      "name": "meeting-1200x800",
+      "size": [
+        1200,
+        800
+      ],
+      "mae_rgb_0_255": 4.3112,
+      "rmse_rgb_0_255": 20.1438,
+      "identical_pixels_percent": 64.1758
+    },
+    {
+      "case": "empty",
+      "name": "settings-1200x800-dpr2",
+      "size": [
+        2400,
+        1600
+      ],
+      "mae_rgb_0_255": 3.4945,
+      "rmse_rgb_0_255": 18.0045,
+      "identical_pixels_percent": 69.2516
+    },
+    {
+      "case": "empty",
+      "name": "settings-1200x800",
+      "size": [
+        1200,
+        800
+      ],
+      "mae_rgb_0_255": 3.5738,
+      "rmse_rgb_0_255": 17.3052,
+      "identical_pixels_percent": 67.4442
+    },
+    {
+      "case": "empty",
+      "name": "settings-advanced-1200x800-dpr2",
+      "size": [
+        2400,
+        1600
+      ],
+      "mae_rgb_0_255": 3.8326,
+      "rmse_rgb_0_255": 19.2469,
+      "identical_pixels_percent": 65.9468
+    },
+    {
+      "case": "empty",
+      "name": "settings-advanced-1200x800",
+      "size": [
+        1200,
+        800
+      ],
+      "mae_rgb_0_255": 3.76,
+      "rmse_rgb_0_255": 18.251,
+      "identical_pixels_percent": 64.2415
+    },
+    {
+      "case": "populated",
+      "name": "file-1200x800",
+      "size": [
+        1200,
+        800
+      ],
+      "mae_rgb_0_255": 2.892,
+      "rmse_rgb_0_255": 13.9624,
+      "identical_pixels_percent": 64.1392
+    },
+    {
+      "case": "populated",
+      "name": "history-1200x800",
+      "size": [
+        1200,
+        800
+      ],
+      "mae_rgb_0_255": 5.2695,
+      "rmse_rgb_0_255": 24.5672,
+      "identical_pixels_percent": 69.6624
+    },
+    {
+      "case": "populated",
+      "name": "live-1200x800",
+      "size": [
+        1200,
+        800
+      ],
+      "mae_rgb_0_255": 4.4508,
+      "rmse_rgb_0_255": 19.5841,
+      "identical_pixels_percent": 62.5857
+    },
+    {
+      "case": "populated",
+      "name": "logs-1200x800",
+      "size": [
+        1200,
+        800
+      ],
+      "mae_rgb_0_255": 1.6845,
+      "rmse_rgb_0_255": 11.2127,
+      "identical_pixels_percent": 77.3073
+    },
+    {
+      "case": "populated",
+      "name": "meeting-1200x800",
+      "size": [
+        1200,
+        800
+      ],
+      "mae_rgb_0_255": 4.7381,
+      "rmse_rgb_0_255": 20.7059,
+      "identical_pixels_percent": 62.9726
+    },
+    {
+      "case": "populated",
+      "name": "meeting-review-1200x800",
+      "size": [
+        1200,
+        800
+      ],
+      "mae_rgb_0_255": 13.7721,
+      "rmse_rgb_0_255": 35.5667,
+      "identical_pixels_percent": 49.4261
+    },
+    {
+      "case": "populated",
+      "name": "settings-1200x800",
+      "size": [
+        1200,
+        800
+      ],
+      "mae_rgb_0_255": 3.5738,
+      "rmse_rgb_0_255": 17.3051,
+      "identical_pixels_percent": 67.4441
+    },
+    {
+      "case": "populated",
+      "name": "settings-advanced-1200x800",
+      "size": [
+        1200,
+        800
+      ],
+      "mae_rgb_0_255": 3.7599,
+      "rmse_rgb_0_255": 18.2509,
+      "identical_pixels_percent": 64.2414
+    }
+  ]
+}

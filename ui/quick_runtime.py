@@ -1,6 +1,7 @@
 """Focused application adapters and queued event marshalling."""
 
-from PySide6.QtCore import QObject, Property, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import Property, QObject, Qt, QTimer, Signal, Slot
+
 from ui.adapters.archive import ArchiveAdapter
 from ui.adapters.base import Feedback
 from ui.adapters.files import FileAdapter
@@ -54,7 +55,9 @@ class QuickRuntime(QObject):
         self.files._busy = boot.get("runtime", {}).get("fileRunning", False)
         self.meeting.queue.replace(boot.get("meetingQueue", []))
         self.meeting.set_runtime(boot.get("meetingRuntime"))
-        self.archive.profiles.replace(boot.get("postprocessProfiles", []))
+        self.archive.profiles.replace(
+            [{"id": "raw", "label": "Originale"}, *boot.get("postprocessProfiles", [])]
+        )
         self._log = self.application.read_log_tail(160)
         self._status = (
             "Pronto" if boot.get("runtime", {}).get("backendRunning") else "Standby"
@@ -122,6 +125,12 @@ class QuickRuntime(QObject):
             self.meeting.handle_event(name, value)
         if name.startswith("model_") or name == "config_changed":
             self.settings.handle_event(name, value)
+        if (
+            name == "config_changed"
+            and isinstance(value, dict)
+            and value.get("audio_source")
+        ):
+            self.sources.setSource(value["audio_source"])
         if name in {"history_changed", "meeting_completed", "recovery_audio_saved"}:
             self.archive.requestRefresh()
         if name == "audio_devices_changed":

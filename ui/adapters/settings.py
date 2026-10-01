@@ -1,7 +1,9 @@
 """Settings drafts, nonblocking writes and model inventory."""
 
 from dataclasses import asdict
+
 from PySide6.QtCore import Property, Signal, Slot
+
 from ui.adapters.base import Adapter
 from ui.models import RecordModel
 

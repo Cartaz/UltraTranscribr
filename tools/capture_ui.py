@@ -1,6 +1,10 @@
 """Isolated real UI capture; the GPU detection patch belongs only to this fixture."""
 
-import argparse, json, os, sys, tempfile
+import argparse
+import json
+import os
+import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,9 +24,10 @@ os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 os.environ.setdefault(
     "QTWEBENGINE_CHROMIUM_FLAGS", "--no-sandbox --disable-gpu --disable-dev-shm-usage"
 )
-from PySide6.QtCore import QEventLoop, QTimer, QObject, QPointF
+from PySide6.QtCore import QEventLoop, QObject, QPointF, QTimer
 from PySide6.QtQuick import QQuickItem
 from PySide6.QtWidgets import QApplication
+
 from config.settings import Settings
 from core.app_controller import AppController
 from core.application_service import ApplicationService
@@ -33,6 +38,54 @@ app.setQuitOnLastWindowClosed(False)
 with patch("core.app_controller.detect_gpu_backend", return_value="sycl"):
     controller = AppController(Settings(preload_model=False))
 service = ApplicationService(controller)
+history_id = meeting_id = None
+if args.populated:
+    history_id = controller.history.create_session(
+        kind="file",
+        model="large-v3",
+        language="it",
+        source_path="intervista.wav",
+        status="completed",
+    )
+    controller.history.set_name(history_id, "Intervista di prova")
+    controller.history.append_text(
+        history_id,
+        "Una trascrizione di prova. Il testo originale resta disponibile nella cronologia.\nVerifica delle correzioni e dell’esportazione locale.",
+    )
+    controller.history.save_derived_output(
+        history_id, "clean", "Una trascrizione di prova corretta."
+    )
+    store = controller.meeting.store
+    meeting_id = store.create(
+        model="large-v3",
+        language="it",
+        source="file",
+        source_path="riunione.wav",
+        acquisition_mode="file",
+        num_speakers=2,
+    )
+    controller.history.set_name(meeting_id, "Riunione di prova")
+    controller.history.append_text(
+        meeting_id,
+        "Testo originale della riunione. Verifica dei due interlocutori e delle correzioni.",
+    )
+    store.set_diarization(
+        meeting_id,
+        diarization_segments=[],
+        review_segments=[
+            {
+                "start": i * 2.0,
+                "end": i * 2.0 + 1.8,
+                "speaker_id": f"SPEAKER_0{i % 2}",
+                "text": f"Segmento {i + 1}: verifica della trascrizione e della revisione.",
+            }
+            for i in range(150)
+        ],
+        num_speakers=2,
+    )
+    store.set_speaker_name(meeting_id, "SPEAKER_00", "Francesco")
+    store.set_speaker_name(meeting_id, "SPEAKER_01", "Maria")
+    store.set_status(meeting_id, "completed", terminal=True)
 window = MainWindow(service)
 window.resize(1200, 800)
 window.show()
@@ -45,6 +98,35 @@ def wait(ms):
 
 
 wait(1600)
+if args.populated:
+    from core.event_bus import EventBus
+
+    for i in range(2):
+        EventBus().emit(
+            "live_session_created",
+            {
+                "id": f"fixture-{i}",
+                "source": "microphone" if i == 0 else "system",
+                "source_path": "Microfono prova" if i == 0 else "Uscita predefinita",
+                "model": "large-v3",
+                "language": "it",
+                "status": "completed",
+                "terminal": True,
+                "text": "Testo della sessione di prova.",
+                "buffer_level": 0,
+                "queue_wait_ms": 12,
+                "queue_peak_ms": 24,
+                "record_audio": False,
+            },
+        )
+    if args.frontend == "web":
+        window._web_page.runJavaScript(
+            f"fileHistoryLoadSession({json.dumps(history_id)}); meetingLoad({json.dumps(meeting_id)});"
+        )
+    else:
+        window.runtime.archive.select(history_id)
+        window.runtime.meeting.select(meeting_id)
+    wait(800)
 args.output.mkdir(parents=True, exist_ok=True)
 suffix = "1200x800" + (
     "-dpr2" if float(os.environ.get("QT_SCALE_FACTOR", "1")) == 2 else ""
@@ -58,28 +140,54 @@ try:
         "settings",
         "logs",
         "settings-advanced",
+        *(("meeting-review",) if args.populated else ()),
     ):
         if args.frontend == "web":
             window._web_page.runJavaScript(
-                f"switchView({json.dumps(page)})"
+                f"switchView({json.dumps('meeting' if page == 'meeting-review' else page)})"
                 if page != "settings-advanced"
                 else 'switchView("settings"); switchSettingsTab("advanced")'
             )
         else:
             window._window.setProperty(
-                "view", "settings" if page == "settings-advanced" else page
+                "view",
+                "settings"
+                if page == "settings-advanced"
+                else "meeting"
+                if page == "meeting-review"
+                else page,
             )
             if page == "settings-advanced":
                 window._window.findChild(QObject, "settingsPage").setProperty(
                     "advanced", True
                 )
         wait(600)
+        if page == "meeting-review":
+            if args.frontend == "web":
+                window._web_page.runJavaScript(
+                    "document.querySelector('[data-panel=meeting]').scrollTop=850"
+                )
+            else:
+                flick = window._window.findChild(QObject, "meetingPage").property(
+                    "contentItem"
+                )
+                flick.setProperty(
+                    "contentY",
+                    min(
+                        660,
+                        max(
+                            0,
+                            flick.property("contentHeight") - flick.property("height"),
+                        ),
+                    ),
+                )
+            wait(200)
         if args.frontend == "web":
             window._web_view.grab().save(str(args.output / f"{page}-{suffix}.png"))
             result = []
             window._web_page.runJavaScript(
                 'JSON.stringify([...document.querySelectorAll(".sidebar,.topbar,.view.active .card,.view.active input,.view.active select,.view.active .button,.view.active .metrics")].filter(e=>e.getBoundingClientRect().height).map(e=>({id:e.id,cls:e.className,text:e.textContent.trim().slice(0,60),rect:e.getBoundingClientRect().toJSON()})))',
-                lambda r: result.append(r),
+                lambda r, target=result: target.append(r),
             )
             wait(100)
             if result:
@@ -92,9 +200,9 @@ try:
             for item in window._window.findChildren(QQuickItem):
                 if item.objectName() and item.isVisible():
                     pt = item.mapToScene(QPointF(0, 0))
-                    geom[item.objectName()] = dict(
-                        x=pt.x(), y=pt.y(), width=item.width(), height=item.height()
-                    )
+                    geom[item.objectName()] = {
+                        "x": pt.x(), "y": pt.y(), "width": item.width(), "height": item.height()
+                    }
             (args.output / f"{page}-{suffix}-geometry.json").write_text(
                 json.dumps(geom, indent=2)
             )

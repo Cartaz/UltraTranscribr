@@ -1,7 +1,9 @@
 """Meeting input drafts and review, retaining edits through delegate recycling."""
 
 import time
+
 from PySide6.QtCore import Property, QTimer, QUrl, Signal, Slot
+
 from ui.adapters.base import Adapter, choose_files, export_session
 from ui.models import RecordModel
 
@@ -233,23 +235,35 @@ class MeetingAdapter(Adapter):
         self._review = value
         metadata = value.get("meeting") or {}
         names = metadata.get("speaker_names") or {}
-        ids = set(names)
+        ids = {key for key in names if key.startswith("SPEAKER_")}
         rows = []
         for index, item in enumerate(metadata.get("review_segments") or []):
             speaker = (
                 item.get("speaker_override") or item.get("speaker_id") or "UNKNOWN"
             )
-            ids.add(speaker)
+            if speaker.startswith("SPEAKER_"):
+                ids.add(speaker)
             rows.append(
                 {
                     **item,
                     "index": index,
                     "speaker": speaker,
                     "speaker_name": names.get(speaker, speaker),
+                    "speaker_choice": item.get("speaker_override") or "",
+                    "overlap": len(item.get("overlap_speakers") or []) > 1,
                     "draft_text": edits.get(index, item.get("text", "")),
                     "dirty": index in edits,
                 }
             )
+        options = [{"value": s, "label": names.get(s, s)} for s in sorted(ids)]
+        for row in rows:
+            automatic = names.get(
+                row.get("speaker_id"), row.get("speaker_id") or "Speaker ?"
+            )
+            row["speaker_options"] = [
+                {"value": "", "label": f"Automatico · {automatic}"},
+                *options,
+            ]
         if same and self.segments.count == len(rows):
             for index, row in enumerate(rows):
                 self.segments.update(index, **row)
