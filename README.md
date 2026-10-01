@@ -1,6 +1,6 @@
 # UltraTranscribr
 
-UltraTranscribr è un'applicazione desktop Linux local-first per trascrizione **Live**, **File**, **Riunione** e **Dettatura globale**. L'interfaccia usa PySide6/Qt WebEngine e QWebChannel; l'inferenza resta locale.
+UltraTranscribr è un'applicazione desktop Linux local-first per trascrizione **Live**, **File**, **Riunione** e **Dettatura globale**. L'interfaccia usa PySide6 6.11+/Qt Quick e QML; l'inferenza resta locale.
 
 La configurazione di riferimento è CachyOS/Arch Linux con GPU Intel e due runtime di accelerazione:
 
@@ -90,6 +90,8 @@ Per forzare la ricompilazione della revisione selezionata:
 ```bash
 ULTRATRANSCRIBR_FORCE_REBUILD=1 ./install.sh
 ```
+
+Il frontend QML usa Qt Multimedia: il sistema deve fornire `libpulse.so.0`, oltre alle librerie grafiche Qt e a PortAudio. Il controllo delle dipendenze dell'installer importa anche Qt Quick/QML/Multimedia, così una libreria nativa mancante viene segnalata prima dell'avvio della UI.
 
 ## Modelli Whisper
 
@@ -237,3 +239,13 @@ La documentazione della pipeline Riunione è in `docs/MEETING_PIPELINE.md`; il b
 ## Licenza
 
 MIT.
+
+### Interfaccia QML
+
+`ui/qml/Main.qml` compone le sei viste native Qt Quick. Gli adapter in `ui/adapters/` espongono modelli Qt e delegano i flussi a `ApplicationService`; i risultati dei worker raggiungono la GUI con connessioni queued. Non viene inizializzato WebEngine nel programma. `ui/web/` e `ui/bridge.py` sono conservati come riferimento della UI precedente e per i relativi test di contratto.
+
+Verifica locale: `QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software pytest -q` e `pyside6-qmllint --unqualified info -I ui/qml ui/qml/*.qml`. Il rendering software serve ai test funzionali; gli screenshot degli effetti richiedono il renderer grafico Qt Quick.
+
+Per rigenerare lo shader: `pyside6-qsb --qt6 -o ui/qml/shaders/inset.frag.qsb ui/qml/shaders/inset.frag`. Per catturare le schermate con dati isolati: `python tools/capture_ui.py --output tests/visual/after`. Il fixture sostituisce esclusivamente il rilevamento GPU: non esegue inferenza e non introduce un fallback CPU nel programma.
+
+Audit e limiti di accettazione del porting: [docs/QML_AUDIT_2026-10-01.md](docs/QML_AUDIT_2026-10-01.md).

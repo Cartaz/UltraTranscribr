@@ -44,6 +44,9 @@ _requirements_imports_probe() {
 from importlib.metadata import version
 
 import PySide6
+from PySide6.QtMultimedia import QMediaPlayer
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuick import QQuickWindow
 import dbus_next
 import demucs_infer
 import huggingface_hub

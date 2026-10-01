@@ -161,7 +161,7 @@ class ApplicationService:
             return
         selected = settings.model_size
         installed = any(
-            str(item.get("id")) == selected and bool(item.get("installed"))
+            str(item.get("model")) == selected and bool(item.get("installed"))
             for item in self.controller.list_models()
         )
         if not installed:

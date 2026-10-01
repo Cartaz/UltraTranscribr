@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_meeting_batch_is_owned_below_webchannel_and_reuses_meeting_pipeline() -> None:
     coordinator = (ROOT / "core" / "meeting_batch.py").read_text(encoding="utf-8")
     application = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
-    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8") + (ROOT / "ui" / "events.py").read_text(encoding="utf-8")
 
     assert "class MeetingBatchCoordinator" in coordinator
     assert "self._manager.start_file(" in coordinator
@@ -27,7 +27,7 @@ def test_meeting_batch_is_owned_below_webchannel_and_reuses_meeting_pipeline() -
 
 def test_meeting_recording_picker_stages_per_file_settings_before_queue_start() -> None:
     web = (ROOT / "ui" / "web" / "meeting.js").read_text(encoding="utf-8")
-    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8") + (ROOT / "ui" / "events.py").read_text(encoding="utf-8")
     application = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
 
     assert "let meetingFileDrafts = [];" in web

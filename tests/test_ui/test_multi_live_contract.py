@@ -56,7 +56,7 @@ def test_live_module_registers_with_shared_runtime_without_global_overrides():
 
 
 def test_webchannel_exposes_session_scoped_operations_and_events():
-    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8") + (ROOT / "ui" / "events.py").read_text(encoding="utf-8")
     application = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
     controller = (ROOT / "core" / "app_controller.py").read_text(encoding="utf-8")
     manager = (ROOT / "core" / "live_sessions.py").read_text(encoding="utf-8")
