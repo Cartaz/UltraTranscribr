@@ -42,6 +42,8 @@ class BackendBridge(QObject):
         "model_download_started",
         "model_download_progress",
         "model_status_changed",
+        "model_download_error",
+        "model_delete_error",
         "audio_devices_changed",
         "playback_streams_changed",
         "audio_source_health_changed",
