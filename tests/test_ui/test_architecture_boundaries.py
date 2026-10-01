@@ -56,7 +56,7 @@ def test_application_controller_owns_runtime_services_and_shutdown() -> None:
     assert "self.meeting = controller.meeting" in application
     assert "self.file_batch = controller.file_batch" in application
     assert "application = ApplicationService(controller)" in main
-    assert "BackendBridge(application, self)" in shell
+    assert "QuickRuntime(application,self)" in shell
     assert "closePowerUser" not in shell
 
 
@@ -208,12 +208,13 @@ def test_history_metadata_and_postprocess_have_canonical_core_owners() -> None:
     assert "save_derived_output(" in postprocess
 
 
-def test_webengine_is_local_only_and_external_links_leave_the_app() -> None:
+def test_qml_shell_loads_local_sources_without_browser_transport() -> None:
     shell = _read("ui/main_window.py")
-    assert "class LocalOnlyWebPage(QWebEnginePage)" in shell
-    assert 'if scheme in self._EXTERNAL_SCHEMES:' in shell
-    assert "QDesktopServices.openUrl(url)" in shell
-    assert "LocalContentCanAccessRemoteUrls" in shell
-    assert "False," in shell
-    assert "def createWindow" in shell
-    assert ".is_file()" not in shell.split("class DropAwareWebView", 1)[1].split("class MainWindow", 1)[0]
+    assert "QQmlApplicationEngine" in shell
+    assert "QUrl.fromLocalFile" in shell
+    assert "QtWebEngine" not in shell
+    assert "QtWebChannel" not in shell
+    for path in (ROOT / "ui" / "qml").glob("*.qml"):
+        source = path.read_text()
+        assert "WebEngineView" not in source
+        assert "XMLHttpRequest" not in source

@@ -80,7 +80,7 @@ class DictationNativeIntegration(QObject):
         self._remote.close()
         self._shortcut.close()
         self._portal_transport.close()
-        self._overlay.hide()
+        self._overlay.close()
         self._overlay.deleteLater()
 
     def _make_handler(self, event: str):

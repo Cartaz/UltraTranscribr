@@ -24,13 +24,15 @@ def test_qt_shell_enforces_and_persists_shared_window_constraints() -> None:
     assert UIConstraints.MIN_WINDOW_HEIGHT == 800
     assert "UIConstraints.MIN_WINDOW_WIDTH" in shell
     assert "UIConstraints.MIN_WINDOW_HEIGHT" in shell
-    assert "self.setMinimumSize(" in shell
-    assert "def moveEvent" in shell
-    assert "def resizeEvent" in shell
+    qml = (ROOT / "ui" / "qml" / "Main.qml").read_text()
+    assert "minimumWidth: 1200" in qml
+    assert "minimumHeight: 800" in qml
+    assert "QEvent.Type.Move" in shell
+    assert "QEvent.Type.Resize" in shell
     assert "_persist_window_geometry" in shell
     assert "self._application.persist_window_geometry(" in shell
-    assert "int(rect.x())" in shell
-    assert "int(rect.y())" in shell
+    assert "rect.x()" in shell
+    assert "rect.y()" in shell
     assert "def persist_window_geometry(self, x: int, y: int, width: int, height: int)" in application
     for key in ("window_x", "window_y", "window_width", "window_height"):
         assert f'"{key}"' in application

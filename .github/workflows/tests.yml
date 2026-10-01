@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       QT_QPA_PLATFORM: offscreen
+      QT_QUICK_BACKEND: software
       QTWEBENGINE_DISABLE_SANDBOX: "1"
       QTWEBENGINE_CHROMIUM_FLAGS: "--no-sandbox --disable-gpu"
     steps:
@@ -29,4 +30,5 @@ jobs:
       - run: node --check ui/web/settings_cleanup.js
       - run: node --check ui/web/file_history.js
       - run: node --check ui/web/meeting.js
+      - run: pyside6-qmllint --unqualified info -I ui/qml ui/qml/*.qml
       - run: pytest -q

@@ -263,7 +263,7 @@ def test_file_presentation_is_owned_by_file_history_module() -> None:
 def test_webchannel_exposes_session_scoped_live_events_only() -> None:
     app = _read("app.js")
     live = _read("multi_live.js")
-    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8") + (ROOT / "ui" / "events.py").read_text(encoding="utf-8")
     transcriber = (ROOT / "core" / "transcriber.py").read_text(encoding="utf-8")
     capture = (ROOT / "core" / "audio_capture.py").read_text(encoding="utf-8")
 
@@ -309,9 +309,9 @@ def test_backend_and_history_final_features_live_in_domain_modules() -> None:
     assert "deleteSessionRecording" in history
 
 
-def test_main_window_uses_single_backend_bridge_and_application_service() -> None:
+def test_main_window_uses_focused_qml_runtime_and_application_service() -> None:
     text = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
-    assert "from ui.bridge import BackendBridge, BridgeLogHandler" in text
+    assert "from ui.quick_runtime import QuickRuntime" in text
     assert "from core.application_service import ApplicationService" in text
-    assert "self._bridge = BackendBridge(application, self)" in text
+    assert "QuickRuntime(application,self)" in text
     assert "BackendBridge(controller" not in text

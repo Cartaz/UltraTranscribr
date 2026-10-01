@@ -66,7 +66,7 @@ def test_unsaved_meeting_review_blocks_real_shutdown_until_confirmed() -> None:
 
     assert "meetingReviewDirtyChanged = Signal(bool)" in bridge
     assert "def setMeetingReviewDirty" in bridge
-    assert "self._bridge.meetingReviewDirtyChanged.connect" in source
+    assert "self.runtime.meeting.dirtyChanged.connect" in source
     assert "_confirm_discard_unsaved_meeting_review" in source
     assert "QMessageBox.StandardButton.Discard" in source
     assert "if not self._confirm_discard_unsaved_meeting_review():" in source
@@ -87,7 +87,7 @@ def test_terminal_signals_route_through_qt_shutdown() -> None:
 def test_move_and_resize_share_debounced_geometry_persistence() -> None:
     source = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
 
-    assert "def moveEvent" in source
-    assert "def resizeEvent" in source
-    assert source.count("self._schedule_geometry_save()") >= 2
+    assert "QEvent.Type.Move" in source
+    assert "QEvent.Type.Resize" in source
+    assert "self._schedule_geometry_save()" in source
     assert "self._application.persist_window_geometry(" in source

@@ -1,27 +1,16 @@
-"""Desktop shell hosting the HTML/CSS/JavaScript interface."""
-from __future__ import annotations
+"""Qt Quick desktop shell, native tray and deterministic window lifecycle."""
 
+from __future__ import annotations
 import logging
 from pathlib import Path
-
-from PySide6.QtCore import QRect, QTimer, QUrl, Signal
-from PySide6.QtGui import (
-    QCloseEvent,
-    QDesktopServices,
-    QDragEnterEvent,
-    QDragMoveEvent,
-    QDropEvent,
-    QMoveEvent,
-    QResizeEvent,
-)
-from PySide6.QtWebChannel import QWebChannel
-from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
-from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox
-
+import shiboken6
+from PySide6.QtCore import QEvent, QObject, QRect, Qt, QTimer, QUrl
+from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuick import QQuickWindow
+from PySide6.QtWidgets import QApplication, QMessageBox
 from config.constants import AppMeta, UIConstraints
 from core.application_service import ApplicationService
-from ui.bridge import BackendBridge, BridgeLogHandler
+from ui.quick_runtime import QuickRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -58,183 +47,189 @@ def clamp_window_geometry(desired: QRect, available_rects: list[QRect]) -> QRect
     return QRect(x, y, width, height)
 
 
-class LocalOnlyWebPage(QWebEnginePage):
-    """Keep application content local and hand external HTTP(S) links to the OS."""
+class QuickLogHandler(logging.Handler):
+    def __init__(self, runtime):
+        super().__init__(logging.INFO)
+        self.runtime = runtime
 
-    _LOCAL_SCHEMES = {"about", "file", "qrc"}
-    _EXTERNAL_SCHEMES = {"http", "https"}
-
-    def acceptNavigationRequest(self, url: QUrl, navigation_type, is_main_frame: bool) -> bool:
-        scheme = url.scheme().lower()
-        if url.isLocalFile() or scheme in self._LOCAL_SCHEMES:
-            return super().acceptNavigationRequest(url, navigation_type, is_main_frame)
-        if scheme in self._EXTERNAL_SCHEMES:
-            logger.info("Apertura URL esterno nel browser di sistema: %s", url.toString())
-            QDesktopServices.openUrl(url)
-            return False
-        logger.warning(
-            "Navigazione WebEngine bloccata per schema non consentito: %s",
-            scheme or "<vuoto>",
+    def emit(self, record):
+        self.runtime.logArrived.emit(
+            f"[{record.levelname}] {record.name}: {record.getMessage()}"
         )
-        return False
-
-    def createWindow(self, _window_type):
-        return self
 
 
-def configure_local_web_settings(settings: QWebEngineSettings) -> None:
-    """Apply the local-only policy shared by the main window and native overlays."""
-    settings.setAttribute(
-        QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls,
-        False,
-    )
-    settings.setAttribute(
-        QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls,
-        True,
-    )
-
-
-class DropAwareWebView(QWebEngineView):
-    filesDropped = Signal(list)
-
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setAcceptDrops(True)
-
-    @staticmethod
-    def _local_files(event) -> list[str]:
-        mime = event.mimeData()
-        if mime is None or not mime.hasUrls():
-            return []
-        return [url.toLocalFile() for url in mime.urls() if url.isLocalFile()]
-
-    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if self._local_files(event):
-            event.acceptProposedAction()
-            return
-        super().dragEnterEvent(event)
-
-    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
-        if self._local_files(event):
-            event.acceptProposedAction()
-            return
-        super().dragMoveEvent(event)
-
-    def dropEvent(self, event: QDropEvent) -> None:
-        paths = self._local_files(event)
-        if paths:
-            self.filesDropped.emit(paths)
-            event.acceptProposedAction()
-            return
-        super().dropEvent(event)
-
-
-class MainWindow(QMainWindow):
-    def __init__(self, application: ApplicationService) -> None:
+class MainWindow(QObject):
+    def __init__(self, application: ApplicationService):
         super().__init__()
         self._application = application
         self._tray_icon = None
         self._closing = False
         self._meeting_review_dirty = False
         self._geometry_tracking_ready = False
+        self._normal_geometry = QRect()
         self._geometry_save_timer = QTimer(self)
         self._geometry_save_timer.setSingleShot(True)
         self._geometry_save_timer.timeout.connect(self._persist_window_geometry)
-        self.setWindowTitle(AppMeta.NAME)
-        self.setMinimumSize(UIConstraints.MIN_WINDOW_WIDTH, UIConstraints.MIN_WINDOW_HEIGHT)
+        self.runtime = QuickRuntime(application, self)
+        self.runtime.meeting.dirtyChanged.connect(self._set_meeting_review_dirty)
+        self.runtime.live.changed.connect(self._observe_backend_event)
+        self._engine = QQmlApplicationEngine(self)
+        context = self._engine.rootContext()
+        objects = {
+            "runtime": self.runtime,
+            "feedback": self.runtime.feedback,
+            "appVersion": AppMeta.VERSION,
+        }
+        for name in ("sources", "live", "files", "settings", "archive", "meeting"):
+            objects[name] = getattr(self.runtime, name)
+        objects.update(
+            audioDevices=self.runtime.sources.devices,
+            playbackStreams=self.runtime.sources.streams,
+            microphones=self.runtime.sources.microphones,
+            monitors=self.runtime.sources.monitors,
+            liveSessions=self.runtime.live.sessions,
+            liveGroups=self.runtime.live.groups,
+            fileQueue=self.runtime.files.queue,
+            historyModel=self.runtime.archive.history,
+            recoveryModel=self.runtime.archive.recovery,
+            meetingsModel=self.runtime.archive.meetings,
+            postprocessProfiles=self.runtime.archive.profiles,
+            whisperModels=self.runtime.settings.models,
+            meetingSources=self.runtime.meeting.sources,
+            meetingDrafts=self.runtime.meeting.drafts,
+            meetingQueue=self.runtime.meeting.queue,
+            meetingSegments=self.runtime.meeting.segments,
+            meetingSpeakers=self.runtime.meeting.speakers,
+            meetingTracks=self.runtime.meeting.tracks,
+        )
+        for name, value in objects.items():
+            context.setContextProperty(name, value)
+        path = Path(__file__).resolve().parent / "qml" / "Main.qml"
+        self._engine.load(QUrl.fromLocalFile(str(path)))
+        if not self._engine.rootObjects():
+            self.runtime.close()
+            raise RuntimeError(f"Impossibile caricare la UI QML: {path}")
+        self._window = self._engine.rootObjects()[0]
+        if not isinstance(self._window, QQuickWindow):
+            self.runtime.close()
+            raise TypeError("La UI deve creare una QQuickWindow")
+        self._window.installEventFilter(self)
         self._restore_window_geometry(application.desktop_state())
-        self._bridge = BackendBridge(application, self)
-        self._bridge.eventReceived.connect(self._observe_backend_event)
-        self._bridge.meetingReviewDirtyChanged.connect(self._set_meeting_review_dirty)
-        self._log_handler = BridgeLogHandler(self._bridge)
-        logging.getLogger().addHandler(self._log_handler)
-        self._web_view = DropAwareWebView(self)
-        self._web_page = LocalOnlyWebPage(self._web_view)
-        self._web_view.setPage(self._web_page)
-        configure_local_web_settings(self._web_page.settings())
-        self._web_view.filesDropped.connect(self._bridge.emitDroppedFiles)
-        self.setCentralWidget(self._web_view)
-        channel = QWebChannel(self._web_page)
-        channel.registerObject("backend", self._bridge)
-        self._web_page.setWebChannel(channel)
-        self._channel = channel
-        index_path = Path(__file__).resolve().parent / "web" / "index.html"
-        self._web_view.setUrl(QUrl.fromLocalFile(str(index_path)))
         self._geometry_tracking_ready = True
+        self._log_handler = QuickLogHandler(self.runtime)
+        logging.getLogger().addHandler(self._log_handler)
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._prepare_shutdown)
 
     @staticmethod
-    def _available_screen_rects() -> list[QRect]:
+    def _available_screen_rects():
         primary = QApplication.primaryScreen()
         screens = QApplication.screens()
         if primary in screens:
-            screens = [primary, *[screen for screen in screens if screen is not primary]]
-        return [screen.availableGeometry() for screen in screens]
+            screens = [primary, *[s for s in screens if s is not primary]]
+        return [s.availableGeometry() for s in screens]
 
-    def _restore_window_geometry(self, desktop: dict) -> None:
+    def _restore_window_geometry(self, desktop):
         width = max(UIConstraints.MIN_WINDOW_WIDTH, int(desktop["window_width"]))
         height = max(UIConstraints.MIN_WINDOW_HEIGHT, int(desktop["window_height"]))
-        x = desktop.get("window_x")
-        y = desktop.get("window_y")
-        if x is None or y is None:
-            self.resize(width, height)
-            return
-        desired = QRect(int(x), int(y), width, height)
-        restored = clamp_window_geometry(desired, self._available_screen_rects())
-        self.setGeometry(restored)
+        if desktop.get("window_x") is None or desktop.get("window_y") is None:
+            self._window.resize(width, height)
+        else:
+            self._window.setGeometry(
+                clamp_window_geometry(
+                    QRect(
+                        int(desktop["window_x"]),
+                        int(desktop["window_y"]),
+                        width,
+                        height,
+                    ),
+                    self._available_screen_rects(),
+                )
+            )
+        self._normal_geometry = self._window.geometry()
 
-    def set_tray_icon(self, tray_icon) -> None:
-        self._tray_icon = tray_icon
-        self._tray_icon.set_running(self._application.live_active())
+    def dispose(self):
+        self._prepare_shutdown()
+        if shiboken6.isValid(self._engine):
+            self._window.hide()
+            shiboken6.delete(self._engine)
 
-    def on_start(self) -> None:
+    def show(self):
+        self._window.show()
+
+    def hide(self):
+        self._window.hide()
+
+    def raise_(self):
+        self._window.raise_()
+
+    def activateWindow(self):
+        self._window.requestActivate()
+
+    def setWindowIcon(self, icon):
+        self._window.setIcon(icon)
+
+    def resize(self, width, height):
+        self._window.resize(width, height)
+
+    def close(self):
+        return self._window.close()
+
+    def set_tray_icon(self, tray):
+        self._tray_icon = tray
+        tray.set_running(self._application.live_active())
+
+    def on_start(self):
         desktop = self._application.desktop_state()
-        self._application.start_live(
-            str(desktop["audio_source"]),
-            str(desktop["sink_name"] or ""),
-            str(desktop["language"]),
-            False,
+        self.runtime.live.attempt(
+            lambda: self._application.start_live(
+                str(desktop["audio_source"]),
+                str(desktop["sink_name"] or ""),
+                str(desktop["language"]),
+                False,
+            )
         )
 
-    def on_stop(self) -> None:
-        self._application.stop_all_live(drain=False)
-        self._application.cancel_file_queue()
+    def on_stop(self):
+        self.runtime.live.stopAll(False)
+        self.runtime.files.cancel()
 
-    def _prepare_shutdown(self) -> None:
+    def _set_meeting_review_dirty(self, dirty):
+        self._meeting_review_dirty = bool(dirty)
+
+    def _prepare_shutdown(self):
         if self._closing:
             return
         self._closing = True
         self._geometry_save_timer.stop()
         self._persist_window_geometry()
         logging.getLogger().removeHandler(self._log_handler)
+        self.runtime.close()
 
-    def _set_meeting_review_dirty(self, dirty: bool) -> None:
-        self._meeting_review_dirty = bool(dirty)
-
-    def _confirm_discard_unsaved_meeting_review(self) -> bool:
+    def _confirm_discard_unsaved_meeting_review(self):
         if not self._meeting_review_dirty:
             return True
-        choice = QMessageBox.warning(
-            self,
-            "Modifiche non salvate",
-            "Ci sono correzioni della riunione non ancora salvate. "
-            "Usa ‘Salva tutto’ per conservarle.\n\n"
-            "Uscire comunque senza salvarle?",
-            QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
+        return (
+            QMessageBox.warning(
+                None,
+                "Modifiche non salvate",
+                "Ci sono correzioni della riunione non ancora salvate. Usa “Salva tutto” per conservarle.\n\nUscire comunque senza salvarle?",
+                QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            == QMessageBox.StandardButton.Discard
         )
-        return choice == QMessageBox.StandardButton.Discard
 
-    def force_quit(self) -> None:
-        if self._closing:
-            return
-        if not self._confirm_discard_unsaved_meeting_review():
+    def force_quit(self):
+        if self._closing or not self._confirm_discard_unsaved_meeting_review():
             return
         self._prepare_shutdown()
         app = QApplication.instance()
         if app is not None:
             app.quit()
 
-    def closeEvent(self, event: QCloseEvent) -> None:
+    def closeEvent(self, event):
         if self._closing:
             event.accept()
             return
@@ -247,15 +242,12 @@ class MainWindow(QMainWindow):
             self.hide()
             event.ignore()
             return
-
         if not self._confirm_discard_unsaved_meeting_review():
             event.ignore()
             return
-
         if self._tray_icon is not None:
             logger.warning(
-                "System tray non utilizzabile: chiusura finestra esegue lo shutdown "
-                "invece di lasciare un processo nascosto"
+                "System tray non utilizzabile: chiusura finestra esegue lo shutdown"
             )
         self._prepare_shutdown()
         event.accept()
@@ -263,39 +255,40 @@ class MainWindow(QMainWindow):
         if app is not None:
             QTimer.singleShot(0, app.quit)
 
-    def _schedule_geometry_save(self) -> None:
+    def eventFilter(self, watched, event):
+        if watched is self._window:
+            if event.type() == QEvent.Type.Close:
+                self.closeEvent(event)
+                return not event.isAccepted()
+            if event.type() in {QEvent.Type.Move, QEvent.Type.Resize}:
+                self._schedule_geometry_save()
+        return super().eventFilter(watched, event)
+
+    def _schedule_geometry_save(self):
         if self._geometry_tracking_ready and not self._closing:
+            if self._window.windowState() not in {
+                Qt.WindowState.WindowMaximized,
+                Qt.WindowState.WindowFullScreen,
+            }:
+                self._normal_geometry = self._window.geometry()
             self._geometry_save_timer.start(350)
 
-    def moveEvent(self, event: QMoveEvent) -> None:
-        super().moveEvent(event)
-        self._schedule_geometry_save()
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-        self._schedule_geometry_save()
-
-    def _persist_window_geometry(self) -> None:
+    def _persist_window_geometry(self):
         rect = (
-            self.normalGeometry()
-            if self.isMaximized() or self.isFullScreen()
-            else self.geometry()
+            self._normal_geometry
+            if self._normal_geometry.isValid()
+            else self._window.geometry()
         )
-        width = max(UIConstraints.MIN_WINDOW_WIDTH, int(rect.width()))
-        height = max(UIConstraints.MIN_WINDOW_HEIGHT, int(rect.height()))
         try:
             self._application.persist_window_geometry(
-                int(rect.x()),
-                int(rect.y()),
-                width,
-                height,
+                rect.x(),
+                rect.y(),
+                max(UIConstraints.MIN_WINDOW_WIDTH, rect.width()),
+                max(UIConstraints.MIN_WINDOW_HEIGHT, rect.height()),
             )
         except Exception:
-            logger.exception("Salvataggio automatico geometria finestra fallito")
+            logger.exception("Salvataggio geometria finestra fallito")
 
-    def _observe_backend_event(self, event: str, payload_json: str) -> None:
-        del payload_json
-        if self._tray_icon is None:
-            return
-        if event.startswith("live_session_"):
+    def _observe_backend_event(self):
+        if self._tray_icon is not None:
             self._tray_icon.set_running(self._application.live_active())
