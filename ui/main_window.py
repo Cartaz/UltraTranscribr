@@ -77,6 +77,12 @@ class MainWindow(QObject):
         self.runtime.meeting.dirtyChanged.connect(self._set_meeting_review_dirty)
         self.runtime.live.changed.connect(self._observe_backend_event)
         self._engine = QQmlApplicationEngine(self)
+        load_errors = []
+
+        def collect_load_errors(errors):
+            load_errors.extend(error.toString() for error in errors)
+
+        self._engine.warnings.connect(collect_load_errors)
         context = self._engine.rootContext()
         objects = {
             "runtime": self.runtime,
@@ -108,10 +114,14 @@ class MainWindow(QObject):
         for name, value in objects.items():
             context.setContextProperty(name, value)
         path = Path(__file__).resolve().parent / "qml" / "Main.qml"
-        self._engine.load(QUrl.fromLocalFile(str(path)))
+        try:
+            self._engine.load(QUrl.fromLocalFile(str(path)))
+        finally:
+            self._engine.warnings.disconnect(collect_load_errors)
         if not self._engine.rootObjects():
             self.runtime.close()
-            raise RuntimeError(f"Impossibile caricare la UI QML: {path}")
+            details = "\n".join(load_errors)
+            raise RuntimeError(f"Impossibile caricare la UI QML: {path}\n{details}")
         self._window = self._engine.rootObjects()[0]
         if not isinstance(self._window, QQuickWindow):
             self.runtime.close()
