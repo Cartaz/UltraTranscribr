@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -24,7 +25,9 @@ os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 os.environ.setdefault(
     "QTWEBENGINE_CHROMIUM_FLAGS", "--no-sandbox --disable-gpu --disable-dev-shm-usage"
 )
-from PySide6.QtCore import QEventLoop, QObject, QPointF, QTimer
+os.environ["TZ"] = "UTC"
+time.tzset()
+from PySide6.QtCore import QEventLoop, QLocale, QObject, QPointF, QTimer
 from PySide6.QtQuick import QQuickItem
 from PySide6.QtWidgets import QApplication
 
@@ -34,7 +37,13 @@ from core.application_service import ApplicationService
 from ui.main_window import MainWindow
 
 app = QApplication([])
+QLocale.setDefault(QLocale("en_US"))
 app.setQuitOnLastWindowClosed(False)
+# Keep the visible fixture date identical across frontends and capture runs.
+fixture_clock = patch(
+    "core.transcript_history._utc_now", return_value="2026-10-01T07:00:00+00:00"
+)
+fixture_clock.start()
 with patch("core.app_controller.detect_gpu_backend", return_value="sycl"):
     controller = AppController(Settings(preload_model=False))
 service = ApplicationService(controller)
@@ -201,7 +210,10 @@ try:
                 if item.objectName() and item.isVisible():
                     pt = item.mapToScene(QPointF(0, 0))
                     geom[item.objectName()] = {
-                        "x": pt.x(), "y": pt.y(), "width": item.width(), "height": item.height()
+                        "x": pt.x(),
+                        "y": pt.y(),
+                        "width": item.width(),
+                        "height": item.height(),
                     }
             (args.output / f"{page}-{suffix}-geometry.json").write_text(
                 json.dumps(geom, indent=2)
@@ -213,4 +225,5 @@ finally:
         window.dispose()
     service.close()
     controller.shutdown()
+    fixture_clock.stop()
 print("Captured", args.frontend, args.output)

@@ -43,11 +43,12 @@ ApplicationWindow {
             ColumnLayout {
                 anchors.fill: parent
                 anchors.margins: 14
-                anchors.topMargin: 20
+                anchors.topMargin: 18
                 anchors.bottomMargin: 18
                 spacing: 20
                 RowLayout {
                     Layout.fillWidth: true
+                    Layout.preferredHeight: 44
                     Layout.leftMargin: 5
                     Layout.rightMargin: 5
                     spacing: 11
@@ -105,7 +106,7 @@ ApplicationWindow {
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
-                    spacing: 8
+                    spacing: 9
                     NeuButton {
                         objectName: 'navLive'
                         Layout.fillWidth: true

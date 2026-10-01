@@ -1,14 +1,64 @@
 """Runtime regressions for QML adapters against the real application and stores."""
 
 import threading
+import wave
 
 from conftest import visual_child, wait_until
 from PySide6.QtCore import QObject, Qt, QThread, QUrl
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtQml import QQmlEngine, QQmlExpression
 from PySide6.QtTest import QTest
 
 from ui.models import RecordModel
 from ui.native.dictation_overlay import DictationOverlay
+
+
+def test_audio_player_load_seek_mute_speed_and_source_reset(quick_window, tmp_path):
+    """Real decoder/control path; no sound device or inference is required."""
+    _app, window, _service, _controller, messages = quick_window
+    audio = visual_child(window._window.contentItem(), "meetingAudioPlayer")
+    player = audio.findChild(QMediaPlayer, "audioMediaPlayer")
+    output = audio.findChild(QAudioOutput, "audioOutput")
+    path = tmp_path / "silence.wav"
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(8000)
+        wav.writeframes(b"\x00\x00" * 32000)
+    assert audio.clock(65000) == "1:05"
+    assert not visual_child(audio, "audioPlayButton").isEnabled()
+    rerun = window._window.findChild(QObject, "meetingRerunButton")
+    assert not rerun.property("enabled")
+    audio.seek(10)
+    assert audio.property("pendingSeek") == -1
+    audio.setProperty("source", QUrl.fromLocalFile(str(path)))
+    audio.seek(2)
+    wait_until(lambda: player.duration() == 4000)
+    wait_until(lambda: player.position() == 2000)
+    audio.seek(-5)
+    assert player.position() == 2000
+    audio.seek(500)
+    assert player.position() == 4000
+    assert visual_child(audio, "audioPlayButton").isEnabled()
+    visual_child(audio, "audioMuteButton").clicked.emit()
+    assert output.isMuted()
+    visual_child(audio, "audioMuteButton").clicked.emit()
+    assert not output.isMuted()
+    slider = audio.findChild(QObject, "audioVolumeSlider")
+    slider.setProperty("value", 0.3)
+    slider.moved.emit()
+    assert abs(output.volume() - 0.3) < 0.001
+    audio.findChild(QObject, "audioSpeed1.5").triggered.emit()
+    assert player.playbackRate() == 1.5
+    seek = visual_child(audio, "audioSeekSlider")
+    seek.setProperty("value", 1000)
+    seek.moved.emit()
+    assert player.position() == 1000
+    audio.setProperty("source", QUrl())
+    wait_until(lambda: player.source().isEmpty())
+    assert not audio.property("playing") and audio.property("pendingSeek") == -1
+    assert not visual_child(audio, "audioPlayButton").isEnabled()
+    assert not any("TypeError" in m or "ReferenceError" in m for m in messages)
 
 
 def seed_meeting(controller, count=2):

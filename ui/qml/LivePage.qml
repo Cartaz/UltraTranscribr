@@ -43,6 +43,7 @@ ColumnLayout {
                         NeuButton {
                             Layout.fillWidth: true
                             implicitHeight: 35
+                            padding: 9
                             flat: true
                             text: 'Audio di sistema'
                             selected: sources.source === 'system'
@@ -51,6 +52,7 @@ ColumnLayout {
                         NeuButton {
                             Layout.fillWidth: true
                             implicitHeight: 35
+                            padding: 9
                             flat: true
                             text: 'Applicazione'
                             selected: sources.source === 'application'
@@ -59,6 +61,7 @@ ColumnLayout {
                         NeuButton {
                             Layout.fillWidth: true
                             implicitHeight: 35
+                            padding: 9
                             flat: true
                             text: 'Microfono'
                             selected: sources.source === 'microphone'

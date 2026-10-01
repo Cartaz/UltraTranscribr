@@ -7,7 +7,8 @@ Button {
     property bool compact: false
     property bool alignLeft: false
     property bool wrapText: false
-    implicitHeight: compact ? 32 : 37
+    property color normalColor: Theme.secondary
+    implicitHeight: compact ? 30 : 36
     implicitWidth: label.implicitWidth + (compact ? 20 : 28)
     padding: compact ? 10 : 14
     font.family: Theme.font
@@ -19,7 +20,7 @@ Button {
         textFormat: Text.PlainText
         text: control.text
         font: control.font
-        color: control.selected || control.hovered ? Theme.accent : Theme.secondary
+        color: control.selected ? Theme.accent : control.hovered ? Theme.primary : control.normalColor
         horizontalAlignment: control.alignLeft ? Text.AlignLeft : Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
         wrapMode: control.wrapText ? Text.WordWrap : Text.NoWrap

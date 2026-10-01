@@ -49,7 +49,7 @@ for before, after, case in [
 (root / "metrics.json").write_text(
     json.dumps(
         {
-            "method": "All pixels, RGB channels, no masks, no registration, no threshold; timestamps/IDs can vary in populated captures. MAE/RMSE are descriptive and are not acceptance thresholds.",
+            "method": "All pixels, RGB channels, no masks, no registration, no threshold; capture store clock fixed to 2026-10-01T07:00:00Z, Qt locale en_US, timezone UTC. Generated IDs can vary. MAE/RMSE are descriptive and are not acceptance thresholds.",
             "comparisons": results,
         },
         indent=2,

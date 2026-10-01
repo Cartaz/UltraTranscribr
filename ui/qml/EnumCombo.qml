@@ -9,7 +9,7 @@ ComboBox {
     valueRole: 'value'
     font.family: Theme.font
     font.pixelSize: 14
-    implicitHeight: 37
+    implicitHeight: 38
     padding: 10
     rightPadding: 28
     activeFocusOnTab: true

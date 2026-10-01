@@ -91,6 +91,8 @@ Per forzare la ricompilazione della revisione selezionata:
 ULTRATRANSCRIBR_FORCE_REBUILD=1 ./install.sh
 ```
 
+Il frontend QML usa Qt Multimedia: il sistema deve fornire `libpulse.so.0`, oltre alle librerie grafiche Qt e a PortAudio. Il controllo delle dipendenze dell'installer importa anche Qt Quick/QML/Multimedia, così una libreria nativa mancante viene segnalata prima dell'avvio della UI.
+
 ## Modelli Whisper
 
 La UI gestisce:

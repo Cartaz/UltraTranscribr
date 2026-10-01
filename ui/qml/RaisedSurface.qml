@@ -10,7 +10,7 @@ Item {
         anchors.fill: body
         offset: Qt.vector2d(root.soft ? 5 : 9, root.soft ? 5 : 9)
         radius: body.radius
-        blur: root.soft ? 12 : 22
+        blur: 1.2 * (root.soft ? 12 : 22)
         color: Qt.rgba(0, 0, 0, root.soft ? .66 : .78)
         cached: false
     }
@@ -18,7 +18,7 @@ Item {
         anchors.fill: body
         offset: Qt.vector2d(root.soft ? -4 : -7, root.soft ? -4 : -7)
         radius: body.radius
-        blur: root.soft ? 10 : 18
+        blur: 1.2 * (root.soft ? 10 : 18)
         color: Qt.rgba(75 / 255, 75 / 255, 75 / 255, root.soft ? .12 : .15)
         cached: false
     }

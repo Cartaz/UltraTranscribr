@@ -8,7 +8,7 @@ ScrollView {
     property real acquisitionHeight: 499.9375 + (fromFile ? Math.min(260, meetingDrafts.count * 92) : Math.max(0, Math.min(280, meetingSources.count * 61) - 61))
     clip: true
     contentWidth: availableWidth
-    contentHeight: pageContent.implicitHeight + 4
+    contentHeight: pageContent.implicitHeight + 32
     ColumnLayout {
         id: pageContent
         width: page.availableWidth - 19
@@ -460,31 +460,30 @@ ScrollView {
                 }
                 AudioPlayer {
                     id: audio
+                    objectName: 'meetingAudioPlayer'
                     Layout.fillWidth: true
+                    Layout.topMargin: 10
+                    Layout.bottomMargin: 10
                     source: meeting.audioUrl
                 }
                 Flow {
                     Layout.fillWidth: true
                     Layout.preferredHeight: implicitHeight
-                    spacing: 8
-                    NeuButton {
+                    spacing: 6
+                    CompactAction {
                         text: 'Esporta .txt'
-                        compact: true
                         onClicked: meeting.export('txt')
                     }
-                    NeuButton {
+                    CompactAction {
                         text: 'Esporta .srt'
-                        compact: true
                         onClicked: meeting.export('srt')
                     }
-                    NeuButton {
+                    CompactAction {
                         text: 'Esporta .vtt'
-                        compact: true
                         onClicked: meeting.export('vtt')
                     }
-                    NeuButton {
+                    CompactAction {
                         text: 'Elimina audio'
-                        compact: true
                         enabled: !!meeting.audioUrl
                         onClicked: shell.confirm('Eliminare l’audio della riunione?', () => meeting.deleteAudio())
                     }
@@ -510,12 +509,13 @@ ScrollView {
                         }
                     }
                     NeuButton {
+                        objectName: 'meetingRerunButton'
                         Layout.fillWidth: true
                         text: 'Ricalcola diarizzazione'
                         wrapText: true
                         implicitHeight: 52
                         selected: true
-                        enabled: !runtime.busy && !meeting.dirty && !meeting.saving
+                        enabled: !!meeting.audioUrl && !runtime.busy && !meeting.dirty && !meeting.saving
                         onClicked: meeting.rerun(Number(recalc.text))
                     }
                 }
@@ -545,8 +545,10 @@ ScrollView {
                         width: speakers.width
                         height: 50
                         Help {
-                            Layout.preferredWidth: 100
+                            Layout.preferredWidth: 110
                             text: 'Speaker ' + (index + 1)
+                            font.bold: true
+                            color: Theme.secondary
                         }
                         NeuField {
                             id: speakerName
@@ -563,6 +565,9 @@ ScrollView {
                     property bool expanded: false
                     text: (expanded ? '▾ ' : '▸ ') + 'Transcript raw originale'
                     flat: true
+                    normalColor: Theme.primary
+                    padding: 0
+                    implicitHeight: 17
                     alignLeft: true
                     onClicked: expanded = !expanded
                 }
@@ -611,21 +616,35 @@ ScrollView {
                     id: review
                     objectName: 'meetingReviewList'
                     Layout.fillWidth: true
+                    Layout.leftMargin: 4
                     Layout.preferredHeight: 520
                     model: meetingSegments
                     reuseItems: true
                     cacheBuffer: 0
                     clip: true
                     spacing: 5
-                    ScrollBar.vertical: ScrollBar {}
+                    ScrollBar.vertical: ScrollBar {
+                        policy: ScrollBar.AlwaysOn
+                        width: 15
+                        padding: 4
+                        contentItem: Rectangle {
+                            implicitWidth: 7
+                            radius: 4
+                            color: '#999999'
+                        }
+                        background: Rectangle {
+                            color: '#333333'
+                        }
+                    }
                     delegate: Item {
                         required property var record
                         required property int index
-                        width: review.width - 10
-                        height: Math.max(125, editor.implicitHeight + 83 + (record.uncertain || record.overlap ? 20 : 0))
-                        InsetSurface {
+                        width: review.width - 22
+                        height: Math.max(122, editor.implicitHeight + 76 + (record.uncertain || record.overlap ? 20 : 0))
+                        RaisedSurface {
                             anchors.fill: parent
                             radius: 12
+                            soft: true
                         }
                         Rectangle {
                             anchors.fill: parent
@@ -637,13 +656,16 @@ ScrollView {
                         ColumnLayout {
                             anchors.fill: parent
                             anchors.margins: 9
+                            anchors.topMargin: 8
+                            anchors.bottomMargin: 8
                             spacing: 4
                             RowLayout {
                                 Layout.fillWidth: true
-                                NeuButton {
+                                CompactAction {
                                     text: Theme.timestamp(record.start || 0)
-                                    compact: true
-                                    implicitHeight: 26
+                                    implicitWidth: 64
+                                    implicitHeight: 28
+                                    font.pixelSize: 12
                                     onClicked: audio.seek(record.start || 0)
                                 }
                                 Item {
@@ -655,12 +677,20 @@ ScrollView {
                                     color: Theme.primary
                                 }
                                 EnumCombo {
-                                    Layout.preferredWidth: 220
+                                    id: speakerSelect
+                                    Layout.preferredWidth: Math.max(160, Math.min(220, Math.max(...record.speaker_options.map(option => speakerMetrics.advanceWidth(option.label))) + 58))
                                     implicitHeight: 29
+                                    font.pixelSize: 13
+                                    padding: 5
+                                    leftPadding: 8
                                     model: record.speaker_options
                                     selectedValue: record.speaker_choice
                                     enabled: !meeting.saving
                                     onChosen: value => meeting.setSpeaker(index, value)
+                                    FontMetrics {
+                                        id: speakerMetrics
+                                        font: speakerSelect.font
+                                    }
                                 }
                             }
                             Help {
@@ -686,13 +716,13 @@ ScrollView {
                                     border.color: '#858585'
                                 }
                                 padding: 6
+                                leftPadding: 8
+                                rightPadding: 8
                                 onTextChanged: if (activeFocus)
                                     meeting.editText(index, text)
                             }
-                            NeuButton {
+                            CompactAction {
                                 text: 'Salva correzione'
-                                compact: true
-                                implicitHeight: 26
                                 enabled: !!record.dirty && !meeting.saving
                                 onClicked: meeting.saveSegment(index)
                             }

@@ -36,6 +36,7 @@ RowLayout {
     }
     RowLayout {
         id: toolbar
+        Layout.alignment: Qt.AlignTop
         spacing: 9
     }
 }

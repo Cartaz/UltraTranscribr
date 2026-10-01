@@ -10,10 +10,10 @@
     "logs"
   ],
   "memory_kib": {
-    "Rss": 289040,
-    "Pss": 248260,
-    "Private_Clean": 36632,
-    "Private_Dirty": 172688
+    "Rss": 291840,
+    "Pss": 279677,
+    "Private_Clean": 95092,
+    "Private_Dirty": 173468
   },
   "webengine_modules": [],
   "exit_code": 0,

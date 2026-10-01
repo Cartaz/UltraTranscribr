@@ -6,5 +6,6 @@ Text {
     font.family: Theme.font
     font.pixelSize: 12
     wrapMode: Text.WordWrap
-    lineHeight: 1.4
+    lineHeightMode: Text.FixedHeight
+    lineHeight: font.pixelSize * 1.4
 }
