@@ -7,6 +7,28 @@ from core.microphone_recording import MicrophoneRecorder
 from core.session_recordings import delete_recording, recording_info
 
 
+def test_startup_recovery_cannot_consume_an_active_recording(tmp_path):
+    recorder = MicrophoneRecorder("active-meeting", root=tmp_path)
+    samples = np.full(8000, 0.1, dtype=np.float32)
+    recorder.write(samples)
+    assert MicrophoneRecorder.recover_orphaned(tmp_path) == []
+    assert recorder.part_path.is_file()
+    recorder.write(samples)
+    info = recorder.finalize()
+    assert info.duration_s == 1.0
+    audio, rate = sf.read(info.path)
+    assert len(audio) == rate == 16000
+
+
+def test_abandoned_journal_releases_ownership_for_recovery(tmp_path):
+    recorder = MicrophoneRecorder("abandoned", root=tmp_path)
+    recorder.write(np.full(8000, 0.1, dtype=np.float32))
+    recorder.abandon()
+    recovered = MicrophoneRecorder.recover_orphaned(tmp_path)
+    assert len(recovered) == 1
+    assert recovered[0].duration_s == 0.5
+
+
 def test_recorder_finalizes_pcm_journal_to_lossless_flac(tmp_path: Path) -> None:
     recorder = MicrophoneRecorder("live-session", root=tmp_path)
     samples = np.linspace(-0.75, 0.75, 16000, dtype=np.float32)

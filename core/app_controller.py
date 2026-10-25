@@ -28,6 +28,7 @@ from core.sink_finder import find_source
 from core.transcript_history import TranscriptHistoryStore
 from core.whisper_gpu_detect import detect_gpu_backend
 from core.whisper_models import WhisperModelManager
+from core.speaker_diarization import shutdown_diarization_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -798,6 +799,7 @@ class AppController:
             ("AudioDiscovery", self._audio_discovery.close),
             ("Pactl", self._pactl.close),
             ("WhisperBackend", self.stop_backend),
+            ("DiarizationRuntime", shutdown_diarization_runtime),
         )
         for label, action in steps:
             try:
@@ -857,18 +859,15 @@ class AppController:
                 lambda payload: self._append_file_history_text(payload),
             ),
             ("file_transcriber_segments", self._append_file_history_segments),
+            ("file_transcriber_quality", self._append_file_history_quality),
             ("file_transcriber_status_changed", self._on_file_history_status),
             (
                 "file_transcriber_error",
-                lambda _payload: self._finish_history_session(
-                    StatusEnum.ERROR.value
-                ),
+                lambda _payload: self._finish_history_session(StatusEnum.ERROR.value),
             ),
             (
                 "file_transcriber_completed",
-                lambda _payload: self._finish_history_session(
-                    StatusEnum.COMPLETED.value
-                ),
+                lambda _payload: self._finish_history_session(StatusEnum.COMPLETED.value),
             ),
         )
         for event, handler in handlers:
@@ -946,3 +945,14 @@ class AppController:
             self._finish_history_session(status)
         else:
             self._set_file_history_status(status)
+
+
+    def _append_file_history_quality(self, payload: Any) -> None:
+        with self._lock:
+            session_id = self._file_history_id
+        if session_id is not None and isinstance(payload, list):
+            try:
+                self._history.append_quality_issues(session_id, payload)
+            except Exception as exc:
+                logger.exception("Salvataggio avvisi qualità fallito")
+                self._bus.emit("history_error", str(exc))

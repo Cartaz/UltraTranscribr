@@ -20,6 +20,8 @@ from core.event_bus import EventBus
 from core.models import StatusEnum
 from core.text_dedup import deduplicate_text, remove_chunk_overlap
 from core.transcript_export import normalize_segments
+from core.transcript_quality import quality_issues
+from core.word_timing import lexical_words, segment_interval
 from core.whisper_backend import WhisperBackend
 
 logger = logging.getLogger(__name__)
@@ -131,7 +133,11 @@ class FileTranscriberThread(threading.Thread):
         overlap_frames = int(ProcessDefaults.FILE_OVERLAP_DURATION_S * 16000)
         step = max(1, chunk_frames - overlap_frames)
         with wave.open(wav_path, "rb") as wf:
-            if wf.getnchannels() != 1 or wf.getframerate() != 16000 or wf.getsampwidth() != 2:
+            if (
+                wf.getnchannels() != 1
+                or wf.getframerate() != 16000
+                or wf.getsampwidth() != 2
+            ):
                 raise RuntimeError("WAV normalizzato non è PCM16 mono 16 kHz")
             total = wf.getnframes()
             if total <= 0:
@@ -142,24 +148,37 @@ class FileTranscriberThread(threading.Thread):
                 raw = wf.readframes(min(chunk_frames, total - offset))
                 if not raw:
                     break
-                text, raw_segments = self._request_chunk_verbose(
-                    self._wrap_pcm16(raw),
-                    previous[-500:] or None,
+                text, raw_segments = self._request_checked_chunk(
+                    raw, previous[-500:] or None, offset / 16000.0
                 )
-                text = deduplicate_text(text, preserve_repetitions=self._song_mode)
-                text = remove_chunk_overlap(previous, text)
-                if text:
-                    full_parts.append(text)
-                    previous = (previous + " " + text).strip()
-                    self._emit("file_transcriber_new_text", text)
-                    self._emit("file_transcriber_full_text", "\n".join(full_parts))
-
+                # Preserve evidence of unresolved loops. Deleting them here
+                # would make the plain text disagree with the timed source.
+                if self._song_mode:
+                    text = deduplicate_text(text, preserve_repetitions=True)
                 chunk_offset_s = offset / 16000.0
                 segments = self._normalize_chunk_segments(
                     raw_segments,
                     chunk_offset_s=chunk_offset_s,
                     committed_before_s=last_segment_end_s,
                 )
+
+                def compact(value):
+                    return "".join(value.split())
+
+                if raw_segments and compact(text) == compact(
+                    " ".join(str(s.get("text") or "") for s in raw_segments)
+                ):
+                    # Timing, rather than a matching phrase alone, establishes
+                    # overlap. An authentic repeated sentence in a later
+                    # window must not be deleted just because it is identical.
+                    text = " ".join(segment["text"] for segment in segments)
+                else:
+                    text = remove_chunk_overlap(previous, text)
+                if text:
+                    full_parts.append(text)
+                    previous = (previous + " " + text).strip()
+                    self._emit("file_transcriber_new_text", text)
+                    self._emit("file_transcriber_full_text", "\n".join(full_parts))
                 if segments:
                     last_segment_end_s = max(
                         last_segment_end_s,
@@ -198,8 +217,12 @@ class FileTranscriberThread(threading.Thread):
                 return result if isinstance(result, str) else str(result.get("text", ""))
             except RuntimeError as exc:
                 last = exc
+                if getattr(self._backend, "is_running", True) is False:
+                    break
                 if attempt < 2:
                     self._stop_event.wait(ProcessDefaults.TRANSCRIBE_RETRY_DELAY_S)
+                    if getattr(self._backend, "is_running", True) is False:
+                        break
         raise RuntimeError(f"chunk file fallito dopo 3 tentativi: {last}")
 
     def _request_chunk_verbose(
@@ -224,11 +247,17 @@ class FileTranscriberThread(threading.Thread):
                     return result, []
                 text = str(result.get("text", ""))
                 segments = result.get("segments", [])
-                return text, segments if isinstance(segments, list) else []
+                return text, [s for s in segments if isinstance(s, dict)] if isinstance(
+                    segments, list
+                ) else []
             except RuntimeError as exc:
                 last = exc
+                if getattr(self._backend, "is_running", True) is False:
+                    break
                 if attempt < 2:
                     self._stop_event.wait(ProcessDefaults.TRANSCRIBE_RETRY_DELAY_S)
+                    if getattr(self._backend, "is_running", True) is False:
+                        break
         raise RuntimeError(f"chunk file fallito dopo 3 tentativi: {last}")
 
     @classmethod
@@ -255,11 +284,23 @@ class FileTranscriberThread(threading.Thread):
             end = max(start, float(chunk_offset_s) + local_end)
             if end <= cutoff + 0.001:
                 continue
+            raw_words = raw.get("words")
             if start < cutoff:
+                whole, _warnings = lexical_words(text, raw_words or [])
+                if whole:
+                    kept = [
+                        word
+                        for word in whole
+                        if chunk_offset_s + word["end"] > cutoff + 0.001
+                    ]
+                    if not kept:
+                        continue
+                    text = "".join(word["word"] for word in kept).strip()
+                    raw_words = kept
                 start = cutoff
             item: dict[str, Any] = {"start": start, "end": end, "text": text}
             words = cls._normalize_chunk_words(
-                raw.get("words"),
+                raw_words,
                 chunk_offset_s=chunk_offset_s,
                 committed_before_s=cutoff,
                 segment_start=start,
@@ -267,6 +308,20 @@ class FileTranscriberThread(threading.Thread):
             )
             if words:
                 item["words"] = words
+            if "quality_issues" in raw:
+                item["quality_issues"] = [
+                    {
+                        **issue,
+                        **{
+                            key: float(chunk_offset_s) + float(issue[key])
+                            for key in ("start", "end")
+                            if key in issue
+                        },
+                    }
+                    for issue in raw["quality_issues"]
+                ]
+            if "quality_recovery" in raw:
+                item["quality_recovery"] = raw["quality_recovery"]
             result.append(item)
         return normalize_segments(result)
 
@@ -311,28 +366,12 @@ class FileTranscriberThread(threading.Thread):
             if probability is not None:
                 item["probability"] = probability
             words.append(item)
-        words.sort(key=lambda item: (item["start"], item["end"]))
+        words.sort(key=lambda item: item["start"])
         return words
 
     @staticmethod
     def _segment_time_seconds(raw: dict[str, Any]) -> tuple[float, float] | None:
-        try:
-            if "start" in raw or "end" in raw:
-                start = float(raw.get("start", 0.0))
-                end = float(raw.get("end", start))
-                return max(0.0, start), max(max(0.0, start), end)
-            if "t0" in raw or "t1" in raw:
-                start = float(raw.get("t0", 0.0)) * 0.01
-                end = float(raw.get("t1", raw.get("t0", 0.0))) * 0.01
-                return max(0.0, start), max(max(0.0, start), end)
-            offsets = raw.get("offsets")
-            if isinstance(offsets, dict):
-                start = float(offsets.get("from", 0.0)) / 1000.0
-                end = float(offsets.get("to", offsets.get("from", 0.0))) / 1000.0
-                return max(0.0, start), max(max(0.0, start), end)
-        except (TypeError, ValueError):
-            return None
-        return None
+        return segment_interval(raw)
 
     def _convert_to_pcm_wav(self, source: str) -> str:
         if not shutil.which("ffmpeg"):
@@ -429,3 +468,104 @@ class FileTranscriberThread(threading.Thread):
         if self._pcm_wav_path:
             shutil.rmtree(str(Path(self._pcm_wav_path).parent), ignore_errors=True)
             self._pcm_wav_path = None
+
+
+    def _request_checked_chunk(self, pcm16, prompt, offset_s):
+        text, segments = self._request_chunk_verbose(self._wrap_pcm16(pcm16), prompt)
+        if self._song_mode or self._stop_event.is_set():
+            return text, segments
+        initial = quality_issues(text, segments, pcm16)
+        if not initial:
+            return text, segments
+        original = {"text": text, "segments": segments}
+        duration = len(pcm16) / 32000
+        recovered_segments = []
+        recovered_parts = []
+        recovery_complete = True
+        # One bounded recovery pass, with independent short windows and no
+        # previous-text prompt to propagate the failed decoder context.
+        window_frames = 12 * 16000
+        context_frames = 16000
+        total_frames = len(pcm16) // 2
+        try:
+            for position in range(0, total_frames, window_frames):
+                if self._stop_event.is_set():
+                    return text, segments
+                lo = max(0, position - context_frames)
+                hi = min(total_frames, position + window_frames)
+                part_text, part_segments = self._request_chunk_verbose(
+                    self._wrap_pcm16(pcm16[lo * 2 : hi * 2]), None
+                )
+                if part_segments and "".join(part_text.split()) != "".join(
+                    "".join(str(s.get("text") or "").split()) for s in part_segments
+                ):
+                    recovery_complete = False
+                shifted = self._normalize_chunk_segments(
+                    part_segments,
+                    chunk_offset_s=lo / 16000,
+                    committed_before_s=max(
+                        (s["end"] for s in recovered_segments), default=0
+                    ),
+                )
+                recovered_segments.extend(shifted)
+                recovered_parts.append(part_text)
+        except RuntimeError:
+            recovery_complete = False
+            # Network/decoder failure in recovery must not erase the first
+            # usable response or lose the location requiring manual review.
+            logger.exception(
+                "Recupero del tratto %.2f–%.2f non riuscito", offset_s, offset_s + duration
+            )
+        recovered_text = " ".join(segment["text"] for segment in recovered_segments).strip()
+        remaining = quality_issues(recovered_text, recovered_segments, pcm16)
+
+        def uncovered(issues):
+            return sum(
+                float(i.get("end", 0)) - float(i.get("start", 0))
+                for i in issues
+                if i["reason"] == "uncovered_audio"
+            )
+
+        accepted = (
+            recovery_complete
+            and bool(recovered_text and recovered_segments)
+            and len(remaining) < len(initial)
+            and uncovered(remaining) <= uncovered(initial) + 0.5
+        )
+        if accepted:
+            text, segments = recovered_text, recovered_segments
+        else:
+            remaining = initial
+        payload = [
+            {
+                **issue,
+                "start": offset_s + float(issue.get("start", 0)),
+                "end": offset_s + float(issue.get("end", duration)),
+                "recovered": accepted and not remaining,
+            }
+            for issue in (remaining or initial)
+        ]
+        self._emit("file_transcriber_quality", payload)
+        logger.warning(
+            "Qualità trascrizione %.2f–%.2f: %s; recupero=%s",
+            offset_s,
+            offset_s + duration,
+            ", ".join(sorted({issue["reason"] for issue in initial})),
+            accepted,
+        )
+        if segments:
+            segments = [dict(s) for s in segments]
+            segments[0]["quality_recovery"] = {
+                "attempted": True,
+                "accepted": accepted,
+                "chunk_start_s": offset_s,
+                "original": original,
+                "candidate": {
+                    "text": recovered_text,
+                    "responses": recovered_parts,
+                    "segments": recovered_segments,
+                },
+            }
+            if remaining:
+                segments[0]["quality_issues"] = remaining
+        return text, segments

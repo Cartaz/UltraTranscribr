@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from typing import Callable, Optional
 
 import numpy as np
 import sounddevice as sd
@@ -15,7 +16,8 @@ logger = logging.getLogger(__name__)
 def monitor_callback(indata: np.ndarray, frames: int, time_info: object,
                      status: sd.CallbackFlags, *, stop_event: threading.Event,
                      cb_lock: threading.Lock, cb_accumulator: list,
-                     buffer: BufferManager, chunk_samples: int) -> None:
+                     buffer: BufferManager, chunk_samples: int,
+                     sample_sink: Optional[Callable[[np.ndarray], None]] = None) -> None:
     if stop_event.is_set():
         raise sd.CallbackStop
     if status:
@@ -25,6 +27,8 @@ def monitor_callback(indata: np.ndarray, frames: int, time_info: object,
         data = np.mean(indata, axis=1, dtype=np.float32)
     else:
         data = np.asarray(indata, dtype=np.float32).reshape(-1)
+    if sample_sink is not None:
+        sample_sink(data.copy())
 
     with cb_lock:
         cb_accumulator[0] = np.concatenate((cb_accumulator[0], data))

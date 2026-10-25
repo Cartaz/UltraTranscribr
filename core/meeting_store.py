@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import tempfile
 import threading
@@ -70,7 +71,7 @@ class MeetingStore:
         )
         return session_id
 
-    def get(self, session_id: str) -> Optional[dict[str, Any]]:
+    def get(self, session_id: str) -> dict[str, Any] | None:
         with self._lock:
             metadata = self._read(session_id)
         history = self.history.get_session(session_id)
@@ -78,6 +79,32 @@ class MeetingStore:
             return None
         metadata.setdefault("acquisition", {"mode": "realtime", "sources": []})
         metadata.setdefault("speaker_diarization_segments", [])
+        metadata["review_keys"] = [
+            self._review_key(index, row)
+            for index, row in enumerate(metadata.get("review_segments") or [])
+        ]
+        metadata["review_drafts"] = {}
+        metadata["draft_conflicts"] = []
+        try:
+            checkpoint = self._read_drafts(session_id)
+            metadata["draft_conflicts"] = list(checkpoint.get("conflicts") or [])
+            drafts = checkpoint.get("edits", {})
+            rows = metadata.get("review_segments") or []
+            for raw_index, draft in drafts.items():
+                index = int(raw_index)
+                row = rows[index] if 0 <= index < len(rows) else None
+                if (
+                    row
+                    and draft.get("review_key") == metadata["review_keys"][index]
+                    and draft.get("base_text") == row.get("text", "")
+                ):
+                    metadata["review_drafts"][str(index)] = str(draft["text"])
+                elif not row or draft.get("text") != row.get("text", ""):
+                    metadata["draft_conflicts"].append({"index": index, **draft})
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            # A damaged draft must not hide the canonical transcript or be
+            # silently discarded. Leave the file untouched for recovery.
+            metadata["draft_recovery_error"] = f"Bozze non leggibili: {exc}"
         return {**history, "meeting": metadata}
 
     def set_status(self, session_id: str, status: str, *, terminal: bool = False) -> None:
@@ -173,6 +200,7 @@ class MeetingStore:
                 item = dict(segments[idx])
                 if str(item.get("text") or "") == text:
                     continue
+                item.setdefault("raw_text", str(item.get("text") or ""))
                 item["text"] = text
                 segments[idx] = item
                 changed = True
@@ -244,6 +272,7 @@ class MeetingStore:
 
     def delete_sidecar(self, session_id: str) -> bool:
         with self._lock:
+            self._draft_path(session_id).unlink(missing_ok=True)
             path = self._path(session_id)
             try:
                 path.unlink()
@@ -435,3 +464,90 @@ class MeetingStore:
             except OSError:
                 pass
             raise
+
+
+    def _draft_path(self, session_id: str) -> Path:
+        return self.root / "review-drafts" / self._path(session_id).name
+
+
+    def _read_drafts(self, session_id: str) -> dict[str, Any]:
+        path = self._draft_path(session_id)
+        if not path.exists():
+            return {}
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(value, dict) or not isinstance(value.get("edits"), dict):
+            raise ValueError("formato bozze non valido")
+        for index, draft in value["edits"].items():
+            if (
+                not str(index).isdigit()
+                or not isinstance(draft, dict)
+                or any(
+                    not isinstance(draft.get(key), str)
+                    for key in ("text", "base_text", "review_key")
+                )
+            ):
+                raise ValueError("contenuto bozze non valido")
+        conflicts = value.get("conflicts", [])
+        if not isinstance(conflicts, list) or any(
+            not isinstance(row, dict) for row in conflicts
+        ):
+            raise ValueError("conflitti bozze non validi")
+        return value
+
+
+    def save_review_drafts(self, session_id, edits, owner, revision) -> None:
+        """Atomically checkpoint small UI drafts separately from approved text.
+
+        A revision protects against an older background write finishing after
+        the final shutdown checkpoint. Conflicting anchors are retained, not
+        applied to an unrelated row after diarization changes its layout.
+        """
+        with self._lock:
+            self._require(session_id)
+            previous = self._read_drafts(session_id)
+            if (
+                previous.get("owner") == owner
+                and int(previous.get("revision", -1)) > revision
+            ):
+                return
+            normalized = {}
+            for raw_index, draft in edits.items():
+                index = int(raw_index)
+                if index < 0 or not isinstance(draft, dict):
+                    raise ValueError("bozza riunione non valida")
+                normalized[str(index)] = {
+                    key: str(draft[key]) for key in ("text", "base_text", "review_key")
+                }
+            rows = self._require(session_id).get("review_segments") or []
+            conflicts = list(previous.get("conflicts") or [])
+            for raw_index, draft in previous.get("edits", {}).items():
+                index = int(raw_index)
+                if not 0 <= index < len(rows) or draft.get(
+                    "review_key"
+                ) != self._review_key(index, rows[index]):
+                    conflict = {"index": index, **draft}
+                    if conflict not in conflicts:
+                        conflicts.append(conflict)
+            self._atomic_json(
+                self._draft_path(session_id),
+                {
+                    "owner": str(owner),
+                    "revision": int(revision),
+                    "edits": normalized,
+                    "conflicts": conflicts,
+                },
+            )
+
+
+    @staticmethod
+    def _review_key(index: int, row: dict[str, Any]) -> str:
+        fields = [
+            index,
+            row.get("source_segment_index"),
+            row.get("source_word_start"),
+            row.get("source_word_end"),
+            row.get("start"),
+            row.get("end"),
+            row.get("raw_text", row.get("text", "")),
+        ]
+        return hashlib.sha256(json.dumps(fields, ensure_ascii=False).encode()).hexdigest()

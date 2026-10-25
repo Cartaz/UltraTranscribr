@@ -213,10 +213,18 @@ class TranscriptHistoryStore:
                 session.ended_at = now
             self._write_session(session)
 
-    def get_session(self, session_id: str) -> Optional[dict[str, Any]]:
+    def get_session(self, session_id: str) -> dict[str, Any] | None:
         with self._lock:
             session = self._read_session(session_id)
-            return asdict(session) if session is not None else None
+            if session is None:
+                return None
+            value = asdict(session)
+            try:
+                value["quality_issues"] = self._read_quality_issues(session_id)
+            except (OSError, ValueError, TypeError) as exc:
+                value["quality_read_error"] = str(exc)
+                value["quality_issues"] = []
+            return value
 
     def list_recent(self, limit: int = 50) -> list[dict[str, Any]]:
         return self._list_matching("", limit)
@@ -270,6 +278,7 @@ class TranscriptHistoryStore:
             if not path.exists():
                 return False
             path.unlink()
+            self._quality_path(session_id).unlink(missing_ok=True)
             return True
 
     def export_text(self, session_id: str, target_path: Path | str) -> Path:
@@ -349,6 +358,7 @@ class TranscriptHistoryStore:
                     if timestamp is None or timestamp >= cutoff:
                         continue
                     path.unlink()
+                    self._quality_path(session.id).unlink(missing_ok=True)
                     deleted += 1
                 except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
                     logger.warning("Retention cronologia ignorata per %s: %s", path, exc)
@@ -465,3 +475,39 @@ class TranscriptHistoryStore:
             except OSError:
                 pass
             raise
+
+
+    def _read_quality_issues(self, session_id: str) -> list[dict[str, Any]]:
+        path = self._quality_path(session_id)
+        if not path.exists():
+            return []
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+            raise ValueError("avvisi qualità non validi")
+        return value
+
+
+    def append_quality_issues(self, session_id: str, issues: list[dict[str, Any]]) -> None:
+        with self._lock:
+            self._read_session_required(session_id)
+            values = [
+                *self._read_quality_issues(session_id),
+                *(dict(issue) for issue in issues),
+            ]
+            path = self._quality_path(session_id)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(
+                prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    json.dump(values, handle, ensure_ascii=False)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(tmp, path)
+            finally:
+                Path(tmp).unlink(missing_ok=True)
+
+
+    def _quality_path(self, session_id: str) -> Path:
+        return self._root / "quality" / self._path(session_id).name

@@ -44,7 +44,7 @@ def test_bridge_and_native_shell_depend_on_application_service() -> None:
     assert "AppController" not in bridge
     assert "ApplicationService" in window
     assert "AppController" not in window
-    assert "BackendBridge(application" in window
+    assert "QuickRuntime(application" in window
     assert "MainWindow(application=application)" in main
 
 
@@ -79,8 +79,8 @@ def test_native_shell_and_webchannel_are_peer_presentation_adapters() -> None:
     window = _read("ui/main_window.py")
 
     assert "self._application.start_live(" in window
-    assert "self._application.stop_all_live(" in window
-    assert "self._application.cancel_file_queue()" in window
+    assert "self.runtime.live.stopAll(False)" in window
+    assert "self.runtime.files.cancel()" in window
     assert "self._bridge.startLive(" not in window
     assert "self._bridge.stopAllLive(" not in window
     assert "self._bridge.cancelFileQueue(" not in window

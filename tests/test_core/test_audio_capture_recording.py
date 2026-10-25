@@ -79,3 +79,22 @@ def test_live_microphone_recorder_is_created_only_for_opted_in_mic_session() -> 
     assert off._recording is None
     assert on._recording is not None
     assert system._recording is None
+def test_monitor_audio_reaches_recorder_before_a_whole_whisper_chunk():
+    from config.settings import Settings
+    from core.audio_capture import AudioCaptureThread
+    from core.buffer_manager import BufferManager
+
+    recorded = []
+    buffer = BufferManager()
+    capture = AudioCaptureThread(
+        buffer, Settings(chunk_ms=1000), audio_source="system",
+        sample_sink=lambda samples: recorded.append(samples),
+    )
+    stereo = np.tile(np.array([0.2, 0.4], dtype=np.float32), (320, 1))
+    try:
+        capture._monitor_cb_wrapper(stereo, 320, None, 0)
+        assert len(recorded) == 1
+        np.testing.assert_allclose(recorded[0], np.full(320, 0.3), atol=1e-7)
+        assert buffer.is_empty
+    finally:
+        buffer.close()

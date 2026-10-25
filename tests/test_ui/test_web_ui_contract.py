@@ -30,9 +30,9 @@ def test_web_ui_files_and_native_stack_are_present() -> None:
         assert path.is_file(), f"missing UI file: {path.relative_to(ROOT)}"
 
     main_window = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
-    assert "QWebEngineView" in main_window
-    assert "QWebChannel" in main_window
-    assert "BackendBridge" in main_window
+    assert "QQmlApplicationEngine" in main_window
+    assert "QtWebChannel" not in main_window
+    assert "QuickRuntime" in main_window
     assert "ApplicationService" in main_window
     assert not (ROOT / "ui" / "phase10_bridge.py").exists()
     assert not (ROOT / "ui" / "multi_session_bridge.py").exists()
@@ -59,7 +59,7 @@ def test_dark_neumorphism_uses_exact_surface_accent_and_radius_tokens() -> None:
 
 
 def test_frontend_is_wired_to_transport_api_and_application_workflows() -> None:
-    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8") + (ROOT / "ui" / "events.py").read_text(encoding="utf-8")
     application = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
     file_script = (WEB / "file_history.js").read_text(encoding="utf-8")
     live_script = (WEB / "multi_live.js").read_text(encoding="utf-8")

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock
 
@@ -217,3 +216,17 @@ def test_demucs_device_selection_is_owned_by_shared_xpu_runtime(monkeypatch, tmp
     assert captured["device"] == "xpu:0"
     assert captured["model_name"] == "htdemucs"
     assert result == str(tmp_path / "vocals.wav")
+
+
+def test_default_microphone_rate_queries_input_instead_of_device_inventory(monkeypatch):
+    import core.audio_resampler as ar
+
+    calls = []
+
+    def query(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"name": "default microphone", "default_samplerate": 44100}
+
+    monkeypatch.setattr(ar.sd, "query_devices", query)
+    assert ar.query_device_sample_rate(None) == 44100
+    assert calls == [((), {"kind": "input"})]

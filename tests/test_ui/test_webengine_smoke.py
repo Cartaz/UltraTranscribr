@@ -1,62 +1,40 @@
-"""Native Qt/WebEngine smoke coverage for the real desktop shell."""
-from __future__ import annotations
+"""Real Qt Quick shell replaces the browser smoke test."""
 
-from PySide6.QtWidgets import QApplication
-
-from ui.main_window import MainWindow
-
-
-class _Application:
-    def __init__(self) -> None:
-        self.subscriptions: dict[str, list] = {}
-        self.persisted_geometry: list[tuple[int, int, int, int]] = []
-
-    def subscribe(self, event, handler) -> None:
-        self.subscriptions.setdefault(event, []).append(handler)
-
-    def preload_model_if_requested(self) -> None:
-        return
-
-    def existing_files(self, paths: list[str]) -> list[str]:
-        return list(paths)
-
-    def desktop_state(self) -> dict[str, object]:
-        return {
-            "window_x": None,
-            "window_y": None,
-            "window_width": 1200,
-            "window_height": 800,
-            "audio_source": "system",
-            "sink_name": "",
-            "language": "it",
-            "live_active": False,
-        }
-
-    def persist_window_geometry(self, x: int, y: int, width: int, height: int) -> None:
-        self.persisted_geometry.append((x, y, width, height))
-
-    def live_active(self) -> bool:
-        return False
+from PySide6.QtCore import QObject, QPointF, Qt
+from PySide6.QtTest import QTest
+from conftest import wait_until
 
 
-def test_real_main_window_constructs_local_webengine_shell() -> None:
-    app = QApplication.instance() or QApplication([])
-    application = _Application()
-
-    window = MainWindow(application)  # type: ignore[arg-type]
-    app.processEvents()
-
-    assert window.minimumWidth() == 1200
-    assert window.minimumHeight() == 800
-    assert window._web_view.url().isLocalFile()
-    assert window._channel is not None
-    assert window._bridge is not None
-
-    window.close()
-    app.processEvents()
-
-    assert application.persisted_geometry
-    x, y, width, height = application.persisted_geometry[-1]
-    assert isinstance(x, int)
-    assert isinstance(y, int)
-    assert (width, height) == (1200, 800)
+def test_real_main_window_constructs_local_qml_shell(quick_window):
+    app, window, service, controller, messages = quick_window
+    root = window._window
+    assert (root.minimumWidth(), root.minimumHeight()) == (1200, 800)
+    assert window._engine.rootObjects() == [root]
+    button = root.findChild(QObject, "navFile")
+    QTest.mouseClick(
+        root,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+        button.mapToScene(QPointF(button.width() / 2, button.height() / 2)).toPoint(),
+    )
+    wait_until(lambda: root.property("view") == "file")
+    for view in ("live", "file", "meeting", "history", "settings", "logs"):
+        root.setProperty("view", view)
+        app.processEvents()
+    assert not any(
+        any(
+            error in m
+            for error in (
+                "TypeError",
+                "ReferenceError",
+                "Binding loop",
+                "recursive rearrange",
+            )
+        )
+        for m in messages
+    ), messages
+    window.dispose()
+    window.dispose()
+    assert not window.runtime._handlers
+    assert service.desktop_state()["window_width"] == 1200
+    assert service.desktop_state()["window_height"] == 800

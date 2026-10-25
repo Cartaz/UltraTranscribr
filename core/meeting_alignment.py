@@ -11,17 +11,19 @@ from collections import defaultdict, deque
 from typing import Any, Optional
 
 from core.transcript_export import normalize_segments
+from core.word_timing import lexical_words
 
 _UNCERTAINTY_RATIO = 0.8
 _POINT_WINDOW_S = 0.04
 _OVERLAP_EPSILON_S = 0.03
 _SCORE_PRECISION = 9
+_MAX_CONTINUITY_GAP_S = 0.6
 
 
 def align_speakers(
     transcript_segments: list[dict[str, Any]],
     diarization_segments: list[dict[str, Any]],
-    speaker_diarization_segments: Optional[list[dict[str, Any]]] = None,
+    speaker_diarization_segments: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Create editable review segments from Whisper + Community-1 timing.
 
@@ -38,7 +40,9 @@ def align_speakers(
 
     for source_index, segment in enumerate(transcript):
         words = list(segment.get("words") or [])
+        warnings = []
         if words:
+            words, warnings = lexical_words(str(segment["text"]), words)
             aligned = _align_word_segment(
                 source_index,
                 segment,
@@ -47,16 +51,22 @@ def align_speakers(
                 regular,
             )
             if aligned:
+                for row in aligned:
+                    if segment.get("quality_issues"):
+                        row["quality_issues"] = segment["quality_issues"]
                 output.extend(aligned)
                 continue
-        output.append(
-            _align_whisper_segment(
-                source_index,
-                segment,
-                exclusive,
-                regular,
-            )
+        row = _align_whisper_segment(
+            source_index,
+            segment,
+            exclusive,
+            regular,
         )
+        if warnings:
+            row["alignment_warnings"] = warnings
+        if segment.get("quality_issues"):
+            row["quality_issues"] = segment["quality_issues"]
+        output.append(row)
     return output
 
 
@@ -78,15 +88,27 @@ def _align_word_segment(
         except (TypeError, ValueError):
             continue
         speaker_id, uncertain, candidates = _assign_interval(start, end, exclusive)
+        warnings = []
+        if not candidates:
+            continued = _continuity_speaker(start, end, exclusive, regular)
+            if continued:
+                speaker_id, uncertain, candidates = continued, False, [continued]
+                warnings.append("diarization_gap_bridged")
+        if not speaker_id:
+            warnings.append(
+                "ambiguous_speakers" if candidates else "no_speaker_coverage"
+            )
         assigned.append(
             {
-                "word_index": word_index,
+                "word_index": word.get("source_word_start", word_index),
+                "word_end": word.get("source_word_end", word_index + 1),
                 "word": text,
                 "start": start,
                 "end": end,
                 "speaker_id": speaker_id,
                 "uncertain": uncertain,
                 "speaker_candidates": candidates,
+                "alignment_warnings": warnings,
             }
         )
 
@@ -124,8 +146,13 @@ def _align_word_segment(
             "alignment": "word",
             "source_segment_index": int(source_index),
             "source_word_start": int(group[0]["word_index"]),
-            "source_word_end": int(group[-1]["word_index"]) + 1,
+            "source_word_end": int(group[-1]["word_end"]),
         }
+        warnings = sorted(
+            {reason for word in group for reason in word["alignment_warnings"]}
+        )
+        if warnings:
+            row["alignment_warnings"] = warnings
         overlap_speakers = _true_overlap_speakers(start, end, regular)
         if overlap_speakers:
             row["overlap_speakers"] = overlap_speakers
@@ -191,7 +218,7 @@ def _assign_interval(
     start: float,
     end: float,
     diarization: list[dict[str, Any]],
-) -> tuple[Optional[str], bool, list[str]]:
+) -> tuple[str | None, bool, list[str]]:
     probe_start = max(0.0, float(start))
     probe_end = max(probe_start, float(end))
     if probe_end - probe_start < _POINT_WINDOW_S:
@@ -203,8 +230,7 @@ def _assign_interval(
     for turn in diarization:
         overlap = max(
             0.0,
-            min(probe_end, float(turn["end"]))
-            - max(probe_start, float(turn["start"])),
+            min(probe_end, float(turn["end"])) - max(probe_start, float(turn["start"])),
         )
         if overlap > 0:
             overlaps[str(turn["speaker_id"])] += overlap
@@ -215,13 +241,9 @@ def _assign_interval(
     )
     candidates = [speaker for speaker, _score in ranked[:2]]
     if not ranked:
-        return None, False, candidates
+        return None, True, candidates
     best_score = round(ranked[0][1], _SCORE_PRECISION)
-    second_score = (
-        round(ranked[1][1], _SCORE_PRECISION)
-        if len(ranked) > 1
-        else 0.0
-    )
+    second_score = round(ranked[1][1], _SCORE_PRECISION) if len(ranked) > 1 else 0.0
     uncertain = (
         len(ranked) > 1
         and best_score > 0
@@ -346,8 +368,70 @@ def preserve_review_edits(
     for item in previous_review:
         indexed[_review_identity(item)].append(item)
 
+    previous_sources: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    new_sources: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for items, target in (
+        (previous_review, previous_sources),
+        (new_review, new_sources),
+    ):
+        for item in items:
+            source = item.get("source_segment_index")
+            if isinstance(source, int) and source >= 0:
+                target[source].append(item)
+    protected = {}
+    for source, previous in previous_sources.items():
+        current = new_sources.get(source)
+        if not current:
+            continue
+        edited = any(
+            str(row.get("text") or "") != str(row.get("raw_text") or "")
+            or row.get("speaker_override")
+            for row in previous
+        )
+        if edited and (
+            [_review_identity(row) for row in previous]
+            != [_review_identity(row) for row in current]
+        ):
+            # A rewritten sentence cannot safely be distributed over newly
+            # split words. Retain the author's entire source-segment layout,
+            # refresh acoustic decisions, and expose the new raw alternative.
+            replacement = []
+            for old in previous:
+                row = dict(old)
+                matches = [new for new in current if _review_ranges_overlap(old, new)]
+                speakers = {
+                    new.get("speaker_id") for new in matches if new.get("speaker_id")
+                }
+                certain = (
+                    bool(matches)
+                    and len(speakers) == 1
+                    and all(
+                        new.get("speaker_id") and not new.get("uncertain")
+                        for new in matches
+                    )
+                )
+                row["speaker_id"] = next(iter(speakers)) if certain else None
+                row["uncertain"] = not certain
+                row["speaker_candidates"] = sorted(speakers)
+                row["alignment_warnings"] = sorted(
+                    set(row.get("alignment_warnings") or [])
+                    | {"manual_layout_preserved"}
+                )
+                replacement.append(row)
+            replacement[0]["alignment_recovery_text"] = " ".join(
+                str(row.get("raw_text") or "") for row in current
+            )
+            protected[source] = replacement
+
     output: list[dict[str, Any]] = []
+    emitted = set()
     for item in new_review:
+        source = item.get("source_segment_index")
+        if source in protected:
+            if source not in emitted:
+                output.extend(protected[source])
+                emitted.add(source)
+            continue
         row = dict(item)
         bucket = indexed.get(_review_identity(row))
         if bucket:
@@ -428,3 +512,45 @@ def _valid_diarization_segments(
         output.append({"start": start, "end": end, "speaker_id": speaker_id})
     output.sort(key=lambda item: (item["start"], item["end"], item["speaker_id"]))
     return output
+
+
+def _continuity_speaker(start, end, exclusive, regular):
+    """Bridge only a small unlabelled gap, never an observed competing voice.
+
+    Equal names in the transcript are insufficient evidence. The surrounding
+    acoustic turns must agree and no regular/exclusive turn may contradict
+    continuity. An explicit annotation records the inference for review.
+    """
+    if end <= start or end - start > _MAX_CONTINUITY_GAP_S:
+        return None
+    left = [turn for turn in exclusive if turn["end"] <= start]
+    right = [turn for turn in exclusive if turn["start"] >= end]
+    if not left or not right:
+        return None
+    before = max(left, key=lambda turn: turn["end"])
+    after = min(right, key=lambda turn: turn["start"])
+    speaker = before["speaker_id"]
+    if speaker != after["speaker_id"]:
+        return None
+    if after["start"] - before["end"] > _MAX_CONTINUITY_GAP_S:
+        return None
+    if any(
+        turn["speaker_id"] != speaker
+        and turn["start"] < after["start"]
+        and turn["end"] > before["end"]
+        for turn in [*exclusive, *regular]
+    ):
+        return None
+    return speaker
+
+
+def _review_ranges_overlap(left, right):
+    if left.get("alignment") == right.get("alignment") == "word":
+        return int(left.get("source_word_start", -1)) < int(
+            right.get("source_word_end", -1)
+        ) and int(right.get("source_word_start", -1)) < int(
+            left.get("source_word_end", -1)
+        )
+    start = max(float(left.get("start", 0)), float(right.get("start", 0)))
+    end = min(float(left.get("end", 0)), float(right.get("end", 0)))
+    return end >= start

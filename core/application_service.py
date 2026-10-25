@@ -161,7 +161,7 @@ class ApplicationService:
             return
         selected = settings.model_size
         installed = any(
-            str(item.get("id")) == selected and bool(item.get("installed"))
+            str(item.get("model")) == selected and bool(item.get("installed"))
             for item in self.controller.list_models()
         )
         if not installed:
@@ -702,3 +702,7 @@ class ApplicationService:
             ),
             "audio_diagnostics_error",
         )
+
+
+    def save_meeting_review_drafts(self, session_id, edits, owner, revision) -> None:
+        self.meeting.save_review_drafts(session_id, edits, owner, revision)

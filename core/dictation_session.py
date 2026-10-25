@@ -380,11 +380,17 @@ class DictationService:
         if buffer is not None:
             buffer.close_input()
         if transcriber is not None and transcriber is not threading.current_thread():
-            transcriber.join(timeout=DictationDefaults.REQUEST_TIMEOUT_S + 5.0)
-            if transcriber.is_alive():
-                logger.warning("DictationTranscriber non drenato entro il limite; richiesta stop")
-                transcriber.stop()
-                transcriber.join(timeout=5.0)
+            # Input is closed: drain its finite backlog. The HTTP timeout
+            # bounds each request, not the sum of all queued requests. A
+            # global one-request deadline used to discard the final text.
+            while transcriber.is_alive():
+                transcriber.join(timeout=0.25)
+                with self._lock:
+                    closing = self._closed
+                if closing:
+                    transcriber.stop()
+                    transcriber.join(timeout=5.0)
+                    break
         if buffer is not None:
             buffer.close()
         restart: Settings | None = None
@@ -423,6 +429,8 @@ class DictationService:
             cleanup = self._cleanup
             if capture is not None:
                 capture.stop()
+            if transcriber is not None:
+                transcriber.stop()
             if buffer is not None:
                 buffer.close_input()
         if startup is not None and startup.is_alive() and startup is not threading.current_thread():

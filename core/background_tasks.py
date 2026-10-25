@@ -56,7 +56,12 @@ class BackgroundTaskGroup:
             if self._closed:
                 raise RuntimeError(f"task group {self._prefix} chiuso")
             self._threads.add(thread)
-        thread.start()
+            # Make accepting and starting work atomic relative to close().
+            try:
+                thread.start()
+            except RuntimeError:
+                self._threads.discard(thread)
+                raise
         return thread
 
     def close(self) -> list[str]:

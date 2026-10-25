@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QFileDialog
 
 from config.constants import AppMeta
 from core.application_service import ApplicationService
+from ui.events import PRESENTATION_EVENTS
 
 logger = logging.getLogger(__name__)
 
@@ -24,53 +25,7 @@ class BackendBridge(QObject):
     windowResizeRequested = Signal(int, int)
     meetingReviewDirtyChanged = Signal(bool)
 
-    _EVENTS = (
-        "backend_status_changed",
-        "file_transcriber_status_changed",
-        "file_transcriber_progress",
-        "file_transcriber_new_text",
-        "file_transcriber_full_text",
-        "file_transcriber_completed",
-        "file_transcriber_error",
-        "file_transcriber_segments",
-        "file_queue_changed",
-        "file_queue_job_updated",
-        "config_changed",
-        "history_changed",
-        "history_error",
-        "recovery_audio_saved",
-        "model_download_started",
-        "model_download_progress",
-        "model_status_changed",
-        "audio_devices_changed",
-        "playback_streams_changed",
-        "audio_source_health_changed",
-        "audio_discovery_error",
-        "audio_diagnostics",
-        "audio_diagnostics_error",
-        "backend_preload_error",
-        "live_session_created",
-        "live_session_updated",
-        "live_session_buffer_level",
-        "live_session_queue_wait",
-        "live_session_text",
-        "live_session_error",
-        "live_session_start_error",
-        "live_session_action_error",
-        "live_session_route_status",
-        "live_session_removed",
-        "microphone_recording_saved",
-        "meeting_started",
-        "meeting_updated",
-        "meeting_recording_saved",
-        "meeting_source_status",
-        "meeting_model_progress",
-        "meeting_completed",
-        "meeting_error",
-        "meeting_review_changed",
-        "meeting_queue_changed",
-        "meeting_queue_job_updated",
-    )
+    _EVENTS = PRESENTATION_EVENTS
 
     _MEDIA_FILTER = (
         "Media (*.wav *.mp3 *.flac *.ogg *.m4a *.aac *.opus *.mp4 *.mkv "

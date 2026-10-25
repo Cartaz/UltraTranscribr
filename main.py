@@ -1,5 +1,6 @@
 # main.py
 """UltraTranscribr — Punto di ingresso (orchestratore puro)."""
+
 from __future__ import annotations
 
 import logging
@@ -83,63 +84,69 @@ def main() -> None:
     app.setQuitOnLastWindowClosed(False)
     interrupt_timer = install_process_signal_handlers(app)
 
+    controller = application = window = dictation_native = None
+    exit_code = 1
     try:
         controller = AppController(settings=settings)
+        application = ApplicationService(controller)
+        window = MainWindow(application=application)
+        dictation_native = DictationNativeIntegration(application, app)
+
+        icon_path = Path(__file__).parent / "assets" / "icons" / "icon.png"
+        if not icon_path.exists():
+            icon_path = (
+                Path(__file__).parent / "assets" / "icons" / "ultratranscribr.svg"
+            )
+
+        if icon_path.exists():
+            window_icon = QIcon(str(icon_path))
+            window.setWindowIcon(window_icon)
+            app.setWindowIcon(window_icon)
+
+        tray = TrayIcon(
+            parent=app, icon_path=str(icon_path) if icon_path.exists() else None
+        )
+        tray.show()
+        # StatusNotifier registration is asynchronous on KDE/Wayland. Log after the
+        # host has had time to resolve IconName and geometry instead of reporting only
+        # the local QSystemTrayIcon object's visible flag.
+        QTimer.singleShot(750, tray.log_readiness)
+        tray.show_window_requested.connect(window.show)
+        tray.show_window_requested.connect(window.raise_)
+        tray.show_window_requested.connect(window.activateWindow)
+        tray.connect_start_action(window.on_start)
+        tray.connect_stop_action(window.on_stop)
+        tray.quit_requested.connect(window.force_quit)
+
+        window.set_tray_icon(tray)
+        window.show()
+        QTimer.singleShot(0, dictation_native.start)
+
+        logger.info("UltraTranscribr pronto (SYCL GPU)")
+        exit_code = app.exec()
     except GPUNotAvailableError as exc:
         logger.critical("GPU SYCL non disponibile: %s", exc.message)
         QMessageBox.critical(
             None,
             "GPU non disponibile",
-            f"{exc.message}\n\n{exc.detail}\n\n"
-            "UltraTranscribr richiede una GPU Intel Arc con driver SYCL.",
+            f"{exc.message}\n\n{exc.detail}\n\nUltraTranscribr richiede una GPU Intel Arc con driver SYCL.",
         )
-        sys.exit(1)
-
-    application = ApplicationService(controller)
-    window = MainWindow(application=application)
-    dictation_native = DictationNativeIntegration(application, app)
-
-    icon_path = Path(__file__).parent / "assets" / "icons" / "icon.png"
-    if not icon_path.exists():
-        icon_path = Path(__file__).parent / "assets" / "icons" / "ultratranscribr.svg"
-
-    if icon_path.exists():
-        window_icon = QIcon(str(icon_path))
-        window.setWindowIcon(window_icon)
-        app.setWindowIcon(window_icon)
-
-    tray = TrayIcon(parent=app, icon_path=str(icon_path) if icon_path.exists() else None)
-    tray.show()
-    # StatusNotifier registration is asynchronous on KDE/Wayland. Log after the
-    # host has had time to resolve IconName and geometry instead of reporting only
-    # the local QSystemTrayIcon object's visible flag.
-    QTimer.singleShot(750, tray.log_readiness)
-    tray.show_window_requested.connect(window.show)
-    tray.show_window_requested.connect(window.raise_)
-    tray.show_window_requested.connect(window.activateWindow)
-    tray.connect_start_action(window.on_start)
-    tray.connect_stop_action(window.on_stop)
-    tray.quit_requested.connect(window.force_quit)
-
-    window.set_tray_icon(tray)
-    window.show()
-    QTimer.singleShot(0, dictation_native.start)
-
-    logger.info("UltraTranscribr pronto (SYCL GPU)")
-    exit_code = 1
-    try:
-        exit_code = app.exec()
     finally:
-        # Keep the Python wrapper alive for the entire Qt loop; its QObject parent
-        # owns the C++ timer, while this reference makes the lifetime explicit.
-        del interrupt_timer
+        interrupt_timer.stop()
         try:
-            dictation_native.close()
+            if window is not None:
+                window.dispose()
         finally:
             try:
-                application.close()
+                if dictation_native is not None:
+                    dictation_native.close()
             finally:
-                controller.shutdown()
+                try:
+                    if application is not None:
+                        application.close()
+                finally:
+                    if controller is not None:
+                        controller.shutdown()
     sys.exit(exit_code)
 
 
