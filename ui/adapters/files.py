@@ -113,6 +113,10 @@ class FileAdapter(Adapter):
             self._text = str(value or "")
         elif name == "file_transcriber_new_text":
             self._text += str(value or "") + "\n"
+        elif name == "file_transcriber_quality":
+            self.feedback.show(
+                "Un tratto è stato ritrascritto o richiede verifica: consulta la cronologia"
+            )
         elif name in {"file_transcriber_completed", "file_transcriber_error"}:
             self._busy = False
         self.changed.emit()

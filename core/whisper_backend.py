@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import queue
+import re
 import struct
 import subprocess
 import threading
@@ -219,11 +220,11 @@ class WhisperBackend:
         self,
         audio_data: bytes,
         *,
-        language: Optional[str],
-        prompt: Optional[str],
+        language: str | None,
+        prompt: str | None,
         verbose: bool,
-        timeout: Optional[float],
-        on_queue_wait: Optional[Callable[[float], None]],
+        timeout: float | None,
+        on_queue_wait: Callable[[float], None] | None,
     ) -> str | dict:
         if self._pool_stopping or not self._process_running():
             raise RuntimeError("whisper-server non in esecuzione")
@@ -270,8 +271,23 @@ class WhisperBackend:
                         f"Trascrizione fallita: HTTP {exc.code} su {endpoint}: {detail}"
                     ) from exc
                 except (urllib.error.URLError, TimeoutError, OSError) as exc:
-                    raise RuntimeError(f"Trascrizione fallita su {endpoint}: {exc}") from exc
-            raise RuntimeError("Nessun endpoint di trascrizione disponibile") from last_error
+                    native = self._native_failure_detail()
+                    process = self._process
+                    stopped = process is not None and process.poll() is not None
+                    if native or stopped:
+                        detail = (
+                            native or f"processo terminato con codice {process.returncode}"
+                        )
+                        raise RuntimeError(
+                            f"Trascrizione fallita: il motore Whisper si è arrestato. "
+                            f"{detail}. Log: {self._server_log_path()}"
+                        ) from exc
+                    raise RuntimeError(
+                        f"Trascrizione fallita su {endpoint}: {exc}"
+                    ) from exc
+            raise RuntimeError(
+                "Nessun endpoint di trascrizione disponibile"
+            ) from last_error
 
     def _process_running(self) -> bool:
         p = self._process
@@ -553,3 +569,25 @@ class WhisperBackend:
             ]
         parts.append(f"--{boundary}--\r\n".encode())
         return b"".join(parts)
+
+
+    def _native_failure_detail(self) -> str:
+        """Surface fatal engine diagnostics without exposing transcribed text."""
+        symbols = []
+        for line in self._read_log_tail().splitlines():
+            # Extract only diagnostic symbols: a log can also contain private
+            # transcript sentences mentioning errors or memory.
+            symbols.extend(
+                re.findall(r"\b(?:UR_RESULT_ERROR|ZE_RESULT_ERROR)_[A-Z0-9_]+\b", line)
+            )
+            operation = re.search(r"^\s*Error OP ([A-Z0-9_]+)\b", line)
+            if operation:
+                symbols.append(f"Error OP {operation[1]}")
+            if "bad_alloc" in line:
+                symbols.append("bad_alloc")
+            if (
+                line.lstrip().startswith(("error:", "ggml_", "whisper_"))
+                and "out of memory" in line.lower()
+            ):
+                symbols.append("out of memory")
+        return " · ".join(dict.fromkeys(symbols))[:700]

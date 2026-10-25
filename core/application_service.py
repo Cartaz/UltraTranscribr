@@ -702,3 +702,7 @@ class ApplicationService:
             ),
             "audio_diagnostics_error",
         )
+
+
+    def save_meeting_review_drafts(self, session_id, edits, owner, revision) -> None:
+        self.meeting.save_review_drafts(session_id, edits, owner, revision)

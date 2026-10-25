@@ -523,6 +523,12 @@ ScrollView {
                     Layout.fillWidth: true
                     text: "Riusa l'audio e i segmenti Whisper già salvati: Whisper non viene rilanciato. Le correzioni manuali e i nomi degli interlocutori vengono conservati."
                 }
+                Help {
+                    Layout.fillWidth: true
+                    visible: !!meeting.review.quality_notice
+                    text: meeting.review.quality_notice || ''
+                    color: Theme.accent
+                }
                 Text {
                     textFormat: Text.PlainText
                     text: 'Interlocutori'
@@ -592,7 +598,7 @@ ScrollView {
                     kicker: 'TESTO REVISIONATO'
                     title: 'Interventi'
                     Help {
-                        text: meeting.dirty ? 'Modifiche non salvate' : 'Tutte le modifiche salvate'
+                        text: meeting.draftStatus
                     }
                     NeuButton {
                         text: 'Salva tutto'
@@ -607,6 +613,19 @@ ScrollView {
                     visible: meeting.dirty
                     enabled: !meeting.saving
                     onClicked: meeting.discardEdits()
+                }
+                NeuButton {
+                    id: recoveredDraftsToggle
+                    property bool expanded: false
+                    text: expanded ? 'Nascondi bozze da recuperare' : 'Mostra bozze da recuperare'
+                    visible: !!meeting.recoveredDraftsText
+                    onClicked: expanded = !expanded
+                }
+                Transcript {
+                    visible: !!meeting.recoveredDraftsText && recoveredDraftsToggle.expanded
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 180
+                    text: meeting.recoveredDraftsText
                 }
                 Help {
                     Layout.fillWidth: true
@@ -639,8 +658,9 @@ ScrollView {
                     delegate: Item {
                         required property var record
                         required property int index
+                        objectName: 'reviewSegment' + index
                         width: review.width - 22
-                        height: Math.max(122, editor.implicitHeight + 76 + (record.uncertain || record.overlap ? 20 : 0))
+                        height: Math.max(122, segmentLayout.implicitHeight + 18)
                         RaisedSurface {
                             anchors.fill: parent
                             radius: 12
@@ -654,6 +674,7 @@ ScrollView {
                             border.color: Theme.accent
                         }
                         ColumnLayout {
+                            id: segmentLayout
                             anchors.fill: parent
                             anchors.margins: 9
                             anchors.topMargin: 8
@@ -698,6 +719,13 @@ ScrollView {
                                 text: record.overlap ? 'Voci sovrapposte' : 'Interlocutore incerto'
                                 color: Theme.accent
                             }
+                            Help {
+                                id: qualityNotice
+                                Layout.fillWidth: true
+                                visible: !!record.quality_note
+                                text: record.quality_note || ''
+                                color: Theme.accent
+                            }
                             TextArea {
                                 id: editor
                                 textFormat: TextEdit.PlainText
@@ -722,6 +750,7 @@ ScrollView {
                                     meeting.editText(index, text)
                             }
                             CompactAction {
+                                objectName: 'reviewSave' + index
                                 text: 'Salva correzione'
                                 enabled: !!record.dirty && !meeting.saving
                                 onClicked: meeting.saveSegment(index)

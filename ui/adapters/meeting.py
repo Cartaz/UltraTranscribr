@@ -1,15 +1,31 @@
 """Meeting input drafts and review, retaining edits through delegate recycling."""
 
 import time
+import uuid
 
 from PySide6.QtCore import Property, QTimer, QUrl, Signal, Slot
 
 from ui.adapters.base import Adapter, choose_files, export_session
 from ui.models import RecordModel
 
+_QUALITY_NOTES = {
+    "word_text_mismatch": "Tempi incompleti: il testo completo è stato conservato",
+    "segment_text_mismatch": "Testo e tempi non coincidono: riascolta questo tratto",
+    "degenerate_word_timing": "Tempi poco affidabili: verifica il cambio di voce",
+    "invalid_word_timing": "Tempi poco affidabili: verifica il cambio di voce",
+    "coarse_word_timing": "Verifica la voce ascoltando questo tratto",
+    "nonmonotonic_word_timing": "Tempi poco affidabili: verifica il cambio di voce",
+    "diarization_gap_bridged": "Voce attribuita per continuità: verifica ascoltando",
+    "manual_layout_preserved": "Correzioni conservate durante il ricalcolo: verifica la voce",
+    "repetition_loop": "Ripetizione sospetta: riascolta questo tratto",
+    "uncovered_audio": "Audio senza testo riconosciuto: riascolta questo tratto",
+}
+
 
 class MeetingAdapter(Adapter):
     changed = Signal()
+    reviewChanged = Signal()
+    draftChanged = Signal()
     dirtyChanged = Signal(bool)
 
     def __init__(self, application, feedback, parent=None):
@@ -32,12 +48,24 @@ class MeetingAdapter(Adapter):
         self.tracks = RecordModel(parent=self)
         self._runtime = {}
         self._review = {}
+        self._review_summary = {}
         self._edits = {}
         self._audio = ""
         self._writing = False
         self._generation = 0
         self._runtime_clock = time.monotonic()
         self._model_progress = {}
+        self._draft_owner = uuid.uuid4().hex
+        self._draft_revision = 0
+        self._draft_pending = False
+        self._draft_writing = False
+        self._draft_error = ""
+        self._draft_conflicts = 0
+        self._recovered_drafts_text = ""
+        self._draft_timer = QTimer(self)
+        self._draft_timer.setSingleShot(True)
+        self._draft_timer.setInterval(250)
+        self._draft_timer.timeout.connect(self._checkpoint_drafts)
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self.changed)
@@ -47,9 +75,11 @@ class MeetingAdapter(Adapter):
     def runtime(self):
         return self._runtime
 
-    @Property("QVariantMap", notify=changed)
+    @Property("QVariantMap", notify=reviewChanged)
     def review(self):
-        return self._review
+        # The full document contains token timings and thousands of rows. Do
+        # not serialize it into QML again on every keystroke or clock tick.
+        return self._review_summary
 
     @Property("QVariantMap", notify=changed)
     def modelProgress(self):
@@ -71,6 +101,24 @@ class MeetingAdapter(Adapter):
     @Property(bool, notify=changed)
     def saving(self):
         return self._writing
+
+    @Property(str, notify=draftChanged)
+    def draftStatus(self):
+        if self._draft_error:
+            return "Bozza non protetta: usa Salva tutto"
+        if self._draft_conflicts:
+            return "Ci sono bozze recuperate da verificare"
+        if self._draft_pending or self._draft_writing:
+            return "Protezione della bozza in corso…"
+        return (
+            "Bozza protetta · conferma con Salva tutto"
+            if self.dirty
+            else "Tutte le modifiche salvate"
+        )
+
+    @Property(str, notify=draftChanged)
+    def recoveredDraftsText(self):
+        return self._recovered_drafts_text
 
     @Property(str, notify=changed)
     def audioUrl(self):
@@ -214,6 +262,8 @@ class MeetingAdapter(Adapter):
                 "Salva tutto o annulla le correzioni prima di cambiare riunione"
             )
             return
+        if (self._draft_pending or self._draft_writing) and not self._flush_drafts():
+            return
         self._generation += 1
         generation = self._generation
 
@@ -225,34 +275,88 @@ class MeetingAdapter(Adapter):
         def receive(value):
             if generation == self._generation and not self.dirty and not self._writing:
                 self._audio = value[1]
-                self._load_review(value[0] or {})
+                self._load_review(value[0] or {}, recover_drafts=True)
 
         self.background("qml-meeting-select", read, receive)
 
-    def _load_review(self, value, preserve_edits=False):
+    def _load_review(self, value, preserve_edits=False, recover_drafts=False):
         same = value.get("id") == self._review.get("id")
         edits = dict(self._edits) if same and preserve_edits else {}
         self._review = value
         metadata = value.get("meeting") or {}
+        if recover_drafts:
+            edits = {
+                int(index): text
+                for index, text in (metadata.get("review_drafts") or {}).items()
+            }
+            self._draft_conflicts = len(metadata.get("draft_conflicts") or [])
+            self._draft_error = metadata.get("draft_recovery_error", "")
+            self._recovered_drafts_text = "\n\n".join(
+                f"Intervento precedente {row['index'] + 1 if isinstance(row.get('index'), int) else '?'}\n"
+                f"Testo di riferimento: {row.get('base_text', '')}\n"
+                f"Bozza recuperata: {row.get('text', '')}"
+                for row in metadata.get("draft_conflicts") or []
+            )
+            if self._draft_error:
+                self.feedback.show(
+                    "Non è stato possibile recuperare le bozze; il testo salvato è disponibile"
+                )
+            elif self._draft_conflicts:
+                self.feedback.show(
+                    "Alcune bozze si riferiscono a segmenti cambiati: sono conservate per il recupero"
+                )
+            elif edits:
+                self.feedback.show("Recuperate le correzioni non ancora confermate")
+        elif not same:
+            self._draft_conflicts = 0
+            self._recovered_drafts_text = ""
+            self._draft_error = ""
+        self._review_summary = {
+            "id": value.get("id", ""),
+            "started_at": value.get("started_at", ""),
+            "text": value.get("text", ""),
+            "full_text": value.get("full_text", ""),
+            "meeting": {"num_speakers": metadata.get("num_speakers", 0)},
+            "quality_notice": (
+                "Ci sono tratti da riascoltare: gli avvisi di qualità sono conservati con la trascrizione"
+                if any(
+                    not issue.get("recovered")
+                    for issue in value.get("quality_issues") or []
+                )
+                else ""
+            ),
+        }
         names = metadata.get("speaker_names") or {}
         ids = {key for key in names if key.startswith("SPEAKER_")}
         rows = []
+        review_keys = metadata.get("review_keys") or []
         for index, item in enumerate(metadata.get("review_segments") or []):
-            speaker = (
-                item.get("speaker_override") or item.get("speaker_id") or "UNKNOWN"
-            )
+            speaker = item.get("speaker_override") or item.get("speaker_id") or "UNKNOWN"
             if speaker.startswith("SPEAKER_"):
                 ids.add(speaker)
+            reasons = list(item.get("alignment_warnings") or [])
+            reasons.extend(
+                issue.get("reason") for issue in item.get("quality_issues") or []
+            )
+            quality_note = "; ".join(
+                dict.fromkeys(
+                    _QUALITY_NOTES[reason] for reason in reasons if reason in _QUALITY_NOTES
+                )
+            )
             rows.append(
                 {
                     **item,
                     "index": index,
+                    "review_key": review_keys[index] if index < len(review_keys) else "",
                     "speaker": speaker,
-                    "speaker_name": names.get(speaker, speaker),
+                    "speaker_name": names.get(
+                        speaker, "Speaker ?" if speaker == "UNKNOWN" else speaker
+                    ),
                     "speaker_choice": item.get("speaker_override") or "",
                     "overlap": len(item.get("overlap_speakers") or []) > 1,
                     "draft_text": edits.get(index, item.get("text", "")),
                     "dirty": index in edits,
+                    "quality_note": quality_note,
                 }
             )
         options = [{"value": s, "label": names.get(s, s)} for s in sorted(ids)]
@@ -280,6 +384,8 @@ class MeetingAdapter(Adapter):
         )
         self.tracks.replace((metadata.get("acquisition") or {}).get("sources") or [])
         self._edits = edits
+        self.reviewChanged.emit()
+        self.draftChanged.emit()
         self.dirtyChanged.emit(self.dirty)
         self.changed.emit()
 
@@ -293,6 +399,7 @@ class MeetingAdapter(Adapter):
         else:
             self._edits[index] = text
         self.segments.update(index, draft_text=text, dirty=index in self._edits)
+        self._queue_draft_checkpoint()
         self.dirtyChanged.emit(self.dirty)
         self.changed.emit()
 
@@ -320,12 +427,10 @@ class MeetingAdapter(Adapter):
                         self._edits.pop(index, None)
                 if speaker:
                     for index, row in enumerate(self.speakers.rows()):
-                        if (
-                            row["id"] == speaker[0]
-                            and row.get("draft_name") == speaker[1]
-                        ):
+                        if row["id"] == speaker[0] and row.get("draft_name") == speaker[1]:
                             self.speakers.update(index, draft_name=None)
                 self._load_review(value, preserve_edits=True)
+                self._queue_draft_checkpoint()
             finally:
                 finish()
 
@@ -353,6 +458,95 @@ class MeetingAdapter(Adapter):
     def discardEdits(self):
         if not self._writing:
             self._load_review(self._review)
+            self._queue_draft_checkpoint()
+
+    def _draft_snapshot(self):
+        snapshot = {}
+        for index, text in self._edits.items():
+            row = self.segments.get(index)
+            snapshot[index] = {
+                "text": text,
+                "base_text": row.get("text", ""),
+                "review_key": row.get("review_key", ""),
+            }
+        return snapshot
+
+    def _queue_draft_checkpoint(self):
+        self._draft_revision += 1
+        self._draft_pending = True
+        if not self._draft_timer.isActive() and not self._draft_writing:
+            self._draft_timer.start()
+        self.draftChanged.emit()
+
+    def _checkpoint_drafts(self):
+        session_id = self._review.get("id")
+        if not session_id or self._draft_writing or not self._draft_pending:
+            return
+        snapshot = self._draft_snapshot()
+        revision = self._draft_revision
+        self._draft_writing = True
+        self._draft_pending = False
+        self.draftChanged.emit()
+
+        def finished():
+            self._draft_writing = False
+            if self._review.get("id") == session_id:
+                self._draft_error = ""
+            if self._draft_pending:
+                self._draft_timer.start(0)
+            self.draftChanged.emit()
+
+        def failed():
+            self._draft_writing = False
+            if self._review.get("id") == session_id and revision == self._draft_revision:
+                self._draft_pending = True
+                self._draft_error = "checkpoint failed"
+            elif self._draft_pending:
+                self._draft_timer.start(0)
+            self.draftChanged.emit()
+
+        self.background(
+            "qml-meeting-drafts",
+            lambda: self.application.save_meeting_review_drafts(
+                session_id, snapshot, self._draft_owner, revision
+            ),
+            lambda _: finished(),
+            failed,
+        )
+
+    def _flush_drafts(self):
+        """Finish the current small checkpoint before changing its owner view."""
+        self._draft_timer.stop()
+        if not self._review.get("id"):
+            return True
+        self._draft_revision += 1
+
+        def write():
+            self.application.save_meeting_review_drafts(
+                self._review["id"],
+                self._draft_snapshot(),
+                self._draft_owner,
+                self._draft_revision,
+            )
+            return True
+
+        if not self.attempt(write):
+            self._draft_error = "checkpoint failed"
+            self.draftChanged.emit()
+            return False
+        self._draft_pending = False
+        self._draft_error = ""
+        self.draftChanged.emit()
+        return True
+
+    def close(self):
+        if self._closed:
+            return
+        self._draft_timer.stop()
+        self._timer.stop()
+        if self._review.get("id") and (self._draft_pending or self._draft_writing):
+            self._flush_drafts()
+        super().close()
 
     @Slot(int, str)
     def setSpeaker(self, index, speaker):
@@ -416,3 +610,7 @@ class MeetingAdapter(Adapter):
                 self.select(session_id)
         elif name == "meeting_source_status":
             self.feedback.show("Sorgente riunione: " + str(value))
+        elif name == "meeting_quality_warning":
+            self.feedback.show(
+                "Un tratto è stato ritrascritto o richiede verifica; gli avvisi saranno disponibili nella revisione"
+            )

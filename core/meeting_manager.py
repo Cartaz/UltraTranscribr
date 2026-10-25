@@ -796,7 +796,9 @@ class MeetingManager:
             review = preserve_review_edits(previous_review, review)
         return diarization, speaker_diarization, review
 
-    def _transcription_event(self, runtime: MeetingRuntime, event: str, payload: Any) -> None:
+    def _transcription_event(
+        self, runtime: MeetingRuntime, event: str, payload: Any
+    ) -> None:
         if runtime.stop_event.is_set() or self._shutdown_event.is_set():
             return
         if event == "file_transcriber_new_text":
@@ -807,6 +809,11 @@ class MeetingManager:
         if event == "file_transcriber_segments":
             if isinstance(payload, list):
                 self._controller.history.append_segments(runtime.id, payload)
+            return
+        if event == "file_transcriber_quality":
+            if isinstance(payload, list):
+                self._controller.history.append_quality_issues(runtime.id, payload)
+                self._emit("meeting_quality_warning", payload)
             return
         if event == "file_transcriber_progress":
             runtime.progress = max(0, min(100, int(payload or 0)))
@@ -1023,3 +1030,7 @@ class MeetingManager:
 
     def _emit(self, event: str, payload: Any = None) -> None:
         self._bus.emit(event, payload)
+
+
+    def save_review_drafts(self, session_id, edits, owner, revision) -> None:
+        self.store.save_review_drafts(session_id, edits, owner, revision)

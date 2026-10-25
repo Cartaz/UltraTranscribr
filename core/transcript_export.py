@@ -1,6 +1,7 @@
 """Timestamp-preserving transcript export helpers."""
 from __future__ import annotations
 
+import math
 from typing import Any, Iterable
 
 
@@ -34,6 +35,8 @@ def _normalize_words(
             end = min(segment_end, max(start, float(raw.get("end", start))))
         except (TypeError, ValueError):
             continue
+        if not math.isfinite(start) or not math.isfinite(end):
+            continue
         if start > segment_end or end < segment_start:
             continue
         item: dict[str, Any] = {
@@ -48,7 +51,9 @@ def _normalize_words(
         if probability is not None:
             item["probability"] = probability
         result.append(item)
-    result.sort(key=lambda item: (item["start"], item["end"]))
+    # Equal timestamps are common in whisper.cpp token output. Their source
+    # order carries lexical meaning, so neither text nor end time is a tie-break.
+    result.sort(key=lambda item: item["start"])
     return result
 
 
@@ -71,8 +76,12 @@ def normalize_segments(segments: Iterable[dict[str, Any]]) -> list[dict[str, Any
             end = max(start, float(raw.get("end", start)))
         except (TypeError, ValueError):
             continue
+        if not math.isfinite(start) or not math.isfinite(end):
+            continue
         key = (round(start * 1000), round(end * 1000), text)
-        if key in seen:
+        # Two instantaneous fragments can be distinct occurrences of the same
+        # word. A zero-duration timestamp is not an identity for deduplication.
+        if end > start and key in seen:
             continue
         seen.add(key)
         item: dict[str, Any] = {"start": start, "end": end, "text": text}
@@ -83,8 +92,11 @@ def normalize_segments(segments: Iterable[dict[str, Any]]) -> list[dict[str, Any
         )
         if words:
             item["words"] = words
+        for key in ("quality_issues", "quality_recovery"):
+            if key in raw:
+                item[key] = raw[key]
         result.append(item)
-    result.sort(key=lambda item: (item["start"], item["end"], item["text"]))
+    result.sort(key=lambda item: item["start"])
     return result
 
 

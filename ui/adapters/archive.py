@@ -47,6 +47,34 @@ class ArchiveAdapter(Adapter):
             )
         return str(self._selected.get("full_text") or self._selected.get("text") or "")
 
+    @Property(str, notify=changed)
+    def qualityDetails(self):
+        labels = {
+            "repetition_loop": "Ripetizione sospetta",
+            "uncovered_audio": "Audio senza testo riconosciuto",
+            "word_text_mismatch": "Tempi delle parole incompleti",
+            "segment_text_mismatch": "Testo e tempi non coincidono",
+        }
+        rows = []
+        for issue in self._selected.get("quality_issues") or []:
+            try:
+                start = max(0, int(float(issue.get("start", 0))))
+                end = max(start, int(float(issue.get("end", start))))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            status = (
+                "Recuperato automaticamente; verifica ascoltando"
+                if issue.get("recovered")
+                else "Da riascoltare"
+            )
+            rows.append(
+                f"{start // 60:02d}:{start % 60:02d}–{end // 60:02d}:{end % 60:02d} · "
+                f"{labels.get(issue.get('reason'), 'Qualità da verificare')} · {status}"
+            )
+        if self._selected.get("quality_read_error"):
+            rows.append("Avvisi di qualità non leggibili; il testo salvato è disponibile")
+        return "\n".join(rows)
+
     @Slot(str)
     def search(self, query):
         self._query = query

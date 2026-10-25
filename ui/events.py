@@ -9,6 +9,7 @@ PRESENTATION_EVENTS = (
     "file_transcriber_completed",
     "file_transcriber_error",
     "file_transcriber_segments",
+    "file_transcriber_quality",
     "file_queue_changed",
     "file_queue_job_updated",
     "config_changed",
@@ -46,6 +47,7 @@ PRESENTATION_EVENTS = (
     "meeting_completed",
     "meeting_error",
     "meeting_review_changed",
+    "meeting_quality_warning",
     "meeting_queue_changed",
     "meeting_queue_job_updated",
 )

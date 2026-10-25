@@ -249,3 +249,5 @@ Verifica locale: `QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software pytest -q`
 Per rigenerare lo shader: `pyside6-qsb --qt6 -o ui/qml/shaders/inset.frag.qsb ui/qml/shaders/inset.frag`. Per catturare le schermate con dati isolati: `python tools/capture_ui.py --output tests/visual/after`. Il fixture sostituisce esclusivamente il rilevamento GPU: non esegue inferenza e non introduce un fallback CPU nel programma.
 
 Audit e limiti di accettazione del porting: [docs/QML_AUDIT_2026-10-01.md](docs/QML_AUDIT_2026-10-01.md).
+
+Correzioni successive e prove sul desktop reale con riunioni lunghe: [docs/POST_AUDIT_2026-10-25.md](docs/POST_AUDIT_2026-10-25.md).

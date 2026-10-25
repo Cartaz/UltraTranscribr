@@ -282,6 +282,19 @@ ScrollView {
                     source: archive.recording.url || ''
                 }
                 NeuButton {
+                    id: qualityToggle
+                    property bool expanded: false
+                    visible: !!archive.qualityDetails
+                    text: expanded ? 'Nascondi tratti da verificare' : 'Mostra tratti da verificare'
+                    onClicked: expanded = !expanded
+                }
+                Transcript {
+                    visible: !!archive.qualityDetails && qualityToggle.expanded
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 160
+                    text: archive.qualityDetails
+                }
+                NeuButton {
                     text: 'Elimina audio'
                     visible: !!archive.recording.exists
                     onClicked: shell.confirm('Eliminare la registrazione microfono?', () => archive.deleteRecording())

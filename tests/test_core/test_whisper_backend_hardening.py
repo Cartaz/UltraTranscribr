@@ -141,3 +141,25 @@ def test_transcribe_rechecks_process_after_waiting_for_scheduler_lock(tmp_path) 
             backend._io_lock.release()
         except RuntimeError:
             pass
+
+
+def test_native_gpu_failure_is_actionable_and_does_not_expose_transcribed_text(
+    monkeypatch, tmp_path
+):
+    backend = _running_backend(tmp_path)
+    monkeypatch.setattr(
+        backend,
+        "_read_log_tail",
+        lambda: (
+            "private meeting words with bad_alloc\nlevel_zero backend failed with error: UR_RESULT_ERROR_UNKNOWN\nError OP GET_ROWS"
+        ),
+    )
+    monkeypatch.setattr(
+        "core.whisper_backend.urllib.request.urlopen",
+        MagicMock(side_effect=ConnectionResetError("closed")),
+    )
+    with pytest.raises(RuntimeError, match="motore Whisper si è arrestato") as caught:
+        backend.transcribe_audio(b"wav")
+    assert "GET_ROWS" in str(caught.value) and "private meeting words" not in str(
+        caught.value
+    )

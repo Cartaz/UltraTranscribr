@@ -857,18 +857,15 @@ class AppController:
                 lambda payload: self._append_file_history_text(payload),
             ),
             ("file_transcriber_segments", self._append_file_history_segments),
+            ("file_transcriber_quality", self._append_file_history_quality),
             ("file_transcriber_status_changed", self._on_file_history_status),
             (
                 "file_transcriber_error",
-                lambda _payload: self._finish_history_session(
-                    StatusEnum.ERROR.value
-                ),
+                lambda _payload: self._finish_history_session(StatusEnum.ERROR.value),
             ),
             (
                 "file_transcriber_completed",
-                lambda _payload: self._finish_history_session(
-                    StatusEnum.COMPLETED.value
-                ),
+                lambda _payload: self._finish_history_session(StatusEnum.COMPLETED.value),
             ),
         )
         for event, handler in handlers:
@@ -946,3 +943,14 @@ class AppController:
             self._finish_history_session(status)
         else:
             self._set_file_history_status(status)
+
+
+    def _append_file_history_quality(self, payload: Any) -> None:
+        with self._lock:
+            session_id = self._file_history_id
+        if session_id is not None and isinstance(payload, list):
+            try:
+                self._history.append_quality_issues(session_id, payload)
+            except Exception as exc:
+                logger.exception("Salvataggio avvisi qualità fallito")
+                self._bus.emit("history_error", str(exc))
