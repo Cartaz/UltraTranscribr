@@ -1,6 +1,8 @@
 """Launch the actual composition root in isolation; no GPU inference is claimed."""
+# ruff: noqa: E402 -- XDG paths must be isolated before importing the application.
 
 import argparse
+from contextlib import ExitStack
 import json
 import os
 import sys
@@ -11,6 +13,12 @@ from unittest.mock import patch
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--output", type=Path, required=True)
+parser.add_argument("--native-gpu", action="store_true", help="Use real GPU detection")
+parser.add_argument(
+    "--skip-portal-prompts",
+    action="store_true",
+    help="Exercise the UI without opening permission dialogs",
+)
 args = parser.parse_args()
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 isolated = Path(tempfile.mkdtemp(prefix="ut-main-smoke-"))
@@ -23,7 +31,12 @@ import main
 from config.settings import Settings
 
 Settings(preload_model=False).save()
-result = {"gpu_detection_fixture": True, "inference_exercised": False, "views": []}
+result = {
+    "gpu_detection_fixture": not args.native_gpu,
+    "inference_exercised": False,
+    "portal_permission_flows_exercised": not args.skip_portal_prompts,
+    "views": [],
+}
 
 
 def create_app(argv):
@@ -60,10 +73,16 @@ def create_app(argv):
     return app
 
 
-with (
-    patch("core.app_controller.detect_gpu_backend", return_value="sycl"),
-    patch.object(main, "QApplication", side_effect=create_app),
-):
+with ExitStack() as stack:
+    if not args.native_gpu:
+        stack.enter_context(
+            patch("core.app_controller.detect_gpu_backend", return_value="sycl")
+        )
+    if args.skip_portal_prompts:
+        stack.enter_context(
+            patch.object(main.DictationNativeIntegration, "start", lambda self: None)
+        )
+    stack.enter_context(patch.object(main, "QApplication", side_effect=create_app))
     try:
         main.main()
     except SystemExit as exc:

@@ -86,7 +86,9 @@ def query_device_sample_rate(device: object) -> int:
     converte successivamente l'audio al rate richiesto da Whisper.
     """
     try:
-        info = sd.query_devices(device)
+        # With no selection PortAudio returns the entire inventory unless the
+        # input kind is explicit. Use the actual default microphone's rate.
+        info = sd.query_devices(kind="input") if device is None else sd.query_devices(device)
         raw_rate = float(info.get("default_samplerate", 0) or 0)
         if not np.isfinite(raw_rate) or raw_rate <= 0:
             raise ValueError(f"default_samplerate non valido: {raw_rate}")

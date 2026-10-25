@@ -1,6 +1,7 @@
 """Crash-resistant shared microphone recording for Live and Meeting sessions."""
 from __future__ import annotations
 
+import fcntl
 import logging
 import os
 import threading
@@ -50,6 +51,7 @@ class MicrophoneRecorder:
         self.part_path = self.root / f"{self.session_id}.pcm.part"
         self.final_path = self.root / f"{self.session_id}.flac"
         self._handle = None
+        self._journal_lock = None
         self._lock = threading.RLock()
         self._samples = 0
         self._samples_since_sync = 0
@@ -67,7 +69,13 @@ class MicrophoneRecorder:
             if self._closed:
                 raise RuntimeError("registrazione già chiusa")
             self.root.mkdir(parents=True, exist_ok=True)
-            self._handle = open(self.part_path, "ab", buffering=0)
+            journal_lock = self._lock_journal(self.part_path)
+            try:
+                self._handle = open(self.part_path, "ab", buffering=0)
+            except Exception:
+                journal_lock.close()
+                raise
+            self._journal_lock = journal_lock
             try:
                 self._samples = self.part_path.stat().st_size // 2
             except OSError:
@@ -106,26 +114,25 @@ class MicrophoneRecorder:
                 if self.final_path.is_file():
                     return self._info_from_final()
                 return None
+            if self._handle is None:
+                self.start()
             if self._handle is not None:
                 self._sync_locked()
                 self._handle.close()
                 self._handle = None
             self._closed = True
             samples = self._samples
+            journal_lock = self._journal_lock
+            self._journal_lock = None
 
-        if samples <= 0 or not self.part_path.is_file():
-            try:
+        try:
+            if samples <= 0 or not self.part_path.is_file():
                 self.part_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            return None
-
-        info = self.finalize_partial(
-            self.part_path,
-            final_path=self.final_path,
-            sample_rate=self.sample_rate,
-        )
-        return info
+                return None
+            return self._finalize_partial(
+                self.part_path, final_path=self.final_path, sample_rate=self.sample_rate)
+        finally:
+            journal_lock.close()
 
     def abandon(self) -> None:
         """Close the journal without deleting it so it can be recovered later."""
@@ -135,6 +142,10 @@ class MicrophoneRecorder:
                 self._handle.close()
                 self._handle = None
             self._closed = True
+            journal_lock = getattr(self, "_journal_lock", None)
+            if journal_lock is not None:
+                journal_lock.close()
+                self._journal_lock = None
 
     def _sync_locked(self) -> None:
         assert self._handle is not None
@@ -155,6 +166,29 @@ class MicrophoneRecorder:
 
     @staticmethod
     def finalize_partial(
+        part_path: Path | str,
+        *,
+        final_path: Path | str | None = None,
+        sample_rate: int = ProcessDefaults.SAMPLE_RATE,
+    ) -> RecordingInfo:
+        with MicrophoneRecorder._lock_journal(Path(part_path)):
+            return MicrophoneRecorder._finalize_partial(
+                part_path, final_path=final_path, sample_rate=sample_rate)
+
+    @staticmethod
+    def _lock_journal(part: Path):
+        # Keep a separate stable lock inode: the journal itself is unlinked
+        # during finalization. Recovery must never claim a live recording.
+        handle = open(part.with_name("." + part.name + ".lock"), "a+b")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except Exception:
+            handle.close()
+            raise
+        return handle
+
+    @staticmethod
+    def _finalize_partial(
         part_path: Path | str,
         *,
         final_path: Path | str | None = None,
@@ -222,6 +256,9 @@ class MicrophoneRecorder:
         for part in sorted(base.glob("*.pcm.part")):
             try:
                 recovered.append(cls.finalize_partial(part))
+            except (BlockingIOError, FileNotFoundError):
+                # A capture still owns the journal, or another recovery won.
+                continue
             except Exception:
                 logger.exception("Recovery registrazione microfono fallito: %s", part)
         return recovered

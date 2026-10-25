@@ -4,11 +4,23 @@ import json
 import sys
 from pathlib import Path
 from types import ModuleType
+from unittest.mock import Mock
 
 import numpy as np
 
 import core.speaker_diarization as sd
 from core.speaker_diarization import align_speakers, speaker_label
+
+
+def test_shutdown_closes_loaded_pyannote_worker_without_importing_optional_runtime(monkeypatch):
+    module = ModuleType("pyannote.audio.telemetry.metrics")
+    module.provider = Mock()
+    monkeypatch.setitem(sys.modules, "pyannote.audio.telemetry.metrics", module)
+    sd.shutdown_diarization_runtime()
+    module.provider.shutdown.assert_called_once_with()
+    monkeypatch.delitem(sys.modules, "pyannote.audio.telemetry.metrics")
+    sd.shutdown_diarization_runtime()
+    assert "pyannote.audio.telemetry.metrics" not in sys.modules
 
 
 def test_align_speakers_assigns_dominant_temporal_overlap() -> None:

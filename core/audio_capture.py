@@ -200,6 +200,7 @@ class AudioCaptureThread(threading.Thread):
             cb_accumulator=self._cb_accumulator,
             buffer=self._buffer,
             chunk_samples=self._settings.chunk_samples,
+            sample_sink=self._sample_sink,
         )
 
     def _open_stream_microphone(self) -> None:

@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import shutil
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,11 +22,11 @@ import soundfile as sf
 
 from config.constants import AppMeta, ProcessDefaults
 from core.meeting_alignment import (
-    align_speakers,
-    preserve_review_edits,
-    preserve_review_text,
-    speaker_label,
-    stabilize_speaker_ids,
+    align_speakers as align_speakers,
+    preserve_review_edits as preserve_review_edits,
+    preserve_review_text as preserve_review_text,
+    speaker_label as speaker_label,
+    stabilize_speaker_ids as stabilize_speaker_ids,
 )
 from core.torch_xpu import get_torch_xpu_device
 
@@ -164,6 +165,9 @@ class SpeakerDiarizer:
         self._pipeline_lock = threading.Lock()
 
     def _get_pipeline(self) -> Any:
+        # This local application does not send model usage metrics. Set this
+        # before importing pyannote, whose default may enable its exporter.
+        os.environ["PYANNOTE_METRICS_ENABLED"] = "0"
         status = self.models.ensure_models()
         model_path = Path(str(status["model"]))
         with self._pipeline_lock:
@@ -249,6 +253,19 @@ class SpeakerDiarizer:
             exclusive_segments=exclusive_segments,
             speaker_segments=speaker_segments,
         )
+
+
+def shutdown_diarization_runtime() -> None:
+    """Close pyannote's import-time telemetry worker without importing it.
+
+    pyannote creates its own BatchSpanProcessor even with metrics disabled and
+    uses shutdown_on_exit=False. Release it after application workers stop.
+    """
+    module = sys.modules.get("pyannote.audio.telemetry.metrics")
+    provider = getattr(module, "provider", None)
+    shutdown = getattr(provider, "shutdown", None)
+    if callable(shutdown):
+        shutdown()
 
 
 def _annotation_to_segments(

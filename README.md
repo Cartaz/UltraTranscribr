@@ -251,3 +251,5 @@ Per rigenerare lo shader: `pyside6-qsb --qt6 -o ui/qml/shaders/inset.frag.qsb ui
 Audit e limiti di accettazione del porting: [docs/QML_AUDIT_2026-10-01.md](docs/QML_AUDIT_2026-10-01.md).
 
 Correzioni successive e prove sul desktop reale con riunioni lunghe: [docs/POST_AUDIT_2026-10-25.md](docs/POST_AUDIT_2026-10-25.md).
+
+Collaudo di Whisper/SYCL, diarizzazione, Live e registrazione con audio reale: [docs/RELEASE_VALIDATION_2026-10-26.md](docs/RELEASE_VALIDATION_2026-10-26.md).

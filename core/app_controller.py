@@ -28,6 +28,7 @@ from core.sink_finder import find_source
 from core.transcript_history import TranscriptHistoryStore
 from core.whisper_gpu_detect import detect_gpu_backend
 from core.whisper_models import WhisperModelManager
+from core.speaker_diarization import shutdown_diarization_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -798,6 +799,7 @@ class AppController:
             ("AudioDiscovery", self._audio_discovery.close),
             ("Pactl", self._pactl.close),
             ("WhisperBackend", self.stop_backend),
+            ("DiarizationRuntime", shutdown_diarization_runtime),
         )
         for label, action in steps:
             try:
