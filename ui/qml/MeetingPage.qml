@@ -380,7 +380,7 @@ ScrollView {
         Card {
             objectName: 'meetingArchiveCard'
             Layout.fillWidth: true
-            Layout.preferredHeight: 137 + Math.max(0, Math.min(300, meetingsModel.count * 57) - 57)
+            Layout.preferredHeight: 80 + Math.max(57, Math.min(300, meetingsModel.count * 109 - 9))
             CardHead {
                 kicker: 'ARCHIVIO'
                 title: 'Riunioni recenti'
@@ -397,23 +397,64 @@ ScrollView {
             }
             ListView {
                 id: recent
+                objectName: 'recentMeetingsList'
                 visible: meetingsModel.count > 0
                 Layout.fillWidth: true
-                Layout.preferredHeight: Math.min(300, meetingsModel.count * 57)
+                Layout.preferredHeight: Math.min(300, Math.max(0, meetingsModel.count * 109 - 9))
                 model: meetingsModel
                 reuseItems: true
                 cacheBuffer: 0
                 clip: true
                 spacing: 9
+                ScrollBar.vertical: ScrollBar {}
                 delegate: RowLayout {
                     required property var record
+                    required property int index
                     width: recent.width
-                    height: 48
-                    NeuButton {
+                    height: 100
+                    Item {
                         Layout.fillWidth: true
-                        text: record.name || record.id
-                        alignLeft: true
-                        onClicked: meeting.select(record.id)
+                        Layout.fillHeight: true
+                        NeuButton {
+                            objectName: 'recentMeetingOpen' + index
+                            anchors.fill: parent
+                            selected: meeting.review.id === record.id
+                            Accessible.name: record.name || record.started_at || record.id
+                            onClicked: meeting.select(record.id)
+                        }
+                        Column {
+                            anchors.fill: parent
+                            anchors.margins: 12
+                            anchors.leftMargin: 14
+                            anchors.rightMargin: 14
+                            spacing: 3
+                            Text {
+                                width: parent.width
+                                textFormat: Text.PlainText
+                                text: record.name || (record.started_at ? Qt.formatDateTime(new Date(record.started_at), 'dd/MM/yyyy HH:mm') : record.id)
+                                font.family: Theme.font
+                                font.pixelSize: 14
+                                font.bold: true
+                                color: Theme.primary
+                                elide: Text.ElideRight
+                            }
+                            Help {
+                                width: parent.width
+                                text: Theme.statusName(record.status) + ' · ' + (record.language || 'auto') + ' · ' + Theme.sourceName(record.source)
+                                font.pixelSize: 11
+                                maximumLineCount: 1
+                                elide: Text.ElideRight
+                            }
+                            Help {
+                                objectName: 'recentMeetingPreview' + index
+                                width: parent.width
+                                text: record.text_preview || 'Nessun testo'
+                                color: Theme.secondary
+                                maximumLineCount: 2
+                                elide: Text.ElideRight
+                                lineHeight: 16
+                            }
+                        }
                     }
                     NeuButton {
                         text: 'Elimina'
