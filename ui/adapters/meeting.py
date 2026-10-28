@@ -17,6 +17,7 @@ _QUALITY_NOTES = {
     "nonmonotonic_word_timing": "Tempi poco affidabili: verifica il cambio di voce",
     "diarization_gap_bridged": "Voce attribuita per continuità: verifica ascoltando",
     "manual_layout_preserved": "Correzioni conservate durante il ricalcolo: verifica la voce",
+    "approximate_recovered_timing": "Parole recuperate: tempi approssimativi, verifica audio e voce",
     "repetition_loop": "Ripetizione sospetta: riascolta questo tratto",
     "uncovered_audio": "Audio senza testo riconosciuto: riascolta questo tratto",
 }
@@ -27,6 +28,8 @@ class MeetingAdapter(Adapter):
     reviewChanged = Signal()
     draftChanged = Signal()
     dirtyChanged = Signal(bool)
+    englishChanged = Signal()
+    pipelineChanged = Signal()
 
     def __init__(self, application, feedback, parent=None):
         super().__init__(application, feedback, parent)
@@ -42,6 +45,12 @@ class MeetingAdapter(Adapter):
             self,
         )
         self.drafts = RecordModel(parent=self)
+        self.pipelines = RecordModel([
+            {"value": "qwen_meeting", "name": "Qwen · Riunioni"},
+        ], self)
+        self._pipeline = "qwen_meeting"
+        self._english_status = {"ready": False, "busy": False, "progress": 0,
+                                "dependencies_ready": False, "error": "", "download_gb": 0}
         self.queue = RecordModel(parent=self)
         self.segments = RecordModel(parent=self)
         self.speakers = RecordModel(parent=self)
@@ -70,6 +79,57 @@ class MeetingAdapter(Adapter):
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self.changed)
         self._timer.start()
+        if hasattr(self.application, "english_pipeline_status"):
+            QTimer.singleShot(0, self.refreshEnglish)
+
+    @Property(str, notify=pipelineChanged)
+    def pipeline(self):
+        return self._pipeline
+
+    @Property("QVariantMap", notify=englishChanged)
+    def englishStatus(self):
+        return self._english_status
+
+    def _english_status_received(self, value):
+        if isinstance(value, dict):
+            was_busy = bool(self._english_status.get("busy"))
+            self._english_status = dict(value)
+            self.pipelines.update(0, name="Qwen · Riunioni" if value.get("ready") else "Qwen · Riunioni (prepara modelli)")
+            self.englishChanged.emit()
+            if was_busy != bool(value.get("busy")):
+                self.changed.emit()
+
+    @Slot()
+    def refreshEnglish(self):
+        if hasattr(self.application, "english_pipeline_status"):
+            self.background("qml-english-status", self.application.english_pipeline_status,
+                            self._english_status_received)
+
+    @Slot()
+    def prepareEnglish(self):
+        self._english_status = self._english_status | {"busy": True, "error": "", "progress": 0}
+        self.englishChanged.emit()
+        self.changed.emit()
+        self.background("qml-english-models", self.application.prepare_english_models,
+                        self._english_status_received, failed=self.refreshEnglish)
+
+    @Slot()
+    def cancelEnglish(self):
+        self._english_status = self._english_status | {"cancelling": True}
+        self.englishChanged.emit()
+        self.background("qml-english-cancel", self.application.cancel_english_preparation,
+                        self._english_status_received, failed=self.refreshEnglish)
+
+    @Slot(str, result=bool)
+    def selectPipeline(self, value):
+        if value not in {"qwen_meeting"}:
+            return False
+        if value == "qwen_meeting" and not self._english_status.get("ready"):
+            self.feedback.show("Prepara i modelli delle riunioni prima di avviare")
+            return False
+        self._pipeline = value
+        self.pipelineChanged.emit()
+        return True
 
     @Property("QVariantMap", notify=changed)
     def runtime(self):
@@ -87,7 +147,7 @@ class MeetingAdapter(Adapter):
 
     @Property(bool, notify=changed)
     def busy(self):
-        return bool(self._runtime) and self._runtime.get("status") not in {
+        return bool(self._english_status.get("busy")) or bool(self._runtime) and self._runtime.get("status") not in {
             "completed",
             "error",
             "cancelled",
@@ -179,7 +239,8 @@ class MeetingAdapter(Adapter):
         if values:
             self.drafts.replace(
                 [
-                    {"path": p, "language": language, "num_speakers": speakers}
+                    {"path": p, "language": language, "num_speakers": speakers,
+                     **({"pipeline": self._pipeline} if self._pipeline != "whisper" else {})}
                     for p in values
                 ]
             )
@@ -192,10 +253,22 @@ class MeetingAdapter(Adapter):
             speakers,
         )
 
-    @Slot(int, str, "QVariant")
+    @Slot(int, str, "QVariant", result=bool)
     def editDraft(self, index, key, value):
-        if key in {"language", "num_speakers"}:
-            self.attempt(lambda: self.drafts.update(index, **{key: value}))
+        if key not in {"language", "num_speakers", "pipeline"}:
+            return False
+        if key == "pipeline" and value == "qwen_meeting" and not self._english_status.get("ready"):
+            self.feedback.show("Prepara i modelli delle riunioni prima di avviare")
+            return False
+        if key == "pipeline" and value not in {"qwen_meeting"}:
+            return False
+
+        def edit():
+            fields = {key: value}
+            self.drafts.update(index, **fields)
+            return True
+
+        return self.attempt(edit) is True
 
     @Slot(int)
     def removeDraft(self, index):
@@ -218,6 +291,7 @@ class MeetingAdapter(Adapter):
                     self.sources.rows(),
                     language=language or None,
                     num_speakers=speakers,
+                    **({"pipeline": self._pipeline} if self._pipeline != "whisper" else {}),
                 )
             )
             if value:
@@ -604,6 +678,8 @@ class MeetingAdapter(Adapter):
         elif name == "meeting_model_progress":
             self._model_progress = value or {}
             self.changed.emit()
+        elif name == "meeting_english_models_changed":
+            self._english_status_received(value or {})
         elif name == "meeting_review_changed" and not self.dirty and not self._writing:
             session_id = value.get("session_id") if isinstance(value, dict) else value
             if session_id == self._review.get("id"):

@@ -54,6 +54,12 @@ def align_speakers(
                 for row in aligned:
                     if segment.get("quality_issues"):
                         row["quality_issues"] = segment["quality_issues"]
+                    if segment.get("quality_recovery"):
+                        row["quality_recovery"] = segment["quality_recovery"]
+                        if segment["quality_recovery"].get("timing_requires_review"):
+                            row["alignment_warnings"] = sorted(set(
+                                row.get("alignment_warnings", []) + ["approximate_recovered_timing"]
+                            ))
                 output.extend(aligned)
                 continue
         row = _align_whisper_segment(
@@ -66,6 +72,12 @@ def align_speakers(
             row["alignment_warnings"] = warnings
         if segment.get("quality_issues"):
             row["quality_issues"] = segment["quality_issues"]
+        if segment.get("quality_recovery"):
+            row["quality_recovery"] = segment["quality_recovery"]
+            if segment["quality_recovery"].get("timing_requires_review"):
+                row["alignment_warnings"] = sorted(set(
+                    row.get("alignment_warnings", []) + ["approximate_recovered_timing"]
+                ))
         output.append(row)
     return output
 

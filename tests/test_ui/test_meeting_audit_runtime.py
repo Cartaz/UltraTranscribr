@@ -1,10 +1,79 @@
 import threading
 
 from conftest import visual_child, wait_until
-from PySide6.QtCore import QPointF
+from PySide6.QtCore import QObject, QPointF
 
 from tests.test_ui.test_qml_runtime import seed_meeting
 from ui.adapters.meeting import MeetingAdapter
+
+
+def test_meeting_draft_keeps_language_and_speaker_fields_editable(quick_window):
+    app, window, _service, _controller, messages = quick_window
+    window._window.setProperty("view", "meeting")
+    page = window._window.findChild(QObject, "meetingPage")
+    page.setProperty("fromFile", True)
+    adapter = window.runtime.meeting
+    adapter._english_status_received({"ready": True, "busy": False})
+    adapter.drafts.replace([{"path": "public.wav", "language": "en",
+                             "num_speakers": 0, "pipeline": "qwen_meeting"}])
+    root = window._window.contentItem()
+    wait_until(lambda: visual_child(root, "draftLanguage0") is not None)
+    app.processEvents()
+    language = visual_child(root, "draftLanguage0")
+    speakers = visual_child(root, "draftSpeakers0")
+    pipeline = visual_child(root, "draftPipeline0")
+    assert language.width() >= 50
+    assert speakers.width() >= 50
+    assert pipeline.width() >= 150
+    assert not language.property("readOnly")
+    assert language.property("text") == "en"
+    assert not any("TypeError" in m or "ReferenceError" in m for m in messages)
+
+
+def test_english_status_only_refreshes_general_bindings_when_busy_changes(quick_window):
+    _app, window, _service, _controller, _messages = quick_window
+    adapter = window.runtime.meeting
+    general, english = [], []
+    adapter.changed.connect(lambda: general.append(True))
+    adapter.englishChanged.connect(lambda: english.append(True))
+    adapter._english_status_received({"ready": True, "busy": False})
+    adapter._english_status_received({"ready": True, "busy": False, "progress": 50})
+    assert general == []
+    assert len(english) == 2
+    adapter._english_status_received({"ready": True, "busy": True})
+    adapter._english_status_received({"ready": True, "busy": True, "progress": 75})
+    adapter._english_status_received({"ready": True, "busy": False})
+    assert len(general) == 2
+
+
+def test_recovered_timing_warning_is_visible_in_review(quick_window):
+    _app, window, service, controller, _messages = quick_window
+    sid = seed_meeting(controller)
+    meeting = service.get_meeting(sid)["meeting"]
+    rows = meeting["review_segments"]
+    rows[0]["quality_recovery"] = {"timing_requires_review": True}
+    rows[0]["alignment_warnings"] = ["approximate_recovered_timing"]
+    controller.meeting.store.set_diarization(
+        sid, diarization_segments=meeting["diarization_segments"], review_segments=rows
+    )
+    adapter = window.runtime.meeting
+    adapter.select(sid)
+    wait_until(lambda: adapter.segments.count == 2)
+    assert "tempi approssimativi" in adapter.segments.get(0)["quality_note"]
+
+
+def test_recovered_timing_warning_is_visible_in_archive(quick_window):
+    _app, window, _service, controller, _messages = quick_window
+    sid = seed_meeting(controller)
+    controller.history.append_quality_issues(sid, [{
+        "reason": "overlap_boundary_recovered", "start": 62, "end": 65,
+        "recovered": False, "timing_requires_review": True,
+    }])
+    archive = window.runtime.archive
+    archive.select(sid)
+    wait_until(lambda: archive.selected.get("id") == sid)
+    assert "Parole recuperate; tempi approssimativi" in archive.qualityDetails
+    assert "01:02–01:05" in archive.qualityDetails
 
 
 def test_long_review_does_not_send_document_through_qvariant_on_every_edit(

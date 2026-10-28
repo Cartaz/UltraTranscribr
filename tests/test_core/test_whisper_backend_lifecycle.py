@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import pytest
 import subprocess
 from unittest.mock import MagicMock
 
@@ -31,7 +32,9 @@ def test_cleanup_reports_process_that_survives_kill(caplog, tmp_path) -> None:
     backend._process = process
 
     with caplog.at_level(logging.WARNING, logger="core.whisper_backend"):
-        backend._cleanup_process()
+        with pytest.raises(RuntimeError):
+            backend._cleanup_process()
+    assert backend._process is process
 
     process.terminate.assert_called_once_with()
     process.kill.assert_called_once_with()
@@ -46,7 +49,9 @@ def test_cleanup_reports_terminate_oserror(caplog, tmp_path) -> None:
     backend._process = process
 
     with caplog.at_level(logging.WARNING, logger="core.whisper_backend"):
-        backend._cleanup_process()
+        with pytest.raises(RuntimeError):
+            backend._cleanup_process()
+    assert backend._process is process
 
     assert "Terminate/reap" in caplog.text
     assert "permission denied" in caplog.text

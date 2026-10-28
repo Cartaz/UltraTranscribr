@@ -25,6 +25,7 @@ class _FakeMeetingManager:
         *,
         language: str | None = None,
         num_speakers: int = 0,
+        pipeline: str = "qwen_meeting",
     ) -> dict[str, Any]:
         self._counter += 1
         self.busy = True
@@ -94,6 +95,34 @@ def _finish(manager: _FakeMeetingManager, session_id: str, status: str, error: s
     manager.emit("history_changed", session_id)
 
 
+def test_batch_keeps_explicit_english_pipeline_per_recording(harness, tmp_path, monkeypatch):
+    manager, queue, _ = harness
+    audio = tmp_path / "english.wav"
+    audio.write_bytes(b"audio")
+    selected = []
+
+    def start(path, *, language, num_speakers, pipeline):
+        selected.append((language, pipeline))
+        manager.busy = True
+        return {"id": "english-job", "status": "preparing_file"}
+
+    monkeypatch.setattr(manager, "start_file", start)
+    jobs = queue.enqueue([_entry(audio, language="en") | {"pipeline": "english_qwen"}])
+    assert selected == [("en", "english_qwen")]
+    assert jobs[0]["pipeline"] == "english_qwen"
+
+
+def test_invalid_english_pipeline_language_does_not_partially_enqueue(harness, tmp_path):
+    manager, queue, _ = harness
+    first, second = tmp_path / "one.wav", tmp_path / "two.wav"
+    first.write_bytes(b"audio")
+    second.write_bytes(b"audio")
+    with pytest.raises(ValueError, match="lingua inglese"):
+        queue.enqueue([_entry(first), _entry(second) | {"pipeline": "english_qwen"}])
+    assert queue.list_jobs() == []
+    assert manager.starts == []
+
+
 def test_batch_runs_fifo_with_independent_per_file_settings(harness, tmp_path: Path) -> None:
     manager, queue, _ = harness
     first = tmp_path / "one.wav"
@@ -139,7 +168,7 @@ def test_batch_tracks_both_pipeline_progresses(harness, tmp_path: Path) -> None:
     manager, queue, emitted = harness
     source = tmp_path / "meeting.flac"
     source.write_bytes(b"audio")
-    queue.enqueue([_entry(source, "auto", 0)])
+    queue.enqueue([_entry(source, "it", 0)])
 
     manager.emit(
         "meeting_updated",

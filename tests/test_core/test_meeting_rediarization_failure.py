@@ -118,6 +118,8 @@ def test_failed_rediarization_keeps_last_good_persisted_review(monkeypatch, tmp_
     manager._bus = EventBus()
     manager._lock = threading.RLock()
     manager._runtime = None
+    manager._english_preparing = False
+    manager._english_preparation = None
     manager._closed = False
     manager._shutdown_event = threading.Event()
 

@@ -20,6 +20,7 @@ from core.background_tasks import BackgroundTaskGroup
 from core.event_bus import EventBus
 from core.history_postprocess import generate_history_postprocess
 from core.meeting_batch import MeetingBatchCoordinator
+from core.meeting_engine import DEFAULT_MEETING_PIPELINE
 from core.session_recordings import delete_recording, recording_info
 from core.transcript_postprocess import profile_choices
 
@@ -455,6 +456,7 @@ class ApplicationService:
                     "language": str(entry.get("language") or "").strip()
                     or default_language,
                     "num_speakers": entry.get("num_speakers", 0),
+                    "pipeline": str(entry.get("pipeline") or DEFAULT_MEETING_PIPELINE),
                 }
             )
         return self.meeting_batch.enqueue(normalized)
@@ -478,18 +480,30 @@ class ApplicationService:
                 "Annulla o completa la coda Riunioni prima di avviare una riunione manuale"
             )
 
+    def english_pipeline_status(self) -> dict[str, Any]:
+        return self.meeting.english_pipeline_status()
+
+    def prepare_english_models(self) -> dict[str, Any]:
+        self._require_meeting_start_available()
+        return self.meeting.prepare_english_models()
+
+    def cancel_english_preparation(self) -> dict[str, Any]:
+        return self.meeting.cancel_english_preparation()
+
     def start_meeting_realtime(
         self,
         sources: list[dict[str, Any]],
         *,
         language: str | None,
         num_speakers: int,
+        pipeline: str = DEFAULT_MEETING_PIPELINE,
     ) -> dict[str, Any]:
         self._require_meeting_start_available()
         return self.meeting.start_realtime(
             sources,
             language=language,
             num_speakers=num_speakers,
+            pipeline=pipeline,
         )
 
     def start_meeting_file(
@@ -498,12 +512,14 @@ class ApplicationService:
         *,
         language: str | None,
         num_speakers: int,
+        pipeline: str = DEFAULT_MEETING_PIPELINE,
     ) -> dict[str, Any]:
         self._require_meeting_start_available()
         return self.meeting.start_file(
             file_path,
             language=language,
             num_speakers=num_speakers,
+            pipeline=pipeline,
         )
 
     def rerun_meeting_diarization(

@@ -60,6 +60,29 @@ Avvio canonico:
 .venv/bin/python main.py
 ```
 
+Le nuove **Riunioni** usano **Qwen3-ASR-1.7B** per il testo e **Community-1**
+con finestre di 3 secondi per gli interlocutori. Live, Dettatura e File continuano
+a usare Whisper; il modello predefinito resta **large-v3**.
+
+I componenti Qwen sono inclusi nell'installazione. In **Riunione**, usa
+**Prepara modelli riunioni** per scaricare e verificare circa 6,3 GB di modelli
+locali. Scegli `it` per l'italiano o `en` per l'inglese; ogni registrazione in coda
+conserva la propria lingua e il motore. Il numero di interlocutori può restare a 0.
+
+Whisper viene fermato e liberato prima dell'analisi della riunione. Qwen,
+l'allineamento delle parole e Community-1 lavorano in processi successivi;
+alla conclusione o all'annullamento i processi terminano e liberano i modelli.
+Al successivo avvio Live/File Whisper viene ricaricato automaticamente.
+L'avvio simultaneo di Live/File e Riunione è escluso, anche durante il cambio.
+Audio, trascrizioni e revisione restano sul computer.
+
+L'inglese conserva il doppio allineamento acustico CTC/Qwen validato nei test.
+L'italiano e le altre lingue supportate usano l'allineatore multilingue Qwen:
+il modello CTC inglese non viene usato su parole italiane. I miglioramenti di
+accuratezza misurati sull'inglese non sono una garanzia per l'italiano.
+Le riunioni precedenti mantengono il motore e le correzioni salvati.
+Il recupero sperimentale dei confini Whisper resta disattivato normalmente.
+
 `install.sh` è non interattivo rispetto ai componenti di inferenza e installa sempre:
 
 1. dipendenze applicative Python;

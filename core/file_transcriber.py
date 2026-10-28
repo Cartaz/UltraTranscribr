@@ -1,6 +1,7 @@
 """Progressive, bounded-memory file transcription worker."""
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import shutil
@@ -16,6 +17,7 @@ import numpy as np
 
 from config.constants import ProcessDefaults, SYCLDefaults
 from config.settings import Settings
+from core.boundary_recovery import recover_boundary
 from core.event_bus import EventBus
 from core.models import StatusEnum
 from core.text_dedup import deduplicate_text, remove_chunk_overlap
@@ -56,6 +58,11 @@ class FileTranscriberThread(threading.Thread):
         self._terminal_state: str | None = None
         self._conversion_process: Optional[subprocess.Popen[bytes]] = None
         self._conversion_lock = threading.Lock()
+        # Trial-only switch; the installed default remains unchanged until the
+        # complete application and independent evaluation have passed.
+        self._boundary_recovery = os.environ.get(
+            "ULTRATRANSCRIBR_EXPERIMENTAL_BOUNDARY_RECOVERY"
+        ) == "1" and not self._song_mode
 
     def _emit(self, event: str, payload: Any = None) -> None:
         if self._event_sink is not None:
@@ -129,6 +136,9 @@ class FileTranscriberThread(threading.Thread):
         full_parts: list[str] = []
         previous = ""
         last_segment_end_s = 0.0
+        decoder_previous = ""
+        decoder_cutoff = 0.0
+        boundary_history: list[dict[str, Any]] = []
         chunk_frames = int(ProcessDefaults.FILE_SEGMENT_LENGTH_S * 16000)
         overlap_frames = int(ProcessDefaults.FILE_OVERLAP_DURATION_S * 16000)
         step = max(1, chunk_frames - overlap_frames)
@@ -149,15 +159,40 @@ class FileTranscriberThread(threading.Thread):
                 if not raw:
                     break
                 text, raw_segments = self._request_checked_chunk(
-                    raw, previous[-500:] or None, offset / 16000.0
+                    raw, (decoder_previous if self._boundary_recovery else previous)[-500:] or None,
+                    offset / 16000.0,
                 )
                 # Preserve evidence of unresolved loops. Deleting them here
                 # would make the plain text disagree with the timed source.
                 if self._song_mode:
                     text = deduplicate_text(text, preserve_repetitions=True)
                 chunk_offset_s = offset / 16000.0
+                if self._boundary_recovery:
+                    # Reconstruct the unmodified decoder context independently
+                    # of recovered text, as in the validated prototype.
+                    baseline = self._normalize_chunk_segments(
+                        raw_segments, chunk_offset_s=chunk_offset_s,
+                        committed_before_s=decoder_cutoff,
+                    )
+                    def compact_text(value):
+                        return "".join(value.split())
+                    if raw_segments and compact_text(text) == compact_text(
+                        " ".join(str(s.get("text") or "") for s in raw_segments)
+                    ):
+                        decoder_text = " ".join(s["text"] for s in baseline)
+                    else:
+                        decoder_text = remove_chunk_overlap(decoder_previous, text)
+                    if decoder_text:
+                        decoder_previous = (decoder_previous + " " + decoder_text).strip()
+                    if baseline:
+                        decoder_cutoff = max(decoder_cutoff, max(s["end"] for s in baseline))
+                    recovered = recover_boundary(
+                        raw_segments, boundary_history, chunk_offset_s, last_segment_end_s
+                    )
+                else:
+                    recovered = []
                 segments = self._normalize_chunk_segments(
-                    raw_segments,
+                    recovered + raw_segments,
                     chunk_offset_s=chunk_offset_s,
                     committed_before_s=last_segment_end_s,
                 )
@@ -184,7 +219,24 @@ class FileTranscriberThread(threading.Thread):
                         last_segment_end_s,
                         max(float(segment["end"]) for segment in segments),
                     )
+                    if self._boundary_recovery:
+                        boundary_history.extend(copy.deepcopy(segments))
+                        floor = max(s["end"] for s in segments) - 60.0
+                        boundary_history = [s for s in boundary_history if s["end"] >= floor]
                     self._emit("file_transcriber_segments", segments)
+                    notices = []
+                    for segment in segments:
+                        evidence = segment.get("quality_recovery") or {}
+                        if evidence.get("reason") == "overlap_boundary_recovered":
+                            notices.append({
+                                "reason": "overlap_boundary_recovered",
+                                "start": evidence["original_audio_start"],
+                                "end": evidence["original_audio_end"],
+                                "recovered": False,
+                                "timing_requires_review": True,
+                            })
+                    if notices:
+                        self._emit("file_transcriber_quality", notices)
 
                 consumed = min(total, offset + len(raw) // 2)
                 frac = consumed / total

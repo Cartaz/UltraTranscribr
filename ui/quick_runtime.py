@@ -149,6 +149,7 @@ class QuickRuntime(QObject):
                 "preparing_vad": "Preparazione VAD",
                 "configuring_backend": "Configurazione backend",
                 "switching_model": "Cambio modello",
+                "meeting": "Motore riunioni",
             }.get(str(value), str(value))
         elif name == "audio_diagnostics":
             self._diagnostics = str(value)

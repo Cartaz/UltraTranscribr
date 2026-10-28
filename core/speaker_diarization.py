@@ -187,6 +187,18 @@ class SpeakerDiarizer:
             self._pipeline_path = model_path
             return pipeline
 
+    def release(self) -> None:
+        """Release cached XPU weights before another meeting engine starts."""
+        import gc
+
+        with self._pipeline_lock:
+            self._pipeline = None
+            self._pipeline_path = None
+        gc.collect()
+        torch = sys.modules.get("torch")
+        if torch is not None and hasattr(torch, "xpu") and torch.xpu.is_available():
+            torch.xpu.empty_cache()
+
     def run(
         self,
         audio_path: Path | str,

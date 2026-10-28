@@ -5,7 +5,7 @@ import QtQuick.Layouts
 ScrollView {
     id: page
     property bool fromFile: false
-    property real acquisitionHeight: 499.9375 + (fromFile ? Math.min(260, meetingDrafts.count * 92) : Math.max(0, Math.min(280, meetingSources.count * 61) - 61))
+    property real acquisitionHeight: 499.9375 + englishControls.implicitHeight + 12 + (fromFile ? Math.min(290, meetingDrafts.count * 132) : Math.max(0, Math.min(280, meetingSources.count * 61) - 61))
     clip: true
     contentWidth: availableWidth
     contentHeight: pageContent.implicitHeight + 32
@@ -162,7 +162,49 @@ ScrollView {
                     }
                     Help {
                         Layout.fillWidth: true
-                        text: 'Puoi selezionare più registrazioni. Verranno elaborate una alla volta con la stessa pipeline Whisper + Community-1, evitando inferenze GPU concorrenti.'
+                        text: 'Puoi selezionare più registrazioni e scegliere il percorso per ciascuna. Verranno elaborate una alla volta.'
+                    }
+                }
+                ColumnLayout {
+                    id: englishControls
+                    Layout.fillWidth: true
+                    FieldLabel { text: 'Motore riunioni' }
+                    NeuCombo {
+                        id: meetingPipelineChoice
+                        Layout.fillWidth: true
+                        model: meetingPipelines
+                        selectedValue: meeting.pipeline
+                        enabled: false
+                        onChosen: value => {
+                            if (meeting.selectPipeline(value)) {
+                                // The language stays with the recording.
+                            } else {
+                                meetingPipelineChoice.syncSelection();
+                            }
+                        }
+                    }
+                    Help {
+                        Layout.fillWidth: true
+                        text: meeting.englishStatus.error || (meeting.englishStatus.ready ? 'Qwen pronto. Testo e interlocutori vengono elaborati sul computer.' : 'Il motore riunioni richiede circa ' + (meeting.englishStatus.download_gb || '—') + ' GB di modelli locali.')
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        NeuButton {
+                            text: meeting.englishStatus.ready ? 'Verifica modelli riunioni' : 'Prepara modelli riunioni'
+                            enabled: !meeting.busy && !!meeting.englishStatus.dependencies_ready
+                            onClicked: meeting.prepareEnglish()
+                        }
+                        NeuButton {
+                            visible: !!meeting.englishStatus.busy
+                            text: meeting.englishStatus.cancelling ? 'Arresto…' : 'Annulla preparazione'
+                            enabled: !meeting.englishStatus.cancelling
+                            onClicked: meeting.cancelEnglish()
+                        }
+                    }
+                    NeuProgress {
+                        visible: !!meeting.englishStatus.busy
+                        Layout.fillWidth: true
+                        value: meeting.englishStatus.progress || 0
                     }
                 }
                 RowLayout {
@@ -177,6 +219,7 @@ ScrollView {
                             id: language
                             Layout.fillWidth: true
                             text: settings.values.language || 'auto'
+                            readOnly: false
                         }
                     }
                     ColumnLayout {
@@ -204,7 +247,7 @@ ScrollView {
                     id: drafts
                     visible: page.fromFile && meetingDrafts.count > 0
                     Layout.fillWidth: true
-                    Layout.preferredHeight: Math.min(260, meetingDrafts.count * 92)
+                    Layout.preferredHeight: Math.min(290, meetingDrafts.count * 132)
                     model: meetingDrafts
                     reuseItems: true
                     cacheBuffer: 0
@@ -214,7 +257,7 @@ ScrollView {
                         required property var record
                         required property int index
                         width: drafts.width - 8
-                        height: 83
+                        height: 123
                         Help {
                             Layout.fillWidth: true
                             text: record.path
@@ -223,24 +266,40 @@ ScrollView {
                         }
                         RowLayout {
                             Layout.fillWidth: true
-                            NeuField {
+                            NeuCombo {
+                                id: draftPipelineChoice
+                                objectName: 'draftPipeline' + index
                                 Layout.fillWidth: true
-                                text: record.language
-                                onTextEdited: meeting.editDraft(index, 'language', text)
-                            }
-                            NeuField {
-                                Layout.preferredWidth: 80
-                                text: String(record.num_speakers)
-                                validator: IntValidator {
-                                    bottom: 0
-                                    top: 20
+                                model: meetingPipelines
+                                selectedValue: record.pipeline || 'qwen_meeting'
+                                onChosen: value => {
+                                    if (!meeting.editDraft(index, 'pipeline', value))
+                                        draftPipelineChoice.syncSelection();
                                 }
-                                onTextEdited: meeting.editDraft(index, 'num_speakers', Number(text))
                             }
                             NeuButton {
                                 text: 'Rimuovi'
                                 compact: true
                                 onClicked: meeting.removeDraft(index)
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            FieldLabel { text: 'Lingua' }
+                            NeuField {
+                                objectName: 'draftLanguage' + index
+                                Layout.fillWidth: true
+                                text: record.language
+                                readOnly: false
+                                onTextEdited: meeting.editDraft(index, 'language', text)
+                            }
+                            FieldLabel { text: 'Interlocutori' }
+                            NeuField {
+                                objectName: 'draftSpeakers' + index
+                                Layout.preferredWidth: 65
+                                text: String(record.num_speakers)
+                                validator: IntValidator { bottom: 0; top: 20 }
+                                onTextEdited: meeting.editDraft(index, 'num_speakers', Number(text))
                             }
                         }
                     }
@@ -252,7 +311,7 @@ ScrollView {
                     NeuButton {
                         text: page.fromFile ? (meetingDrafts.count > 1 ? 'Avvia batch (' + meetingDrafts.count + ')' : 'Analizza registrazione') : 'Avvia riunione'
                         selected: true
-                        enabled: !runtime.busy
+                        enabled: !runtime.busy && !!meeting.englishStatus.ready
                         onClicked: meeting.start(page.fromFile, language.text, Number(speakerCount.text))
                     }
                     NeuButton {
@@ -318,7 +377,7 @@ ScrollView {
                         Metric {
                             Layout.fillWidth: true
                             label: 'Modello'
-                            value: Theme.modelName(meeting.runtime.model)
+                            value: meeting.runtime.pipeline === 'english_qwen' ? 'Qwen3 ASR' : Theme.modelName(meeting.runtime.model)
                         }
                         Metric {
                             Layout.fillWidth: true
@@ -329,6 +388,11 @@ ScrollView {
                 }
                 FieldLabel {
                     text: 'Trascrizione'
+                }
+                Help {
+                    Layout.fillWidth: true
+                    visible: !!meeting.runtime.processing_stage && ['completed', 'error', 'cancelled', 'interrupted'].indexOf(meeting.runtime.status) < 0
+                    text: meeting.runtime.processing_stage || ''
                 }
                 NeuProgress {
                     Layout.fillWidth: true
@@ -562,7 +626,7 @@ ScrollView {
                 }
                 Help {
                     Layout.fillWidth: true
-                    text: "Riusa l'audio e i segmenti Whisper già salvati: Whisper non viene rilanciato. Le correzioni manuali e i nomi degli interlocutori vengono conservati."
+                    text: "Riusa l'audio e il testo già salvati senza ripetere la trascrizione. Le correzioni manuali e i nomi degli interlocutori vengono conservati."
                 }
                 Help {
                     Layout.fillWidth: true
@@ -623,7 +687,7 @@ ScrollView {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 220
                     text: meeting.review.full_text || meeting.review.text || ''
-                    placeholder: 'Raw Whisper'
+                    placeholder: 'Trascrizione originale'
                 }
                 Item {
                     Layout.fillHeight: true
@@ -670,7 +734,7 @@ ScrollView {
                 }
                 Help {
                     Layout.fillWidth: true
-                    text: 'Speaker e testo possono essere corretti senza modificare il raw Whisper. Le nuove trascrizioni usano i timestamp parola-per-parola per separare cambi di interlocutore dentro lo stesso segmento Whisper. Le riunioni più vecchie restano modificabili manualmente.'
+                    text: 'Speaker e testo possono essere corretti senza modificare il testo originale. Le nuove trascrizioni usano i timestamp parola-per-parola per separare cambi di interlocutore dentro lo stesso segmento riconosciuto. Le riunioni più vecchie restano modificabili manualmente.'
                 }
                 ListView {
                     id: review

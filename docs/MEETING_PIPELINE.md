@@ -21,8 +21,9 @@ realtime sources -> separate tracks -> synchronized canonical mix --+
 file media ---------> normalized canonical recording -------------+
                                                                   |
                                                                   v
-                                                     final Whisper transcript
-                                                     whisper.cpp / SYCL
+                                                     final Qwen3-ASR transcript
+                                                        Qwen / XPU
+                                               Qwen alignment / CPU
                                                 segments + word timestamps
                                                                   |
                                                                   v
@@ -41,6 +42,8 @@ file media ---------> normalized canonical recording -------------+
                                                       review / export
 ```
 
+L’analisi usa il motore Qwen delle riunioni; Live, Dettatura e File mantengono Whisper large-v3. Il gestore ferma Whisper sotto lo stesso lock del caricamento, attende l’uscita dei processi di ogni fase Qwen e poi consente di ricaricare Whisper. Il percorso inglese usa CTC/Qwen con soglia 0,2; italiano e altre lingue supportate usano soltanto l’allineatore multilingue Qwen. Il manifest fissa modelli e parametri Community-1 (finestra 3 s). I metadati registrano `qwen_meeting`, lingua, impronte e provenienza; `english_qwen` e Whisper restano leggibili per gli archivi precedenti.
+
 La diarizzazione usa esclusivamente `pyannote/speaker-diarization-community-1`. Se il numero di interlocutori è noto viene passato come `num_speakers`; `0` mantiene il conteggio automatico.
 
 Le reti neurali di Community-1 vengono eseguite sul runtime condiviso PyTorch XPU della GPU Intel. UltraTranscribr non effettua fallback automatico a CPU o al precedente backend sherpa-onnx: un runtime XPU non disponibile produce un errore esplicito.
@@ -58,7 +61,7 @@ segment
     word / start / end / probability
 ```
 
-`meeting_alignment.align_speakers` usa `exclusive_speaker_diarization` per assegnare ogni parola a uno speaker. Parole contigue attribuite allo stesso speaker vengono raggruppate in un intervento di review. Se un singolo segmento Whisper contiene un cambio A -> B, il segmento viene quindi spezzato senza modificare il transcript raw.
+`meeting_alignment.align_speakers` usa `exclusive_speaker_diarization` per assegnare ogni parola a uno speaker. Parole contigue attribuite allo stesso speaker vengono raggruppate in un intervento di review. Se un singolo segmento riconosciuto contiene un cambio A -> B, il segmento viene quindi spezzato senza modificare il transcript raw.
 
 Le riunioni storiche che non contengono `words` restano compatibili: per esse l'allineamento usa il precedente calcolo a livello di segmento basato sulla sovrapposizione temporale dominante. Non viene inventato timing che non esiste.
 
@@ -91,7 +94,7 @@ La review espone **Ricalcola diarizzazione** finché il FLAC canonico della Riun
 ```text
 FLAC canonico persistito -----------+
                                     |
-segmenti Whisper persistiti --------+--> Community-1 / XPU
+segmenti riconosciuti persistiti --------+--> Community-1 / XPU
                                              |
                                   +----------+----------+
                                   |                     |

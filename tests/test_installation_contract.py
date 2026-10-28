@@ -3,8 +3,41 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize("enabled,valid", [(False, True), (True, True), (True, False)])
+def test_optional_english_installation_checks_runtime_and_propagates_failure(
+    tmp_path, enabled, valid
+):
+    environment = tmp_path / "environment"
+    binaries = environment / "bin"
+    binaries.mkdir(parents=True)
+    log = tmp_path / "calls"
+    for executable, body in {
+        "pip": 'printf "install\\n" >> "$1"\n',
+        "python": 'cat >/dev/null\nprintf "verify\\n" >> "$1"\n',
+    }.items():
+        # Substitute a fixed, shell-quoted path before ignoring the tool's args.
+        import shlex
+        body = body.replace('"$1"', shlex.quote(str(log)))
+        if executable == "python" and not valid:
+            body += "exit 2\n"
+        path = binaries / executable
+        path.write_text("#!/usr/bin/env bash\n" + body)
+        path.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "-c", 'source "$1"; VENV="$2"; INSTALL_ENGLISH="$3"; install_english_dependencies',
+         "english-install-test", str(ROOT / "install.sh"), str(environment),
+         "1" if enabled else "0"],
+        capture_output=True, text=True, check=False,
+    )
+    assert (result.returncode == 0) == (not enabled or valid)
+    assert (log.read_text().splitlines() if log.exists() else []) == (
+        ["install", "verify"] if enabled else []
+    )
 
 
 def test_install_script_has_valid_bash_syntax() -> None:

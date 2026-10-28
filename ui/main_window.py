@@ -106,6 +106,7 @@ class MainWindow(QObject):
             whisperModels=self.runtime.settings.models,
             meetingSources=self.runtime.meeting.sources,
             meetingDrafts=self.runtime.meeting.drafts,
+            meetingPipelines=self.runtime.meeting.pipelines,
             meetingQueue=self.runtime.meeting.queue,
             meetingSegments=self.runtime.meeting.segments,
             meetingSpeakers=self.runtime.meeting.speakers,

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -20,15 +21,16 @@ from core.file_batch import FileBatchCoordinator
 from core.file_transcriber import FileTranscriberThread
 from core.inference_scheduler import InferencePriority
 from core.live_sessions import LiveSessionManager
+from core.meeting_engine import MeetingEngineStillRunning
 from core.meeting_manager import MeetingManager
 from core.models import StatusEnum
 from core.pactl import PactlRunner
 from core.prioritized_whisper_backend import PrioritizedWhisperBackend
 from core.sink_finder import find_source
+from core.speaker_diarization import shutdown_diarization_runtime
 from core.transcript_history import TranscriptHistoryStore
 from core.whisper_gpu_detect import detect_gpu_backend
 from core.whisper_models import WhisperModelManager
-from core.speaker_diarization import shutdown_diarization_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +71,9 @@ class _MeetingControllerView:
 
     def is_file_busy(self) -> bool:
         return self._controller.is_file_busy()
+
+    def meeting_engine_session(self):
+        return self._controller.meeting_engine_session()
 
     def ensure_backend_started(
         self,
@@ -159,6 +164,7 @@ class AppController:
 
         self._lock = threading.RLock()
         self._backend_init_lock = threading.Lock()
+        self._meeting_engine_active = threading.Event()
         self._model_operation_lock = threading.Lock()
         self._generation = 0
         self._file_thread: Optional[FileTranscriberThread] = None
@@ -297,7 +303,11 @@ class AppController:
     ) -> None:
         cfg = settings or self._settings
         wanted = cfg.vad_filter if vad is None else bool(vad)
+        if self._meeting_engine_active.is_set():
+            raise RuntimeError("Attendi la fine della riunione prima di caricare Whisper")
         with self._backend_init_lock:
+            if self._meeting_engine_active.is_set():
+                raise RuntimeError("Attendi la fine della riunione prima di caricare Whisper")
             with self._lock:
                 already = self._backend_started and self._backend.is_running
                 loaded_model = self._backend_model_size
@@ -362,6 +372,34 @@ class AppController:
                 self._backend_started = True
                 self._backend_model_size = cfg.model_size
             self._bus.emit("backend_status_changed", "ready")
+
+    @contextmanager
+    def meeting_engine_session(self):
+        """Hold GPU ownership until all meeting worker processes have exited."""
+        with self._backend_init_lock:
+            if self._shutdown_started:
+                raise RuntimeError("Il programma si sta chiudendo")
+            if self._meeting_engine_active.is_set():
+                raise RuntimeError("Il precedente motore riunioni non si è arrestato")
+            self._meeting_engine_active.set()
+            released = True
+            try:
+                self._bus.emit("backend_status_changed", "switching_model")
+                self._backend.stop()
+                if self._backend.is_running:
+                    raise RuntimeError("Whisper non si è arrestato: cambio motore interrotto")
+                with self._lock:
+                    self._backend_started = False
+                    self._backend_model_size = None
+                self._bus.emit("backend_status_changed", "meeting")
+                yield
+            except MeetingEngineStillRunning:
+                released = False
+                raise
+            finally:
+                if released:
+                    self._meeting_engine_active.clear()
+                    self._bus.emit("backend_status_changed", "standby")
 
     def _ensure_backend_for_live_session(self, settings: Settings) -> None:
         self.ensure_backend_started(vad=settings.vad_filter, settings=settings)

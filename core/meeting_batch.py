@@ -14,6 +14,11 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from core.background_tasks import BackgroundTaskGroup
+from core.meeting_engine import (
+    DEFAULT_MEETING_PIPELINE,
+    QWEN_PIPELINES,
+    meeting_language,
+)
 
 
 class MeetingBatchManager(Protocol):
@@ -38,6 +43,7 @@ class MeetingBatchJob:
     path: str
     language: str
     num_speakers: int
+    pipeline: str = DEFAULT_MEETING_PIPELINE
     status: str = "queued"
     phase: str = "queued"
     transcription_progress: int = 0
@@ -113,6 +119,7 @@ class MeetingBatchCoordinator:
                         path=entry["path"],
                         language=entry["language"],
                         num_speakers=entry["num_speakers"],
+                        pipeline=entry["pipeline"],
                     )
                 )
         self._emit_changed()
@@ -180,6 +187,13 @@ class MeetingBatchCoordinator:
             language = str(entry.get("language") or "").strip()
             if not language:
                 raise ValueError(f"lingua non valida per {path.name}")
+            pipeline = str(entry.get("pipeline") or DEFAULT_MEETING_PIPELINE)
+            if pipeline not in {"whisper", *QWEN_PIPELINES}:
+                raise ValueError("percorso riunione non valido")
+            if pipeline == "english_qwen" and language != "en":
+                raise ValueError("Il percorso Qwen verificato richiede la lingua inglese (en)")
+            if pipeline in QWEN_PIPELINES:
+                meeting_language(language)
             try:
                 count = int(entry.get("num_speakers", 0))
             except (TypeError, ValueError) as exc:
@@ -195,6 +209,7 @@ class MeetingBatchCoordinator:
                     "path": resolved_path,
                     "language": language,
                     "num_speakers": count,
+                    "pipeline": pipeline,
                 }
             )
         return normalized
@@ -226,6 +241,7 @@ class MeetingBatchCoordinator:
                 job.path,
                 language=job.language,
                 num_speakers=job.num_speakers,
+                pipeline=job.pipeline,
             )
         except Exception as exc:
             with self._lock:

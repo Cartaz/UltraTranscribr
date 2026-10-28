@@ -120,6 +120,15 @@ class MeetingStore:
             data["recording"] = dict(recording)
             self._write(session_id, data)
 
+    def set_processing_pipeline(self, session_id: str, pipeline: str,
+                                provenance: dict[str, Any] | None = None) -> None:
+        if pipeline not in {"whisper", "english_qwen", "qwen_meeting"}:
+            raise ValueError("percorso riunione non valido")
+        with self._lock:
+            data = self._require(session_id)
+            data["processing_pipeline"] = {"id": pipeline, "provenance": dict(provenance or {})}
+            self._write(session_id, data)
+
     def set_source_recordings(
         self,
         session_id: str,

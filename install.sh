@@ -13,6 +13,7 @@ REQ_MARKER="$VENV/.ultratranscribr-requirements.sha256"
 BUILD_MARKER="$VENV/.ultratranscribr-whisper-build.sha256"
 WHISPER_REVISION_MARKER="$VENV/.ultratranscribr-whisper-revision"
 FORCE_REBUILD="${ULTRATRANSCRIBR_FORCE_REBUILD:-0}"
+INSTALL_ENGLISH="${ULTRATRANSCRIBR_ENGLISH:-1}"
 TORCH_VERSION="2.9.1"
 TORCHAUDIO_VERSION="2.9.1"
 TORCHCODEC_VERSION="0.9.1"
@@ -89,11 +90,24 @@ build_key() {
   local revision="$1"
   {
     printf '%s\n' "$revision"
+    sha256sum "$ROOT/patches/whisper-vad-word-timestamps.patch"
     printf '%s\n' 'GGML_SYCL=ON|Release|icx|icpx|whisper-server'
     icx --version | head -1
     icpx --version | head -1
     cmake --version | head -1
   } | sha256sum | awk '{print $1}'
+}
+
+install_english_dependencies() {
+  [[ "$INSTALL_ENGLISH" == "1" ]] || return 0
+  log "Preparazione componenti per il motore delle riunioni..."
+  "$VENV/bin/pip" install -r "$ROOT/requirements-english.txt"
+  # Check the optional stack without loading weights or starting GPU inference.
+  (cd "$ROOT" && "$VENV/bin/python" - <<'PY'
+from core.english_models import EnglishModelManager
+EnglishModelManager().dependencies()
+PY
+  ) || die "Verifica componenti riunioni fallita"
 }
 
 install_python_dependencies() {
@@ -187,6 +201,10 @@ prepare_whisper_source() {
 
   git -C "$WCPP" checkout --detach --force "$WHISPER_REVISION" \
     || die "Checkout whisper.cpp $WHISPER_REVISION fallito"
+  git -C "$WCPP" apply --check "$ROOT/patches/whisper-vad-word-timestamps.patch" \
+    || die "La correzione dei tempi non è compatibile con questa revisione whisper.cpp"
+  git -C "$WCPP" apply "$ROOT/patches/whisper-vad-word-timestamps.patch" \
+    || die "Applicazione della correzione dei tempi fallita"
   log "whisper.cpp: $WHISPER_REF -> $WHISPER_REVISION"
 }
 
@@ -368,6 +386,7 @@ main() {
   fi
 
   install_python_dependencies
+  install_english_dependencies
   remove_legacy_parakeet_runtime
   build_whisper_stack
   ensure_default_models

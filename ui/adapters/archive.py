@@ -50,6 +50,7 @@ class ArchiveAdapter(Adapter):
     @Property(str, notify=changed)
     def qualityDetails(self):
         labels = {
+            "overlap_boundary_recovered": "Parole recuperate; tempi approssimativi",
             "repetition_loop": "Ripetizione sospetta",
             "uncovered_audio": "Audio senza testo riconosciuto",
             "word_text_mismatch": "Tempi delle parole incompleti",

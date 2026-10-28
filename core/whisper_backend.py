@@ -148,8 +148,10 @@ class WhisperBackend:
     def stop(self) -> None:
         with self._lifecycle_lock:
             self._pool_stopping = True
-            self._cleanup_process()
-            self._cleanup_aux_backends()
+            try:
+                self._cleanup_process()
+            finally:
+                self._cleanup_aux_backends()
 
     def abort_active_request(self) -> None:
         with self._lifecycle_lock:
@@ -328,13 +330,17 @@ class WhisperBackend:
 
     def _cleanup_aux_backends(self) -> None:
         backends = self._aux_backends
-        self._aux_backends = []
+        failed = []
         self._pool_queue = None
         for backend in backends:
             try:
                 backend.stop()
             except Exception:
                 logger.exception("Arresto istanza whisper-server ausiliaria fallito")
+                failed.append(backend)
+        self._aux_backends = failed
+        if failed:
+            raise RuntimeError("Un'istanza Whisper non si è arrestata: impossibile cambiare motore")
 
     def _reset_pool_queue(self) -> None:
         if not self._aux_backends:
@@ -369,7 +375,6 @@ class WhisperBackend:
 
     def _cleanup_process(self) -> None:
         p = self._process
-        self._process = None
         if p is not None and p.poll() is None:
             try:
                 p.terminate()
@@ -387,18 +392,24 @@ class WhisperBackend:
                         "whisper-server%s non reaped entro 2s dopo kill",
                         self._instance_label,
                     )
+                    raise RuntimeError("Whisper non si è arrestato dopo il tentativo di chiusura")
                 except OSError as exc:
                     logger.warning(
                         "Kill/reap whisper-server%s fallito: %s",
                         self._instance_label,
                         exc,
                     )
+                    if p.poll() is None:
+                        raise RuntimeError("Impossibile liberare il modello Whisper") from exc
             except OSError as exc:
                 logger.warning(
                     "Terminate/reap whisper-server%s fallito: %s",
                     self._instance_label,
                     exc,
                 )
+                if p.poll() is None:
+                    raise RuntimeError("Impossibile liberare il modello Whisper") from exc
+        self._process = None
         if self._log_file_handle and not self._log_file_handle.closed:
             try:
                 self._log_file_handle.close()
@@ -552,6 +563,11 @@ class WhisperBackend:
             ("response_format", "verbose_json" if verbose else "json"),
             ("beam_size", str(self._settings.beam_size)),
         ]
+        if verbose:
+            # whisper.cpp may attempt language detection without audio after
+            # VAD removes silence. The application does not use probabilities;
+            # disabling their calculation avoids that failing decoder path.
+            fields.append(("no_language_probabilities", "true"))
         if openai_compat:
             fields.append(("model", "whisper-1"))
         parts: list[bytes] = [

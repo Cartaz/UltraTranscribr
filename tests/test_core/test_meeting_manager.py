@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 import threading
 import time
 from pathlib import Path
@@ -32,6 +33,11 @@ class _Controller:
         self.live_count = 0
         self.file_busy = False
         self.backend_starts = 0
+
+    @contextmanager
+    def meeting_engine_session(self):
+        self.backend.stop()
+        yield
 
     def active_live_count(self) -> int:
         return self.live_count
@@ -158,6 +164,44 @@ def _manager(
     return controller, manager
 
 
+def test_english_preparation_owns_busy_state_and_can_be_cancelled(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    _controller, manager = _manager(monkeypatch, tmp_path)
+    manager.english_models = SimpleNamespace(
+        dependencies=lambda: {}, missing=lambda: [], models={}, root=tmp_path
+    )
+    manager.english_diarization_models = SimpleNamespace(
+        root=tmp_path, status=lambda: {"ready": True}
+    )
+
+    class Preparation:
+        def __init__(self, *args, **kwargs):
+            assert kwargs["prepare_models_only"] is True
+            self.alive = False
+        def start(self):
+            self.alive = True
+        def is_alive(self):
+            return self.alive
+        def stop(self):
+            self.alive = False
+        def join(self, timeout=None):
+            pass
+
+    monkeypatch.setattr(meeting_module, "EnglishMeetingThread", Preparation)
+    try:
+        assert manager.prepare_english_models()["busy"]
+        assert manager.is_busy()
+        first = manager._english_preparation
+        manager.prepare_english_models()
+        assert manager._english_preparation is first
+        assert manager.cancel_english_preparation()["ready"]
+        assert not manager.is_busy()
+        assert not first.is_alive()
+    finally:
+        manager.shutdown()
+
+
 def _single_microphone() -> list[dict[str, object]]:
     return [{"source": "microphone", "selected_input": "Test Mic"}]
 
@@ -180,7 +224,7 @@ def _completed_meeting(
         _single_microphone(),
         language="it",
         num_speakers=num_speakers,
-    )
+     pipeline="whisper")
     manager.finish()
     _wait_until(lambda: manager.snapshot()["status"] == "completed")
     return str(started["id"])
@@ -194,10 +238,72 @@ def test_meeting_exposes_only_canonical_start_entrypoints(monkeypatch, tmp_path:
     assert callable(manager.rerun_diarization)
 
 
+def test_english_pipeline_requires_explicit_english_language(monkeypatch, tmp_path):
+    _, manager = _manager(monkeypatch, tmp_path)
+    with pytest.raises(ValueError, match="lingua inglese"):
+        manager.start_realtime(_single_microphone(), language="it", pipeline="english_qwen")
+    assert manager.snapshot() is None
+    manager.shutdown()
+
+
+@pytest.mark.parametrize("pipeline,language", [("english_qwen", "en"), ("qwen_meeting", "en"), (None, "it")])
+def test_qwen_meeting_and_voice_rerun_preserve_provenance_and_edits(monkeypatch, tmp_path, pipeline, language):
+    from types import SimpleNamespace
+
+    controller, manager = _manager(monkeypatch, tmp_path)
+    manager.english_models = SimpleNamespace(root=tmp_path / "english", dependencies=lambda: {}, missing=lambda: [])
+    manager.models.root = tmp_path / "diarization"
+    manager.english_diarization_models = manager.models
+    stopped, released, operations = [], [], []
+    monkeypatch.setattr(controller.backend, "stop", lambda: stopped.append(True), raising=False)
+    monkeypatch.setattr(manager.diarizer, "release", lambda: released.append(True), raising=False)
+
+    class EnglishWorker(_FakeFileWorker):
+        def __init__(self, path, *, event_sink, diarization_only=False, **kwargs):
+            self.event_sink = event_sink
+            self.alive = False
+            self.diarization_only = diarization_only
+            operations.append(diarization_only)
+            self.provenance = {"pipeline": "verified-fixture", "source_audit": {"complete_audio_coverage": True}}
+            self.exclusive_segments = [{"start": 0, "end": .5, "speaker_id": "SPEAKER_00"}]
+            self.speaker_segments = list(self.exclusive_segments)
+            self._terminal_state = "completed"
+
+        def start(self):
+            if not self.diarization_only:
+                self.event_sink("file_transcriber_new_text", "One two")
+                self.event_sink("file_transcriber_segments", [{"start": 0, "end": .5, "text": "One two"}])
+            self.event_sink("file_transcriber_progress", 100)
+
+    monkeypatch.setattr(meeting_module, "EnglishMeetingThread", EnglishWorker)
+    started = manager.start_realtime(_single_microphone(), language=language,
+                                     **({"pipeline": pipeline} if pipeline else {}))
+    manager.finish()
+    _wait_until(lambda: manager.snapshot()["status"] == "completed")
+    session = started["id"]
+    saved = manager.get(session)
+    assert saved["text"] == "One two"
+    assert saved["meeting"]["processing_pipeline"]["id"] == (pipeline or "qwen_meeting")
+    assert saved["meeting"]["processing_pipeline"]["provenance"]["pipeline"] == "verified-fixture"
+    assert controller.backend_starts == 0
+    assert manager.diarizer.calls == []
+    manager.store.edit_review_segment(session, 0, "Edited words")
+    manager.store.set_speaker_name(session, "SPEAKER_00", "Alice")
+    manager.rerun_diarization(session, num_speakers=1)
+    _wait_until(lambda: not manager.is_busy())
+    saved = manager.get(session)
+    assert saved["text"] == "One two"
+    assert saved["meeting"]["review_segments"][0]["text"] == "Edited words"
+    assert saved["meeting"]["speaker_names"]["SPEAKER_00"] == "Alice"
+    assert operations == [False, True]
+    assert len(stopped) == len(released) == 2
+    manager.shutdown()
+
+
 def test_meeting_start_finish_processes_to_reviewable_session(monkeypatch, tmp_path: Path) -> None:
     controller, manager = _manager(monkeypatch, tmp_path)
 
-    started = manager.start_realtime(_single_microphone(), language="it", num_speakers=1)
+    started = manager.start_realtime(_single_microphone(), language="it", num_speakers=1, pipeline="whisper")
     assert started["status"] == "recording"
     assert started["mode"] == "realtime"
 
@@ -298,7 +404,7 @@ def test_realtime_meeting_records_multiple_sources_as_tracks(monkeypatch, tmp_pa
         ],
         language="it",
         num_speakers=0,
-    )
+     pipeline="whisper")
     assert len(started["sources"]) == 2
 
     manager.finish()
@@ -318,7 +424,7 @@ def test_meeting_from_file_converges_on_same_analysis(monkeypatch, tmp_path: Pat
     source = tmp_path / "phone-recording.wav"
     sf.write(source, np.linspace(-0.1, 0.1, 8000, dtype=np.float32), 16000)
 
-    started = manager.start_file(source, language="it", num_speakers=1)
+    started = manager.start_file(source, language="it", num_speakers=1, pipeline="whisper")
     assert started["mode"] == "file"
     assert started["status"] == "preparing_file"
 
@@ -339,7 +445,7 @@ def test_duplicate_realtime_source_is_rejected(monkeypatch, tmp_path: Path) -> N
                 {"source": "microphone", "selected_input": "Test Mic"},
                 {"source": "microphone", "selected_input": "Test Mic"},
             ]
-        )
+        , pipeline="whisper")
     except ValueError as exc:
         assert "due volte" in str(exc)
     else:
@@ -348,7 +454,7 @@ def test_duplicate_realtime_source_is_rejected(monkeypatch, tmp_path: Path) -> N
 
 def test_finish_returns_while_capture_join_is_still_blocked(monkeypatch, tmp_path: Path) -> None:
     _, manager = _manager(monkeypatch, tmp_path, capture_cls=_BlockingCapture)
-    manager.start_realtime(_single_microphone())
+    manager.start_realtime(_single_microphone(), pipeline="whisper")
     runtime = manager._runtime
     assert runtime is not None and runtime.capture is not None
     capture = runtime.capture.tracks[0].capture
@@ -366,7 +472,7 @@ def test_finish_returns_while_capture_join_is_still_blocked(monkeypatch, tmp_pat
 
 def test_cancel_returns_while_capture_join_is_still_blocked(monkeypatch, tmp_path: Path) -> None:
     _, manager = _manager(monkeypatch, tmp_path, capture_cls=_BlockingCapture)
-    manager.start_realtime(_single_microphone())
+    manager.start_realtime(_single_microphone(), pipeline="whisper")
     runtime = manager._runtime
     assert runtime is not None and runtime.capture is not None
     capture = runtime.capture.tracks[0].capture
@@ -385,7 +491,7 @@ def test_meeting_is_exclusive_with_live_and_file(monkeypatch, tmp_path: Path) ->
     controller, manager = _manager(monkeypatch, tmp_path)
     controller.live_count = 1
     try:
-        manager.start_realtime(_single_microphone())
+        manager.start_realtime(_single_microphone(), pipeline="whisper")
     except RuntimeError as exc:
         assert "Live/File" in str(exc)
     else:
@@ -394,7 +500,7 @@ def test_meeting_is_exclusive_with_live_and_file(monkeypatch, tmp_path: Path) ->
     controller.live_count = 0
     controller.file_busy = True
     try:
-        manager.start_realtime(_single_microphone())
+        manager.start_realtime(_single_microphone(), pipeline="whisper")
     except RuntimeError as exc:
         assert "Live/File" in str(exc)
     else:
@@ -403,7 +509,7 @@ def test_meeting_is_exclusive_with_live_and_file(monkeypatch, tmp_path: Path) ->
 
 def test_shutdown_during_recording_preserves_audio_and_marks_interrupted(monkeypatch, tmp_path: Path) -> None:
     _, manager = _manager(monkeypatch, tmp_path)
-    started = manager.start_realtime(_single_microphone())
+    started = manager.start_realtime(_single_microphone(), pipeline="whisper")
 
     manager.shutdown()
 

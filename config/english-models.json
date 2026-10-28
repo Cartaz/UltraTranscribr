@@ -1,0 +1,194 @@
+{
+  "pipeline": "qwen-dual-alignment-community3",
+  "transformers_version": "5.17.0",
+  "models": [
+    {
+      "name": "qwen-asr",
+      "repository": "Qwen/Qwen3-ASR-1.7B-hf",
+      "revision": "bcd2b5b7f32b480ab5790554cfa8347f246a14f3",
+      "files": [
+        {
+          "name": "chat_template.jinja",
+          "bytes": 1434,
+          "sha256": "f50e6b694fbf4a683206e37869990d68333fe95d285730f084c838a34b0d98c2"
+        },
+        {
+          "name": "README.md",
+          "bytes": 16538,
+          "sha256": "427b9a6a4a32477e9df8790ef92f5cbcde790ee148ee5dd8c36f77d9556998a2"
+        },
+        {
+          "name": "config.json",
+          "bytes": 2399,
+          "sha256": "117ac8e63e2af7cae3665e5a632d6eb03f5f384915519ceb6403c15ec6533f63"
+        },
+        {
+          "name": "generation_config.json",
+          "bytes": 165,
+          "sha256": "9939fc9388b79bd70757f938b87381e817173d6a6158f5af6506c0b73e775c3c"
+        },
+        {
+          "name": "processor_config.json",
+          "bytes": 487,
+          "sha256": "bc0b230081b44e629dd5b9045b78495615c1831b4b9f4cffe97bd37e82a6156a"
+        },
+        {
+          "name": "tokenizer.json",
+          "bytes": 11429653,
+          "sha256": "fe1fad59be22a41ee293363fcf95fdedbc7c93f3b49270b1d2e18bd1399a7a05"
+        },
+        {
+          "name": "tokenizer_config.json",
+          "bytes": 998,
+          "sha256": "945e980986de2ca7768f3326bfdbb4fbea3406f972b8ae0be233089f2b253c11"
+        },
+        {
+          "name": "model.safetensors",
+          "bytes": 4076193080,
+          "sha256": "2db53c7d81bd9b8cbc6a074e89be2c968a0d373fb4ee68bb1b1e14f7042dfee1"
+        }
+      ],
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "qwen-aligner",
+      "repository": "Qwen/Qwen3-ForcedAligner-0.6B-hf",
+      "revision": "c07281df297b9905d24a508279258cccf987a064",
+      "files": [
+        {
+          "name": "README.md",
+          "bytes": 9419,
+          "sha256": "30de8315ece609b239c719539336b99188a2a92aef89a1fdcd60b11e40abd063"
+        },
+        {
+          "name": "chat_template.jinja",
+          "bytes": 551,
+          "sha256": "59b5ae119bda7c00089bba5f49af775791ea67c7aeb7d2b828cddda9463121bf"
+        },
+        {
+          "name": "config.json",
+          "bytes": 248029,
+          "sha256": "82ac390b36a8f80c5a0c4e202367debd149e5d8c30abe4cf5eed439101b1c5ce"
+        },
+        {
+          "name": "processor_config.json",
+          "bytes": 487,
+          "sha256": "bc0b230081b44e629dd5b9045b78495615c1831b4b9f4cffe97bd37e82a6156a"
+        },
+        {
+          "name": "tokenizer.json",
+          "bytes": 11429842,
+          "sha256": "cadfb9cbd9ff8f4e309075ec6a71b063295ff796afb4b5dbc0fd2873fbb301f2"
+        },
+        {
+          "name": "tokenizer_config.json",
+          "bytes": 998,
+          "sha256": "945e980986de2ca7768f3326bfdbb4fbea3406f972b8ae0be233089f2b253c11"
+        },
+        {
+          "name": "model.safetensors",
+          "bytes": 1835545960,
+          "sha256": "00568245ceca5af1991d28562a75fe1ddc9bfeb041c27fda66947ea05c47fb86"
+        }
+      ],
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "ctc-en",
+      "repository": "facebook/wav2vec2-base-960h",
+      "revision": "22aad52d435eb6dbaf354bdad9b0da84ce7d6156",
+      "files": [
+        {
+          "name": "config.json",
+          "bytes": 1596,
+          "sha256": "d3ec255c063d9f95057b553b19c20135b259875834a4fe9deb218a6be25b4cf3"
+        },
+        {
+          "name": "feature_extractor_config.json",
+          "bytes": 158,
+          "sha256": "d3de0c797bf9b65f90bc65c30cb7b303ebeda341f6fc80af33628c4b26b95632"
+        },
+        {
+          "name": "model.safetensors",
+          "bytes": 377607901,
+          "sha256": "8aa76ab2243c81747a1f832954586bc566090c83a0ac167df6f31f0fa917d74a"
+        },
+        {
+          "name": "preprocessor_config.json",
+          "bytes": 159,
+          "sha256": "b225d617c025463b9e157e06afea8b90dc7078fc70b013c533328423e0486b4a"
+        },
+        {
+          "name": "special_tokens_map.json",
+          "bytes": 85,
+          "sha256": "bb7068de1150661a10b55f9e4b12a0e77af8bf91f5e45e1b58afaf1d0e17f675"
+        },
+        {
+          "name": "tokenizer_config.json",
+          "bytes": 163,
+          "sha256": "dc790594f5bc351a4311c6624f40acd95850d4aaf2a5cb3c656c9b610720b608"
+        },
+        {
+          "name": "vocab.json",
+          "bytes": 291,
+          "sha256": "19727f8944fe6459fc3f240ae2c198395b740f6a029bd23e06656266b83bcf64"
+        }
+      ]
+    },
+    {
+      "name": "community3",
+      "directory": "diarization/community-1",
+      "repository": "pyannote/speaker-diarization-community-1",
+      "revision": "3533c8cf8e369892e6b79ff1bf80f7b0286a54ee",
+      "files": [
+        {
+          "name": "README.md",
+          "bytes": 9978,
+          "sha256": "2db91f9265bd81f1653ff088b5bff22bf6aebebea03328513af65501643f8a31"
+        },
+        {
+          "name": "config.yaml",
+          "bytes": 444,
+          "sha256": "5ce2bfa9a938dc132cec1172592d65173cbb8f444ea1e4133f10f9391de155be"
+        },
+        {
+          "name": "segmentation/pytorch_model.bin",
+          "bytes": 5906507,
+          "sha256": "7ad24338d844fb95985486eb1a464e32d229f6d7a03c9abe60f978bacf3f816e"
+        },
+        {
+          "name": "embedding/pytorch_model.bin",
+          "bytes": 26646242,
+          "sha256": "6f10ff60898a1d185fa22e1d11e0bfa8a92efec811f11bca48cb8cafebefd929"
+        },
+        {
+          "name": "plda/plda.npz",
+          "bytes": 133852,
+          "sha256": "9b77bcd840692710dd3496f62ecfeed8d8e5f002fd991b785079b244eab7d255"
+        },
+        {
+          "name": "plda/xvec_transform.npz",
+          "bytes": 134376,
+          "sha256": "325f1ce8e48f7e55e9c8aa47e05d2766b7c48c4b25b8de8dd751e7a4cc5fbe8f"
+        }
+      ]
+    }
+  ],
+  "diarization": {
+    "parameters": {
+      "segmentation": {
+        "min_duration_off": 0.0
+      },
+      "clustering": {
+        "threshold": 0.6,
+        "Fa": 0.07,
+        "Fb": 0.8
+      }
+    },
+    "acoustic_window": {
+      "duration_s": 3.0,
+      "step_s": 0.3
+    }
+  },
+  "pyannote_version": "4.0.7"
+}

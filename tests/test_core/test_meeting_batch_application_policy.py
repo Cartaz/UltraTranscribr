@@ -114,6 +114,7 @@ def test_application_defaults_blank_per_file_language_in_python(service, tmp_pat
             "path": str(source),
             "language": "it",
             "num_speakers": 9,
+            "pipeline": "qwen_meeting",
         }
     ]
 
