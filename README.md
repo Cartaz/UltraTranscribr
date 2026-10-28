@@ -47,6 +47,8 @@ sudo pacman -S --needed \
   libpulse pipewire-pulse xdg-desktop-portal xdg-desktop-portal-kde
 ```
 
+La modifica e l’applicazione delle impostazioni sono descritte in [docs/SETTINGS_VALIDATION.md](docs/SETTINGS_VALIDATION.md). Live, File e Riunione permettono di scegliere la lingua del singolo lavoro senza cambiare il predefinito globale.
+
 ## Installazione
 
 ```bash

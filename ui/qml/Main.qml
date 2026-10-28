@@ -226,6 +226,12 @@ ApplicationWindow {
                     font.letterSpacing: 1.98
                 }
             }
+            Help {
+                Layout.fillWidth: true
+                visible: settings.dirty
+                color: Theme.accent
+                text: 'Impostazioni modificate: salvale prima di avviare nuove trascrizioni.'
+            }
             StackLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true

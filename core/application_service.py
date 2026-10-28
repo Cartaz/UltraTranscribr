@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from config.constants import AppMeta
-from config.settings import AudioSource, ModelSize, Settings
+from config.settings import AudioSource, ModelSize, Settings, normalize_language
 from core.app_controller import AppController
 from core.audio_diagnostics import build_audio_diagnostics
 from core.background_tasks import BackgroundTaskGroup
@@ -199,6 +199,7 @@ class ApplicationService:
                 "liveDraining": self.controller.is_draining(),
                 "fileRunning": self.controller.is_file_transcribing(),
                 "backendRunning": self.controller.backend.is_running,
+                "dictationBusy": self.controller.dictation_busy(),
                 "bufferLevel": self.controller.buffer.buffer_level,
                 "meetingBusy": self.meeting.is_busy(),
                 "meetingBatchBusy": self.meeting_batch.is_busy(),
@@ -218,24 +219,20 @@ class ApplicationService:
             raise RuntimeError(
                 "Termina la riunione o la coda Riunioni prima di modificare le impostazioni"
             )
+        if self.controller.dictation_busy():
+            raise RuntimeError("Termina la dettatura prima di modificare le impostazioni")
         before = self.controller.settings
         backend_changed = any(
             key in overrides and overrides[key] != getattr(before, key, None)
             for key in self._BACKEND_SETTING_KEYS
         )
         if backend_changed and (
-            self.controller.active_live_count() > 0 or self.controller.is_file_busy()
+            self.controller.active_live_count() > 0 or self.controller.is_file_busy() or self.batch_busy()
         ):
             raise RuntimeError(
                 "Ferma le trascrizioni attive prima di modificare il backend"
             )
-        self.controller.update_settings(**overrides)
-        current = self.controller.settings
-        if backend_changed:
-            if self.controller.backend.is_running:
-                self.controller.stop_backend()
-            self.controller.backend.reconfigure(current)
-        return current
+        return self.controller.apply_settings(**overrides)
 
     def refresh_devices(self, audio_source: str) -> list[dict[str, Any]]:
         source = (
@@ -282,7 +279,7 @@ class ApplicationService:
                 else settings.audio_source
             )
             selection = str(selected_input or "").strip()
-            resolved_language = str(language or "").strip() or settings.language
+            resolved_language = normalize_language(str(language or "").strip() or settings.language)
             sink_name: str | None = None
             stream_id: int | None = None
 
@@ -349,7 +346,7 @@ class ApplicationService:
         isolate_vocals: bool,
     ) -> None:
         settings = self.controller.settings
-        resolved_language = str(language or "").strip() or settings.language
+        resolved_language = normalize_language(str(language or "").strip() or settings.language)
         resolved_model = (
             model_size if model_size in ModelSize.choices() else settings.model_size
         )
@@ -385,7 +382,7 @@ class ApplicationService:
         isolate_vocals: bool,
     ) -> list[dict[str, Any]]:
         settings = self.controller.settings
-        resolved_language = str(language or "").strip() or settings.language
+        resolved_language = normalize_language(str(language or "").strip() or settings.language)
         resolved_model = (
             model_size if model_size in ModelSize.choices() else settings.model_size
         )

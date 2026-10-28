@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from config.constants import AppMeta
-from config.settings import AudioSource, Settings
+from config.settings import AudioSource, Settings, normalize_language
 from core.audio_discovery import AudioDiscoveryService
 from core.audio_inputs import AudioInputResolver
 from core.audio_routing import PulseAudioRouter
@@ -164,6 +164,8 @@ class AppController:
 
         self._lock = threading.RLock()
         self._backend_init_lock = threading.Lock()
+        self._settings_update_lock = threading.RLock()
+        self._settings_applying = threading.Event()
         self._meeting_engine_active = threading.Event()
         self._model_operation_lock = threading.Lock()
         self._generation = 0
@@ -276,6 +278,10 @@ class AppController:
         if event != "dictation_activation_changed":
             return
         active = bool((payload or {}).get("active"))
+        if active and self._settings_applying.is_set():
+            self._bus.emit("dictation_error", "Attendi il salvataggio delle impostazioni prima di avviare la dettatura")
+            self._dictation_activation.cancel()
+            return
         if active and self._meeting.is_busy():
             self._bus.emit(
                 "dictation_error",
@@ -546,12 +552,13 @@ class AppController:
             raise RuntimeError(
                 "Ferma le sessioni Live prima di avviare una trascrizione file"
             )
-        lang = language or self._settings.language
+        lang = normalize_language(language or self._settings.language)
         cfg = (
             self._settings.with_(model_size=model_size)
             if model_size and model_size != self._settings.model_size
             else self._settings
         )
+        cfg = cfg.with_(language=lang)
         wanted_vad = False if song_mode else cfg.vad_filter
         if self.dictation_busy():
             with self._lock:
@@ -658,22 +665,55 @@ class AppController:
         startup = self._startup_thread
         return bool(startup and startup.is_alive())
 
+    def apply_settings(self, **overrides: object) -> Settings:
+        """Apply backend configuration and persistence as one serialized change."""
+        with self._backend_init_lock:
+            self._settings_applying.set()
+            try:
+                with self._settings_update_lock:
+                    before = self._settings
+                    candidate = before.with_(**overrides)
+                backend_changed = any(getattr(candidate, key) != getattr(before, key)
+                                      for key in self._BACKEND_RUNTIME_KEYS)
+                if backend_changed and (self.active_live_count() or self.is_file_busy() or self.dictation_busy()):
+                    raise RuntimeError("Ferma le trascrizioni attive prima di modificare il backend")
+                try:
+                    if backend_changed:
+                        self._backend.stop()
+                        self._backend_started = False
+                        self._backend_model_size = None
+                        self._bus.emit("backend_status_changed", "standby")
+                        self._backend.reconfigure(candidate)
+                    self.update_settings(**overrides)
+                except Exception:
+                    if backend_changed:
+                        try:
+                            self._backend.reconfigure(before)
+                        except Exception:
+                            logger.exception("Ripristino della configurazione backend fallito")
+                    raise
+                return self._settings
+            finally:
+                self._settings_applying.clear()
+
     def update_settings(self, **overrides: object) -> None:
-        if self.dictation_busy() and self._BACKEND_RUNTIME_KEYS.intersection(overrides):
-            raise RuntimeError(
-                "Termina la dettatura prima di modificare il backend"
-            )
-        self._settings = self._settings.with_(**overrides)
-        self._settings.save()
-        if "dictation_activation_mode" in overrides:
-            self._dictation_activation.set_mode(
-                self._settings.dictation_activation_mode
-            )
-        self._bus.emit("config_changed", overrides)
-        if "history_retention_days" in overrides:
-            deleted = self.prune_history()
-            if deleted:
-                self._bus.emit("history_changed", None)
+        # Autosaved geometry and explicit preference saves must not overwrite
+        # one another or publish a setting before its disk write succeeds.
+        with self._settings_update_lock:
+            if self.dictation_busy() and self._BACKEND_RUNTIME_KEYS.intersection(overrides):
+                raise RuntimeError("Termina la dettatura prima di modificare il backend")
+            candidate = self._settings.with_(**overrides)
+            candidate.save()
+            self._settings = candidate
+            if "dictation_activation_mode" in overrides:
+                self._dictation_activation.set_mode(candidate.dictation_activation_mode)
+            self._bus.emit("config_changed", {key: getattr(candidate, key) for key in overrides})
+            if "history_retention_days" in overrides:
+                if self.prune_history():
+                    self._bus.emit("history_changed", None)
+            if "meeting_audio_retention_days" in overrides:
+                if self._meeting.prune_audio():
+                    self._bus.emit("history_changed", None)
 
     def list_models(self) -> list[dict[str, object]]:
         return self._model_manager.list_ui_models()

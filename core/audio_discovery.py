@@ -253,6 +253,8 @@ class AudioDiscoveryService:
                     self._probe_threads.pop(key, None)
 
     def _resolve_automatic_source(self, settings: Settings, source: str) -> Optional[str]:
+        if source in {AudioSource.SYSTEM.value, AudioSource.MICROPHONE.value} and settings.sink_name:
+            return settings.sink_name
         if source == AudioSource.MICROPHONE.value:
             return find_microphone(settings)
         if source != AudioSource.SYSTEM.value:

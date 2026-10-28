@@ -11,12 +11,43 @@ class FileAdapter(Adapter):
 
     def __init__(self, application, feedback, parent=None):
         super().__init__(application, feedback, parent)
+        self._default_language = "en"
+        self._language_override = None
+        self.start_guard = lambda: True
         self.queue = RecordModel(parent=self)
         self._paths = []
         self._text = ""
         self._status = "idle"
         self._progress = 0.0
         self._busy = False
+
+    @Property(str, notify=changed)
+    def language(self):
+        return self._default_language if self._language_override is None else self._language_override
+
+    @Slot(str)
+    def editLanguage(self, value):
+        self._language_override = value
+        self.changed.emit()
+
+    @Slot()
+    def resetLanguage(self):
+        self._language_override = None
+        self.changed.emit()
+
+    def set_default_language(self, value):
+        self._default_language = str(value)
+        self.changed.emit()
+
+    @Property(str, notify=changed)
+    def activeLanguage(self):
+        return next((r.get("language", "") for r in self.queue.rows()
+                     if r.get("status") in {"starting", "running", "cancelling"}), self.language)
+
+    @Property(str, notify=changed)
+    def activeModel(self):
+        return next((r.get("model_size", "") for r in self.queue.rows()
+                     if r.get("status") in {"starting", "running", "cancelling"}), "")
 
     @Property(str, notify=changed)
     def selection(self):
@@ -63,13 +94,15 @@ class FileAdapter(Adapter):
 
     @Slot(bool, bool)
     def start(self, song, isolate):
+        if not self.start_guard():
+            return
         if not self._paths:
             self.feedback.show("Seleziona un file esistente")
             return
         jobs = self.attempt(
             lambda: self.application.enqueue_files(
                 self._paths,
-                language="",
+                language=self.language,
                 model_size="",
                 song_mode=song,
                 isolate_vocals=isolate,

@@ -33,6 +33,9 @@ class MeetingAdapter(Adapter):
 
     def __init__(self, application, feedback, parent=None):
         super().__init__(application, feedback, parent)
+        self._default_language = "en"
+        self._language_override = None
+        self.start_guard = lambda: True
         self.sources = RecordModel(
             [
                 {
@@ -81,6 +84,24 @@ class MeetingAdapter(Adapter):
         self._timer.start()
         if hasattr(self.application, "english_pipeline_status"):
             QTimer.singleShot(0, self.refreshEnglish)
+
+    @Property(str, notify=changed)
+    def language(self):
+        return self._default_language if self._language_override is None else self._language_override
+
+    @Slot(str)
+    def editLanguage(self, value):
+        self._language_override = value
+        self.changed.emit()
+
+    @Slot()
+    def resetLanguage(self):
+        self._language_override = None
+        self.changed.emit()
+
+    def set_default_language(self, value):
+        self._default_language = str(value)
+        self.changed.emit()
 
     @Property(str, notify=pipelineChanged)
     def pipeline(self):
@@ -276,6 +297,8 @@ class MeetingAdapter(Adapter):
 
     @Slot(bool, str, int)
     def start(self, from_file, language, speakers):
+        if not self.start_guard():
+            return
         if self.dirty or self._writing:
             self.feedback.show("Salva le correzioni prima di avviare una riunione")
             return

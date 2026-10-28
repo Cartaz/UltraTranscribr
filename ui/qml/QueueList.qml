@@ -48,7 +48,7 @@ Item {
                     }
                     Help {
                         width: parent.width
-                        text: record.error || Theme.statusName(record.status)
+                        text: record.error || (Theme.statusName(record.status) + (record.language ? ' · ' + record.language.toUpperCase() : '') + (record.model_size ? ' · ' + Theme.modelName(record.model_size) : record.pipeline ? ' · Qwen' : ''))
                         maximumLineCount: 1
                         elide: Text.ElideRight
                     }

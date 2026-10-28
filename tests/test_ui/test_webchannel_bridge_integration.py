@@ -209,6 +209,13 @@ class _FakeController:
             payload["text"] = "ciao"
         return [payload]
 
+    def dictation_busy(self):
+        return False
+
+    def apply_settings(self, **overrides):
+        self.update_settings(**overrides)
+        return self.settings
+
     def active_live_count(self):
         return 0
 

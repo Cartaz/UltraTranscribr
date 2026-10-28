@@ -1,6 +1,9 @@
 """Settings drafts, nonblocking writes and model inventory."""
 
 from dataclasses import asdict
+import math
+
+from config.settings import INTEGER_FIELDS
 
 from PySide6.QtCore import Property, Signal, Slot
 
@@ -15,8 +18,6 @@ SECTIONS = {
     "tuning": ("beam_size", "vad_min_silence_ms", "buffer_warn_threshold"),
     "backend": (
         "server_port",
-        "gpu_layers",
-        "compute_type",
         "backend_instances",
         "preload_model",
     ),
@@ -38,6 +39,20 @@ class SettingsAdapter(Adapter):
     def values(self):
         return {**self._values, **self._draft}
 
+    @Property("QVariantMap", notify=changed)
+    def applied(self):
+        return dict(self._values)
+
+    @Property(bool, notify=changed)
+    def dirty(self):
+        return bool(self._draft)
+
+    def require_saved(self):
+        if self._writing or self._draft:
+            self.feedback.show("Salva le impostazioni modificate prima di avviare una trascrizione")
+            return False
+        return True
+
     @Property(str, notify=changed)
     def modelBusy(self):
         return self._model_busy
@@ -54,6 +69,7 @@ class SettingsAdapter(Adapter):
     def edit(self, key, value):
         if key in set().union(*SECTIONS.values()):
             self._draft[key] = value
+            self.changed.emit()
 
     def _write(self, overrides, captured, message):
         if self._writing:
@@ -88,8 +104,14 @@ class SettingsAdapter(Adapter):
         captured = dict(self._draft)
         overrides = dict(captured)
         try:
-            if "channels" in overrides:
-                overrides["channels"] = int(overrides["channels"])
+            for key in INTEGER_FIELDS.intersection(overrides):
+                value = overrides[key]
+                if isinstance(value, bool) or not str(value).strip():
+                    raise ValueError(f"{key}: inserisci un numero intero")
+                number = float(value)
+                if not math.isfinite(number) or not number.is_integer():
+                    raise ValueError(f"{key}: inserisci un numero intero")
+                overrides[key] = int(number)
             if overrides.get("sink_name") == "":
                 overrides["sink_name"] = None
         except (ValueError, TypeError) as exc:

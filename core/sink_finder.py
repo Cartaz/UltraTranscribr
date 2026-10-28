@@ -25,6 +25,8 @@ def find_source(
     if settings is None:
         settings = Settings()
     source = audio_source or settings.audio_source
+    if source in {AudioSource.SYSTEM.value, AudioSource.MICROPHONE.value} and settings.sink_name:
+        return settings.sink_name
 
     if source == AudioSource.SYSTEM.value:
         return find_system_monitor(pactl_runner=pactl_runner)

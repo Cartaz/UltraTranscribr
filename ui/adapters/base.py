@@ -66,6 +66,8 @@ class Adapter(QObject):
             return None
 
     def background(self, name, operation, receive, failed=None):
+        if self._closed:
+            return
         def error(message):
             self.feedback.show(message)
             if failed:

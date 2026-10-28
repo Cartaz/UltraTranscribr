@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
-from config.settings import Settings
+from config.settings import Settings, normalize_language
 from core.background_tasks import BackgroundTaskGroup
 from core.event_bus import EventBus
 
@@ -97,6 +97,9 @@ class FileBatchCoordinator:
         if self._controller.active_live_count() > 0:
             raise RuntimeError("Ferma le sessioni Live prima di accodare file")
 
+        language = normalize_language(language or self._controller.settings.language)
+        # Validate all job settings before mutating the FIFO.
+        Settings(language=language, model_size=model_size or self._controller.settings.model_size)
         candidates: list[str] = []
         for raw in paths:
             path = Path(str(raw)).expanduser()

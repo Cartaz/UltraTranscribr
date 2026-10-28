@@ -76,6 +76,25 @@ class DictationInsertionMode(str, Enum):
 _LANG_RE = re.compile(r"^(?:auto|[a-z]{2,3}(?:-[a-z0-9]{2,8})?)$")
 
 
+
+INTEGER_FIELDS = {
+    "sample_rate", "channels", "chunk_ms", "beam_size", "vad_min_silence_ms",
+    "buffer_warn_threshold", "history_retention_days", "meeting_audio_retention_days",
+    "gpu_layers", "server_port", "backend_instances", "window_width", "window_height",
+}
+BOOLEAN_FIELDS = {"vad_filter", "live_microphone_recording", "preload_model"}
+SUPPORTED_LANGUAGES = frozenset("en zh de es ru ko fr ja pt tr pl ca nl ar sv it id hi fi vi he uk el ms cs ro da hu ta no th ur hr bg lt la mi ml cy sk te fa lv bn sr az sl kn et mk br eu is hy ne mn bs kk sq sw gl mr pa si km sn yo so af oc ka be tg sd gu am yi lo uz fo ht ps tk nn mt sa lb my bo tl mg as tt haw ln ha ba jw su yue auto".split())
+
+
+def normalize_language(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("Lingua non valida: usa it, en oppure auto")
+    normalized = value.strip().lower()
+    if not _LANG_RE.fullmatch(normalized) or normalized.split("-")[0] not in SUPPORTED_LANGUAGES:
+        raise ValueError("Lingua non valida: usa it, en oppure auto (o un codice supportato)")
+    return normalized.split("-")[0]
+
+
 @dataclass(frozen=True)
 class Settings:
     sample_rate: int = ProcessDefaults.SAMPLE_RATE
@@ -112,53 +131,51 @@ class Settings:
     window_height: int = UIConstraints.WINDOW_HEIGHT
 
     def __post_init__(self) -> None:
+        for key in INTEGER_FIELDS:
+            if type(getattr(self, key)) is not int:
+                raise ValueError(f"{key} deve essere un intero")
+        for key in BOOLEAN_FIELDS:
+            if type(getattr(self, key)) is not bool:
+                raise ValueError(f"{key} deve essere vero o falso")
+        object.__setattr__(self, "language", normalize_language(self.language))
+        for key in ("sink_name", "sink_search_keyword"):
+            value = getattr(self, key)
+            if key == "sink_name" and value is None:
+                continue
+            if not isinstance(value, str):
+                raise ValueError(f"{key} deve essere testo")
+            object.__setattr__(self, key, value.strip() or (None if key == "sink_name" else ""))
         errors: list[str] = []
-        if self.sample_rate != ProcessDefaults.SAMPLE_RATE:
-            errors.append("sample_rate deve essere 16000 Hz")
-        if self.channels not in (1, 2):
-            errors.append("channels deve essere 1 o 2")
-        if not 100 <= self.chunk_ms <= 10000:
-            errors.append("chunk_ms deve essere tra 100 e 10000")
-        if self.dtype != "float32":
-            errors.append("dtype supportato: float32")
-        if self.model_size not in ModelSize.choices():
-            errors.append(f"model_size non valido: {self.model_size}")
-        if self.device != ComputeDevice.SYCL.value:
-            errors.append("device deve essere sycl")
-        if not _LANG_RE.match(str(self.language).lower()):
-            errors.append(f"language non valida: {self.language}")
-        if self.audio_source not in AudioSource.choices():
-            errors.append(f"audio_source non valida: {self.audio_source}")
-        if not 1 <= self.beam_size <= 64:
-            errors.append("beam_size deve essere tra 1 e 64")
-        if not 0 <= self.vad_min_silence_ms <= 10000:
-            errors.append("vad_min_silence_ms fuori intervallo")
-        if self.buffer_warn_threshold <= 0:
-            errors.append("buffer_warn_threshold deve essere > 0")
-        if not 0 <= self.history_retention_days <= 3650:
-            errors.append("history_retention_days deve essere tra 0 e 3650")
-        if not 0 <= self.meeting_audio_retention_days <= 3650:
-            errors.append("meeting_audio_retention_days deve essere tra 0 e 3650")
-        if not 1 <= self.server_port <= 65535:
-            errors.append("server_port deve essere tra 1 e 65535")
-        if not 1 <= int(self.backend_instances) <= 4:
-            errors.append("backend_instances deve essere tra 1 e 4")
-        if self.server_port + int(self.backend_instances) - 1 > 65535:
+        fixed = {"sample_rate": ProcessDefaults.SAMPLE_RATE, "device": "sycl",
+                 "dtype": "float32", "gpu_layers": SYCLDefaults.GPU_LAYERS,
+                 "compute_type": ProcessDefaults.COMPUTE_TYPE}
+        for key, expected in fixed.items():
+            if getattr(self, key) != expected:
+                errors.append(f"{key} fisso per il motore disponibile: {expected}")
+        limits = {
+            "channels": (1, 2), "chunk_ms": (100, 10000), "beam_size": (1, 64),
+            "vad_min_silence_ms": (0, 10000), "buffer_warn_threshold": (1, None),
+            "history_retention_days": (0, 3650), "meeting_audio_retention_days": (0, 3650),
+            "server_port": (1, 65535), "backend_instances": (1, 4),
+            "window_width": (UIConstraints.MIN_WINDOW_WIDTH, None),
+            "window_height": (UIConstraints.MIN_WINDOW_HEIGHT, None),
+        }
+        for key, (low, high) in limits.items():
+            value = getattr(self, key)
+            if value < low or high is not None and value > high:
+                errors.append(f"{key} fuori intervallo ({low}–{high if high is not None else 'massimo libero'})")
+        choices = {"model_size": ModelSize.choices(), "audio_source": AudioSource.choices(),
+                   "dictation_activation_mode": DictationActivationMode.choices(),
+                   "dictation_insertion_mode": DictationInsertionMode.choices()}
+        for key, allowed in choices.items():
+            if getattr(self, key) not in allowed:
+                errors.append(f"{key} non valido: {getattr(self, key)}")
+        if self.server_port + self.backend_instances - 1 > 65535:
             errors.append("le porte delle istanze backend superano 65535")
-        if self.dictation_activation_mode not in DictationActivationMode.choices():
-            errors.append(f"dictation_activation_mode non valido: {self.dictation_activation_mode}")
-        if self.dictation_insertion_mode not in DictationInsertionMode.choices():
-            errors.append(f"dictation_insertion_mode non valido: {self.dictation_insertion_mode}")
-        for coordinate_name in ("window_x", "window_y"):
-            coordinate = getattr(self, coordinate_name)
-            if coordinate is not None and (
-                isinstance(coordinate, bool) or not isinstance(coordinate, int)
-            ):
-                errors.append(f"{coordinate_name} deve essere un intero o null")
-        if self.window_width < UIConstraints.MIN_WINDOW_WIDTH:
-            errors.append(f"window_width deve essere >= {UIConstraints.MIN_WINDOW_WIDTH}")
-        if self.window_height < UIConstraints.MIN_WINDOW_HEIGHT:
-            errors.append(f"window_height deve essere >= {UIConstraints.MIN_WINDOW_HEIGHT}")
+        for key in ("window_x", "window_y"):
+            value = getattr(self, key)
+            if value is not None and type(value) is not int:
+                errors.append(f"{key} deve essere un intero o null")
         if errors:
             raise ValueError("; ".join(errors))
 
@@ -176,7 +193,6 @@ class Settings:
             if key not in current:
                 raise AttributeError(f"Settings non ha il campo '{key}'")
             current[key] = value
-        current["device"] = ComputeDevice.SYCL.value
         return Settings(**current)
 
     def save(self) -> None:
@@ -185,7 +201,7 @@ class Settings:
         fd, tmp_name = tempfile.mkstemp(prefix="settings.", suffix=".tmp", dir=AppMeta.CONFIG_DIR)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+                json.dump(data, f, indent=2, ensure_ascii=False, allow_nan=False)
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp_name, AppMeta.SETTINGS_PATH)
@@ -204,6 +220,8 @@ class Settings:
         try:
             with open(AppMeta.SETTINGS_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError("Il file delle impostazioni non contiene un oggetto")
             valid_keys = set(cls.__dataclass_fields__)
             filtered = {k: v for k, v in data.items() if k in valid_keys}
             filtered["device"] = ComputeDevice.SYCL.value
@@ -241,15 +259,34 @@ class Settings:
 
             old_width = filtered.get("window_width", UIConstraints.WINDOW_WIDTH)
             old_height = filtered.get("window_height", UIConstraints.WINDOW_HEIGHT)
-            filtered["window_width"] = max(int(old_width), UIConstraints.MIN_WINDOW_WIDTH)
-            filtered["window_height"] = max(int(old_height), UIConstraints.MIN_WINDOW_HEIGHT)
+            for key, value, minimum in (("window_width", old_width, UIConstraints.MIN_WINDOW_WIDTH),
+                                        ("window_height", old_height, UIConstraints.MIN_WINDOW_HEIGHT)):
+                try:
+                    filtered[key] = max(int(value), minimum)
+                except (ValueError, TypeError, OverflowError):
+                    filtered[key] = getattr(cls(), key)
             if filtered["window_width"] != old_width or filtered["window_height"] != old_height:
                 logger.info(
                     "Dimensioni finestra migrate al minimo supportato: %dx%d",
                     filtered["window_width"], filtered["window_height"],
                 )
 
-            return cls(**filtered)
+            try:
+                return cls(**filtered)
+            except (TypeError, ValueError):
+                # Repair bad fields independently: a corrupt numeric preference
+                # must not reset the user's language or other valid choices.
+                defaults = cls()
+                repaired = {}
+                for key, value in filtered.items():
+                    try:
+                        repaired[key] = getattr(cls(**{key: value}), key)
+                    except (TypeError, ValueError):
+                        repaired[key] = getattr(defaults, key)
+                        logger.warning("Impostazione %s non valida: ripristinato solo questo campo", key)
+                if repaired.get("server_port", defaults.server_port) + repaired.get("backend_instances", 1) - 1 > 65535:
+                    repaired["backend_instances"] = 1
+                return cls(**repaired)
         except (OSError, json.JSONDecodeError, TypeError, KeyError, ValueError) as exc:
             logger.warning("Impostazioni non valide (%s), uso i default", exc)
             return cls()

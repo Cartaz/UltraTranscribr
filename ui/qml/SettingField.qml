@@ -23,9 +23,9 @@ ColumnLayout {
         visible: root.options.length === 0
         text: root.locked ? root.fixedValue : String(settings.values[root.keyName] == null ? '' : settings.values[root.keyName])
         placeholderText: root.hint
-        readOnly: root.locked
+        readOnly: root.locked || runtime.busy || settings.saving
         inputMethodHints: root.numeric ? Qt.ImhDigitsOnly : Qt.ImhNone
-        onTextEdited: settings.edit(root.keyName, root.numeric ? Number(text) : text)
+        onTextEdited: settings.edit(root.keyName, text)
     }
     EnumCombo {
         objectName: root.keyName + 'Control'

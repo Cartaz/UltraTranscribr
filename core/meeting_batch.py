@@ -18,6 +18,7 @@ from core.meeting_engine import (
     DEFAULT_MEETING_PIPELINE,
     QWEN_PIPELINES,
     meeting_language,
+    speaker_count,
 )
 
 
@@ -194,16 +195,7 @@ class MeetingBatchCoordinator:
                 raise ValueError("Il percorso Qwen verificato richiede la lingua inglese (en)")
             if pipeline in QWEN_PIPELINES:
                 meeting_language(language)
-            try:
-                count = int(entry.get("num_speakers", 0))
-            except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"numero interlocutori non valido per {path.name}"
-                ) from exc
-            if count < 0 or count > self._MAX_SPEAKERS:
-                raise ValueError(
-                    f"Il numero di interlocutori per {path.name} deve essere tra 0 e {self._MAX_SPEAKERS}"
-                )
+            count = speaker_count(entry.get("num_speakers", 0))
             normalized.append(
                 {
                     "path": resolved_path,

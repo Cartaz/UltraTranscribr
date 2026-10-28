@@ -31,6 +31,7 @@ from core.meeting_engine import (
     QWEN_PIPELINES,
     MeetingEngineStillRunning,
     meeting_language,
+    speaker_count,
 )
 from core.meeting_store import MeetingStore
 from core.microphone_recording import MicrophoneRecorder, RecordingInfo
@@ -1110,12 +1111,7 @@ class MeetingManager:
 
     @classmethod
     def _normalize_num_speakers(cls, value: int) -> int:
-        count = int(value)
-        if count < 0 or count > cls._MAX_SPEAKERS:
-            raise ValueError(
-                f"Il numero di interlocutori deve essere tra 0 e {cls._MAX_SPEAKERS}"
-            )
-        return count
+        return speaker_count(value)
 
     def _normalize_sources(
         self,

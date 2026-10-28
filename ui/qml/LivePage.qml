@@ -14,7 +14,7 @@ ColumnLayout {
             objectName: 'liveInputCard'
             Layout.fillWidth: true
             Layout.preferredWidth: (inputRow.width - 18) * .54
-            Layout.preferredHeight: sources.source === 'microphone' ? 455 : 375.59375
+            Layout.preferredHeight: sources.source === 'microphone' ? 525 : 445.59375
             CardHead {
                 kicker: 'INGRESSO'
                 title: 'Sorgente audio'
@@ -88,6 +88,26 @@ ColumnLayout {
                     text: sources.source === 'application' ? 'Seleziona uno stream PipeWire/PulseAudio. Verrà isolato e ripristinato automaticamente al termine.' : "Automatico usa il monitor dell'uscita audio predefinita o il microfono predefinito."
                 }
             }
+            ColumnLayout {
+                Layout.fillWidth: true
+                FieldLabel { text: 'Lingua della nuova sessione' }
+                RowLayout {
+                    Layout.fillWidth: true
+                    NeuField {
+                        objectName: 'liveLanguageField'
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 45
+                        text: live.language
+                        placeholderText: 'it, en, auto'
+                        onTextEdited: live.editLanguage(text)
+                    }
+                    NeuButton {
+                        text: 'Predefinita'
+                        compact: true
+                        onClicked: live.resetLanguage()
+                    }
+                }
+            }
             Item {
                 Layout.fillWidth: true
                 implicitHeight: 47
@@ -126,6 +146,9 @@ ColumnLayout {
             }
             NeuToggle {
                 id: recordToggle
+                objectName: 'liveRecordToggle'
+                checked: live.recordAudio
+                onToggled: live.editRecording(checked)
                 Layout.fillWidth: true
                 visible: sources.source === 'microphone'
                 text: 'Salva registrazione'
@@ -134,7 +157,7 @@ ColumnLayout {
             NeuButton {
                 text: 'Aggiungi sessione'
                 selected: true
-                enabled: !files.busy && !meeting.busy && (sources.source !== 'application' || !!sources.selected)
+                enabled: !settings.dirty && !settings.saving && !files.busy && !meeting.busy && (sources.source !== 'application' || !!sources.selected)
                 onClicked: live.start(recordToggle.checked)
             }
         }
@@ -142,7 +165,7 @@ ColumnLayout {
             objectName: 'liveStatusCard'
             Layout.fillWidth: true
             Layout.preferredWidth: (inputRow.width - 18) * .46
-            Layout.preferredHeight: sources.source === 'microphone' ? 455 : 375.59375
+            Layout.preferredHeight: sources.source === 'microphone' ? 525 : 445.59375
             CardHead {
                 kicker: 'SESSIONE'
                 title: 'Stato live'
@@ -187,13 +210,13 @@ ColumnLayout {
                     }
                     Metric {
                         Layout.fillWidth: true
-                        label: 'Modello'
-                        value: Theme.modelName(settings.values.model_size)
+                        label: 'Prossimo modello'
+                        value: Theme.modelName(settings.applied.model_size)
                     }
                     Metric {
                         Layout.fillWidth: true
-                        label: 'Lingua'
-                        value: settings.values.language || 'auto'
+                        label: 'Prossima lingua'
+                        value: live.language
                     }
                 }
             }

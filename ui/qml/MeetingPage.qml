@@ -215,11 +215,22 @@ ScrollView {
                         FieldLabel {
                             text: page.fromFile ? 'Lingua predefinita' : 'Lingua'
                         }
-                        NeuField {
-                            id: language
+                        RowLayout {
                             Layout.fillWidth: true
-                            text: settings.values.language || 'auto'
-                            readOnly: false
+                            NeuField {
+                                id: language
+                                objectName: 'meetingLanguageField'
+                                Layout.fillWidth: true
+                                Layout.minimumWidth: 45
+                                text: meeting.language
+                                onTextEdited: meeting.editLanguage(text)
+                            }
+                            NeuButton {
+                                text: '↺'
+                                compact: true
+                                ToolTip.text: 'Usa la lingua predefinita'
+                                onClicked: meeting.resetLanguage()
+                            }
                         }
                     }
                     ColumnLayout {
@@ -311,7 +322,7 @@ ScrollView {
                     NeuButton {
                         text: page.fromFile ? (meetingDrafts.count > 1 ? 'Avvia batch (' + meetingDrafts.count + ')' : 'Analizza registrazione') : 'Avvia riunione'
                         selected: true
-                        enabled: !runtime.busy && !!meeting.englishStatus.ready
+                        enabled: !runtime.busy && !settings.dirty && !settings.saving && !!meeting.englishStatus.ready
                         onClicked: meeting.start(page.fromFile, language.text, Number(speakerCount.text))
                     }
                     NeuButton {

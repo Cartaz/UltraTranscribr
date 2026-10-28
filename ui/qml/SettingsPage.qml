@@ -76,7 +76,7 @@ ScrollView {
                     rowSpacing: 13
                     SettingField {
                         keyName: 'model_size'
-                        label: 'Modello'
+                        label: 'Modello Whisper'
                         options: [
                             {
                                 value: 'large-v3',
@@ -94,12 +94,13 @@ ScrollView {
                     }
                     SettingField {
                         keyName: 'language'
-                        label: 'Lingua'
+                        label: 'Lingua predefinita'
+                        hint: 'it, en, auto'
                     }
                     SettingField {
                         Layout.columnSpan: 2
                         keyName: 'audio_source'
-                        label: 'Sorgente predefinita'
+                        label: 'Sorgente Live predefinita'
                         options: [
                             {
                                 value: 'system',
@@ -118,8 +119,10 @@ ScrollView {
                 }
                 NeuToggle {
                     Layout.fillWidth: true
+                    objectName: 'vadFilterToggle'
+                    enabled: !runtime.busy && !settings.saving
                     text: 'VAD'
-                    description: 'Voice activity detection del server.'
+                    description: 'Rilevamento del parlato per Live e File con Whisper.'
                     checked: !!settings.values.vad_filter
                     onToggled: settings.edit('vad_filter', checked)
                 }
@@ -324,7 +327,7 @@ ScrollView {
                 Layout.alignment: Qt.AlignTop
                 CardHead {
                     kicker: 'TRASCRIZIONE'
-                    title: 'Regolazioni avanzate'
+                    title: 'Regolazioni Whisper'
                     NeuButton {
                         text: 'Ripristina'
                         compact: true
@@ -437,12 +440,15 @@ ScrollView {
                     }
                     SettingField {
                         keyName: 'gpu_layers'
-                        label: 'GPU layers'
-                        numeric: true
+                        label: 'Uso GPU'
+                        locked: true
+                        fixedValue: 'Automatico · SYCL'
                     }
                     SettingField {
                         keyName: 'compute_type'
-                        label: 'Compute type'
+                        label: 'Precisione'
+                        locked: true
+                        fixedValue: 'Dal modello installato'
                     }
                     SettingField {
                         keyName: 'device'
@@ -470,6 +476,8 @@ ScrollView {
                 }
                 NeuToggle {
                     Layout.fillWidth: true
+                    objectName: 'preloadModelToggle'
+                    enabled: !runtime.busy && !settings.saving
                     text: 'Precarica modello'
                     description: 'Avvia il modello installato selezionato all’apertura.'
                     checked: !!settings.values.preload_model
@@ -477,7 +485,7 @@ ScrollView {
                 }
                 Help {
                     Layout.fillWidth: true
-                    text: "I parametri di avvio di whisper-server vengono applicati integralmente al successivo avvio dell'app."
+                    text: "Porta e istanze vengono applicate al prossimo caricamento di Whisper. Il precaricamento agisce all’apertura del programma. Uso GPU e precisione sono gestiti dal motore e dal modello."
                 }
             }
             Card {
@@ -505,6 +513,7 @@ ScrollView {
                 kicker: 'SALVATAGGIO'
                 title: 'Applica configurazione'
                 NeuButton {
+                    objectName: 'saveSettingsButton'
                     text: 'Salva impostazioni'
                     selected: true
                     enabled: !runtime.busy && !settings.saving
@@ -513,7 +522,7 @@ ScrollView {
             }
             Help {
                 Layout.fillWidth: true
-                text: 'I valori vengono validati dal modello Settings Python. I reset agiscono solo sulla sezione scelta.'
+                text: runtime.busy ? 'Termina le attività in corso per salvare le impostazioni.' : settings.dirty ? 'Modifiche non salvate. Salva prima di avviare una trascrizione. Le modifiche valgono per i nuovi lavori.' : 'Impostazioni salvate. Puoi scegliere una lingua diversa per ogni nuova trascrizione.'
             }
         }
     }

@@ -2,6 +2,7 @@
 
 PRESENTATION_EVENTS = (
     "backend_status_changed",
+    "dictation_session_changed",
     "file_transcriber_status_changed",
     "file_transcriber_progress",
     "file_transcriber_new_text",

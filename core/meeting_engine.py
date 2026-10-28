@@ -21,3 +21,15 @@ def meeting_language(value: str) -> str:
         raise ValueError("Scegli una lingua supportata per la riunione: "
                          + ", ".join(ALIGNMENT_LANGUAGES))
     return language
+
+
+def speaker_count(value) -> int:
+    """Validate UI/batch counts without silently truncating a fraction."""
+    import math
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("Il numero di interlocutori deve essere un intero tra 0 e 20") from exc
+    if isinstance(value, bool) or not math.isfinite(number) or not number.is_integer() or not 0 <= number <= 20:
+        raise ValueError("Il numero di interlocutori deve essere un intero tra 0 e 20")
+    return int(number)

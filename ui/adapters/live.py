@@ -11,6 +11,11 @@ class LiveAdapter(Adapter):
 
     def __init__(self, application, feedback, sources, parent=None):
         super().__init__(application, feedback, parent)
+        self._default_language = "en"
+        self._language_override = None
+        self._default_recording = False
+        self._recording_override = None
+        self.start_guard = lambda: True
         self.sources = sources
         self.sessions = RecordModel(parent=self)
         self.groups = RecordModel(parent=self)
@@ -31,6 +36,37 @@ class LiveAdapter(Adapter):
         while self.groups.count > len(groups):
             self.groups.remove(self.groups.count - 1)
 
+    @Property(str, notify=changed)
+    def language(self):
+        return self._default_language if self._language_override is None else self._language_override
+
+    @Slot(str)
+    def editLanguage(self, value):
+        self._language_override = value
+        self.changed.emit()
+
+    @Slot()
+    def resetLanguage(self):
+        self._language_override = None
+        self.changed.emit()
+
+    def set_default_language(self, value):
+        self._default_language = str(value)
+        self.changed.emit()
+
+    @Property(bool, notify=changed)
+    def recordAudio(self):
+        return self._default_recording if self._recording_override is None else self._recording_override
+
+    @Slot(bool)
+    def editRecording(self, value):
+        self._recording_override = bool(value)
+        self.changed.emit()
+
+    def set_default_recording(self, value):
+        self._default_recording = bool(value)
+        self.changed.emit()
+
     @Property(int, notify=changed)
     def activeCount(self):
         return sum(not r.get("terminal", False) for r in self.sessions.rows())
@@ -41,9 +77,11 @@ class LiveAdapter(Adapter):
 
     @Slot(bool)
     def start(self, record=False):
+        if not self.start_guard():
+            return
         self.attempt(
             lambda: self.application.start_live(
-                self.sources.source, self.sources.selected, "", record
+                self.sources.source, self.sources.selected, self.language, record
             )
         )
 

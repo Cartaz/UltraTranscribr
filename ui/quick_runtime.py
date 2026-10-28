@@ -28,6 +28,9 @@ class QuickRuntime(QObject):
         self.archive = ArchiveAdapter(application, self.feedback, self)
         self.meeting = MeetingAdapter(application, self.feedback, self)
         self.archive.deleted.connect(self.meeting.clearDeleted)
+        for adapter in (self.live, self.files, self.meeting):
+            adapter.start_guard = self.settings.require_saved
+        self._dictation_busy = False
         self._status = "Standby"
         self._log = ""
         self._diagnostics = "Nessuna diagnostica eseguita."
@@ -46,6 +49,10 @@ class QuickRuntime(QObject):
 
     def _hydrate(self, boot):
         self.settings.hydrate(boot.get("settings", {}))
+        for adapter in (self.live, self.files, self.meeting):
+            adapter.set_default_language(boot.get("settings", {}).get("language", "en"))
+        self.live.set_default_recording(boot.get("settings", {}).get("live_microphone_recording", False))
+        self._dictation_busy = bool(boot.get("runtime", {}).get("dictationBusy"))
         self.settings.models.replace(boot.get("models", []))
         self.sources._source = boot.get("settings", {}).get("audio_source", "system")
         self.sources.set_devices(boot.get("devices", []))
@@ -76,7 +83,8 @@ class QuickRuntime(QObject):
     @Property(bool, notify=changed)
     def busy(self):
         return (
-            self.live.activeCount > 0
+            self._dictation_busy
+            or self.live.activeCount > 0
             or self.files.busy
             or self.meeting.busy
             or any(
@@ -123,6 +131,16 @@ class QuickRuntime(QObject):
             self.files.handle_event(name, value)
         elif name.startswith("meeting_"):
             self.meeting.handle_event(name, value)
+        if name == "dictation_session_changed":
+            value = value or {}
+            self._dictation_busy = bool(value.get("requested") or value.get("capture_running")
+                                        or value.get("transcriber_running")
+                                        or value.get("status") in {"starting", "finalizing"})
+        if name == "config_changed" and isinstance(value, dict) and "language" in value:
+            for adapter in (self.live, self.files, self.meeting):
+                adapter.set_default_language(value["language"])
+        if name == "config_changed" and isinstance(value, dict) and "live_microphone_recording" in value:
+            self.live.set_default_recording(value["live_microphone_recording"])
         if name.startswith("model_") or name == "config_changed":
             self.settings.handle_event(name, value)
         if (
@@ -131,6 +149,8 @@ class QuickRuntime(QObject):
             and value.get("audio_source")
         ):
             self.sources.setSource(value["audio_source"])
+        if name == "config_changed" and isinstance(value, dict) and {"sink_name", "sink_search_keyword"}.intersection(value):
+            self.sources.refresh()
         if name in {"history_changed", "meeting_completed", "recovery_audio_saved"}:
             self.archive.requestRefresh()
         if name == "audio_devices_changed":
