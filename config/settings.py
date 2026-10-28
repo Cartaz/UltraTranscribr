@@ -252,8 +252,11 @@ class Settings:
                 try:
                     if isinstance(coordinate, bool):
                         raise ValueError
-                    filtered[coordinate_name] = int(coordinate)
-                except (TypeError, ValueError):
+                    parsed = int(coordinate)
+                    if float(coordinate) != parsed:
+                        raise ValueError
+                    filtered[coordinate_name] = parsed
+                except (TypeError, ValueError, OverflowError):
                     filtered[coordinate_name] = None
                     logger.info("Coordinata finestra %s non valida: ripristino automatico", coordinate_name)
 
@@ -262,7 +265,10 @@ class Settings:
             for key, value, minimum in (("window_width", old_width, UIConstraints.MIN_WINDOW_WIDTH),
                                         ("window_height", old_height, UIConstraints.MIN_WINDOW_HEIGHT)):
                 try:
-                    filtered[key] = max(int(value), minimum)
+                    parsed = int(value)
+                    if isinstance(value, bool) or float(value) != parsed:
+                        raise ValueError
+                    filtered[key] = max(parsed, minimum)
                 except (ValueError, TypeError, OverflowError):
                     filtered[key] = getattr(cls(), key)
             if filtered["window_width"] != old_width or filtered["window_height"] != old_height:

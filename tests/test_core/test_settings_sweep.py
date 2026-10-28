@@ -78,6 +78,16 @@ def test_one_corrupt_preference_does_not_reset_the_saved_language():
     assert loaded.vad_filter is True
 
 
+@pytest.mark.parametrize("key", ["window_x", "window_y", "window_width", "window_height"])
+@pytest.mark.parametrize("value", [True, 1.5, float("nan"), float("inf"), float("-inf"), "invalid"])
+def test_corrupt_window_preference_preserves_language_and_recovers(key, value):
+    AppMeta.CONFIG_DIR.mkdir(parents=True)
+    AppMeta.SETTINGS_PATH.write_text(json.dumps({"language": "it", key: value}))
+    loaded = Settings.load()
+    assert loaded.language == "it"
+    assert getattr(loaded, key) == getattr(Settings(), key)
+
+
 def controller():
     app = AppController.__new__(AppController)
     app._settings = Settings(language="en")
