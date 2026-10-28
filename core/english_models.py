@@ -34,7 +34,7 @@ class EnglishModelManager:
     def dependencies(self) -> dict[str, str]:
         """Inspect package versions without loading a model or touching the GPU."""
         versions = {}
-        for package in ("torch", "transformers", "soundfile", "pyannote.audio"):
+        for package in ("torch", "transformers", "accelerate", "soundfile", "pyannote.audio"):
             try:
                 versions[package] = importlib.metadata.version(package)
             except importlib.metadata.PackageNotFoundError as exc:
@@ -45,6 +45,8 @@ class EnglishModelManager:
             raise RuntimeError(
                 "Aggiorna i componenti del programma per attivare il motore riunioni."
             )
+        if versions["accelerate"] != self.manifest["accelerate_version"]:
+            raise RuntimeError("Aggiorna i componenti del motore riunioni per caricare il modello sulla GPU.")
         if "+xpu" not in versions["torch"]:
             raise RuntimeError(
                 "Il motore riunioni richiede il runtime Intel XPU dell'app."

@@ -190,5 +190,6 @@
       "step_s": 0.3
     }
   },
-  "pyannote_version": "4.0.7"
+  "pyannote_version": "4.0.7",
+  "accelerate_version": "1.15.0"
 }

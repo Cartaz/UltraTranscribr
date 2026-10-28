@@ -8,11 +8,37 @@ from __future__ import annotations
 
 import gc
 import io
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Event
 
 from core.english_models import EnglishPipelineCancelled
 from core.meeting_engine import meeting_language
+
+
+@contextmanager
+def _xpu_loading_context(torch, model_utils):
+    """Skip optional allocator preallocation on Arc devices without a memory query.
+
+    Transformers 5.17 queries XPU free memory during its loading optimization.
+    Integrated Arc does not implement that query. Actual weight loading still
+    goes directly to XPU, with normal allocation failures and our memory guard.
+    This context is used only inside the isolated meeting worker process.
+    """
+    try:
+        torch.xpu.mem_get_info()
+    except RuntimeError as exc:
+        if "doesn't support querying the available free memory" not in str(exc):
+            raise
+    else:
+        yield
+        return
+    original = model_utils.caching_allocator_warmup
+    model_utils.caching_allocator_warmup = lambda *_args, **_kwargs: None
+    try:
+        yield
+    finally:
+        model_utils.caching_allocator_warmup = original
 
 
 class EnglishASRBackend:
@@ -29,7 +55,7 @@ class EnglishASRBackend:
     def start(self) -> None:
         self._check_cancelled()
         import torch
-        from transformers import AutoModelForMultimodalLM, AutoProcessor
+        from transformers import AutoModelForMultimodalLM, AutoProcessor, modeling_utils
 
         if not torch.xpu.is_available():
             raise RuntimeError(
@@ -42,17 +68,16 @@ class EnglishASRBackend:
             self.model_dir, local_files_only=True
         )
         self._check_cancelled()
-        self.model = (
-            AutoModelForMultimodalLM.from_pretrained(
+        # Load weights directly on XPU: creating a complete CPU copy first
+        # doubles peak memory on Intel GPUs sharing the computer's RAM.
+        with _xpu_loading_context(torch, modeling_utils):
+            self.model = AutoModelForMultimodalLM.from_pretrained(
                 self.model_dir,
                 local_files_only=True,
                 dtype=torch.float16,
-                device_map=None,
+                device_map={"": "xpu"},
                 attn_implementation="sdpa",
-            )
-            .to("xpu")
-            .eval()
-        )
+            ).eval()
         self._check_cancelled()
         self.is_running = True
 
