@@ -14,8 +14,16 @@ def test_meeting_draft_keeps_language_and_speaker_fields_editable(quick_window):
     page.setProperty("fromFile", True)
     adapter = window.runtime.meeting
     adapter._english_status_received({"ready": True, "busy": False})
-    adapter.drafts.replace([{"path": "public.wav", "language": "en",
-                             "num_speakers": 0, "pipeline": "qwen_meeting"}])
+    adapter.drafts.replace(
+        [
+            {
+                "path": "public.wav",
+                "language": "en",
+                "num_speakers": 0,
+                "pipeline": "qwen_meeting",
+            }
+        ]
+    )
     root = window._window.contentItem()
     wait_until(lambda: visual_child(root, "draftLanguage0") is not None)
     app.processEvents()
@@ -26,7 +34,7 @@ def test_meeting_draft_keeps_language_and_speaker_fields_editable(quick_window):
     assert speakers.width() >= 50
     assert pipeline.width() >= 150
     assert not language.property("readOnly")
-    assert language.property("text") == "en"
+    assert language.property("selectedValue") == "en"
     assert not any("TypeError" in m or "ReferenceError" in m for m in messages)
 
 
@@ -65,10 +73,18 @@ def test_recovered_timing_warning_is_visible_in_review(quick_window):
 def test_recovered_timing_warning_is_visible_in_archive(quick_window):
     _app, window, _service, controller, _messages = quick_window
     sid = seed_meeting(controller)
-    controller.history.append_quality_issues(sid, [{
-        "reason": "overlap_boundary_recovered", "start": 62, "end": 65,
-        "recovered": False, "timing_requires_review": True,
-    }])
+    controller.history.append_quality_issues(
+        sid,
+        [
+            {
+                "reason": "overlap_boundary_recovered",
+                "start": 62,
+                "end": 65,
+                "recovered": False,
+                "timing_requires_review": True,
+            }
+        ],
+    )
     archive = window.runtime.archive
     archive.select(sid)
     wait_until(lambda: archive.selected.get("id") == sid)
@@ -91,6 +107,7 @@ def test_long_review_does_not_send_document_through_qvariant_on_every_edit(
         "full_text",
         "meeting",
         "quality_notice",
+        "name",
     }
     assert set(meeting.review["meeting"]) == {"num_speakers"}
     notifications = []
@@ -109,7 +126,7 @@ def test_draft_is_checkpointed_and_restored_without_confirming_it(quick_window):
     wait_until(lambda: meeting.segments.count == 2)
     meeting.editText(0, "bozza da recuperare")
     wait_until(lambda: not meeting._draft_pending and not meeting._draft_writing)
-    assert "protetta" in meeting.draftStatus
+    assert "Salvataggio in corso" in meeting.draftStatus
     replacement = MeetingAdapter(service, window.runtime.feedback)
     try:
         replacement.select(sid)
@@ -180,9 +197,13 @@ def test_immediate_close_flushes_last_edit_before_timer_fires(quick_window):
     wait_until(lambda: meeting.segments.count == 2)
     meeting.editText(1, "ultima battuta")
     meeting.close()
-    assert service.get_meeting(sid)["meeting"]["review_drafts"] == {
-        "1": "ultima battuta"
-    }
+    wait_until(
+        lambda: (
+            service.get_meeting(sid)["meeting"]["review_segments"][1]["text"]
+            == "ultima battuta"
+        )
+    )
+    assert service.get_meeting(sid)["meeting"]["review_drafts"] == {}
 
 
 def test_discard_then_immediate_meeting_switch_cannot_restore_discarded_draft(
@@ -256,21 +277,32 @@ def test_review_save_control_fits_below_uncertainty_and_quality_notice(quick_win
     window.runtime.meeting.select(sid)
     wait_until(lambda: window.runtime.meeting.segments.count == 2)
     root = window._window.contentItem()
-    wait_until(lambda: visual_child(root, "reviewSave0") is not None)
+    wait_until(lambda: visual_child(root, "reviewEditor0") is not None)
     app.processEvents()
-    button = visual_child(root, "reviewSave0")
+    editor = visual_child(root, "reviewEditor0")
     row = visual_child(root, "reviewSegment0")
-    bottom = button.mapToItem(row, QPointF(0, button.height())).y()
+    bottom = editor.mapToItem(row, QPointF(0, editor.height())).y()
     assert bottom <= row.height() - 7
+    assert visual_child(root, "reviewSave0") is None  # autosave needs no per-row button
     assert not any("Binding loop" in message for message in messages)
 
 
 def test_history_exposes_persisted_quality_locations_after_reopening(quick_window):
     _app, window, _service, controller, _messages = quick_window
-    sid = controller.history.create_session(kind="file", model="large-v3", language="it")
-    controller.history.append_quality_issues(sid, [{
-        "reason": "repetition_loop", "start": 62, "end": 74, "recovered": False,
-    }])
+    sid = controller.history.create_session(
+        kind="file", model="large-v3", language="it"
+    )
+    controller.history.append_quality_issues(
+        sid,
+        [
+            {
+                "reason": "repetition_loop",
+                "start": 62,
+                "end": 74,
+                "recovered": False,
+            }
+        ],
+    )
     archive = window.runtime.archive
     archive.select(sid)
     wait_until(lambda: archive.selected.get("id") == sid)

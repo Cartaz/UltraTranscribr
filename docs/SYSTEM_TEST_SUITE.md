@@ -829,7 +829,7 @@ Aggiungere almeno tre file.
 
 **Esito**: [ ] PASS [ ] FAIL [ ] SKIP
 
-## SYS-306 — Export TXT/SRT/VTT — P1
+## SYS-306 — Export TXT/SRT — P1
 
 Usare un file con timestamp disponibili.
 
@@ -925,7 +925,7 @@ Usare almeno due speaker distinguibili.
 
 ## SYS-410 — Export speaker-aware — P0
 
-Provare `.txt`, `.srt`, `.vtt`.
+Provare `.txt` e `.srt`; verificare che `.vtt` venga rifiutato come formato non supportato.
 
 **Atteso**: nomi speaker manuali usati quando disponibili, fallback `Speaker N` altrimenti.
 

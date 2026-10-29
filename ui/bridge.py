@@ -1,4 +1,5 @@
 """Single Qt WebChannel boundary between the local web UI and Python application."""
+
 from __future__ import annotations
 
 import json
@@ -34,7 +35,6 @@ class BackendBridge(QObject):
     _EXPORT_FILTERS = {
         "txt": "Testo (*.txt)",
         "srt": "SubRip (*.srt)",
-        "vtt": "WebVTT (*.vtt)",
     }
 
     def __init__(
@@ -319,9 +319,7 @@ class BackendBridge(QObject):
                 if raw_index in edits:
                     raise ValueError("indice correzione riunione duplicato")
                 edits[raw_index] = str(item.get("text") or "")
-            meeting = self._application.edit_meeting_segments(
-                session_id.strip(), edits
-            )
+            meeting = self._application.edit_meeting_segments(session_id.strip(), edits)
             return self._ok(meeting=meeting)
         except Exception as exc:
             return self._error(exc)
@@ -333,9 +331,7 @@ class BackendBridge(QObject):
     @Slot(str, int, str, result=str)
     def editMeetingSegment(self, session_id: str, index: int, text: str) -> str:
         try:
-            meeting = self._application.edit_meeting_segment(
-                session_id, index, text
-            )
+            meeting = self._application.edit_meeting_segment(session_id, index, text)
             return self._ok(meeting=meeting)
         except Exception as exc:
             return self._error(exc)
@@ -360,9 +356,7 @@ class BackendBridge(QObject):
     @Slot(str, result=str)
     def deleteMeetingAudio(self, session_id: str) -> str:
         try:
-            return self._ok(
-                deleted=self._application.delete_meeting_audio(session_id)
-            )
+            return self._ok(deleted=self._application.delete_meeting_audio(session_id))
         except Exception as exc:
             return self._error(exc)
 
@@ -485,9 +479,7 @@ class BackendBridge(QObject):
     @Slot(str, int, result=str)
     def searchHistory(self, query: str, limit: int = 100) -> str:
         return json.dumps(
-            self._application.search_history(
-                query, max(1, min(int(limit), 500))
-            ),
+            self._application.search_history(query, max(1, min(int(limit), 500))),
             ensure_ascii=False,
             default=str,
         )
@@ -537,12 +529,16 @@ class BackendBridge(QObject):
             if fmt not in self._EXPORT_FILTERS:
                 raise ValueError("formato export non supportato")
             source_path = str(session.get("source_path") or "")
-            stem = "meeting-" + session_id if session.get("kind") == "meeting" else (
-                Path(source_path).stem if source_path else session_id
+            stem = (
+                "meeting-" + session_id
+                if session.get("kind") == "meeting"
+                else (Path(source_path).stem if source_path else session_id)
             )
             target, _ = QFileDialog.getSaveFileName(
                 None,
-                "Esporta riunione" if session.get("kind") == "meeting" else "Esporta trascrizione",
+                "Esporta riunione"
+                if session.get("kind") == "meeting"
+                else "Esporta trascrizione",
                 str(Path.home() / f"{stem}.{fmt}"),
                 self._EXPORT_FILTERS[fmt],
             )
@@ -574,9 +570,7 @@ class BackendBridge(QObject):
                 info["url"] = QUrl.fromLocalFile(str(info["path"])).toString()
             return json.dumps(info, ensure_ascii=False, default=str)
         except Exception as exc:
-            return json.dumps(
-                {"exists": False, "error": str(exc)}, ensure_ascii=False
-            )
+            return json.dumps({"exists": False, "error": str(exc)}, ensure_ascii=False)
 
     @Slot(str, result=str)
     def deleteSessionRecording(self, session_id: str) -> str:
@@ -617,10 +611,9 @@ class BackendBridge(QObject):
             overrides = self._application.filter_settings_overrides(payload)
             before = self._application.desktop_state()
             current = self._application.apply_settings(overrides)
-            if (
-                current.window_width != int(before["window_width"])
-                or current.window_height != int(before["window_height"])
-            ):
+            if current.window_width != int(
+                before["window_width"]
+            ) or current.window_height != int(before["window_height"]):
                 self.windowResizeRequested.emit(
                     current.window_width, current.window_height
                 )
@@ -635,9 +628,7 @@ class BackendBridge(QObject):
 
     @Slot(int, result=str)
     def readLogTail(self, line_count: int = 200) -> str:
-        return self._application.read_log_tail(
-            max(20, min(int(line_count), 1000))
-        )
+        return self._application.read_log_tail(max(20, min(int(line_count), 1000)))
 
     def push_log_record(self, record: logging.LogRecord) -> None:
         try:

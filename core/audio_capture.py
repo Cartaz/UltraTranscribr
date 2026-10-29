@@ -1,4 +1,5 @@
 """Thread producer unificato per monitor PipeWire/PulseAudio e microfono."""
+
 from __future__ import annotations
 
 import logging
@@ -35,8 +36,11 @@ class AudioCaptureThread(threading.Thread):
         session_id: Optional[str] = None,
         event_sink: Optional[EventSink] = None,
         sample_sink: Optional[SampleSink] = None,
+        recording_sample_rate: Optional[int] = None,
     ) -> None:
-        name = f"AudioCaptureThread-{session_id}" if session_id else "AudioCaptureThread"
+        name = (
+            f"AudioCaptureThread-{session_id}" if session_id else "AudioCaptureThread"
+        )
         super().__init__(daemon=True, name=name)
         self._buffer = buffer
         self._settings = settings
@@ -56,6 +60,7 @@ class AudioCaptureThread(threading.Thread):
         self._cb_lock = threading.Lock()
         self._recording: Optional[MicrophoneRecorder] = None
         self._sample_sink = sample_sink
+        self._recording_sample_rate = recording_sample_rate
         if (
             sample_sink is None
             and self._audio_source == AudioSource.MICROPHONE.value
@@ -143,7 +148,9 @@ class AudioCaptureThread(threading.Thread):
                     "Cattura audio terminata dopo "
                     f"{self._max_reconnect_attempts} tentativi: {fatal_error}",
                 )
-            logger.info("AudioCaptureThread fermato — session=%s", self._session_id or "legacy")
+            logger.info(
+                "AudioCaptureThread fermato — session=%s", self._session_id or "legacy"
+            )
 
     def stop(self) -> None:
         """Richiede l'arresto senza chiamare PortAudio dal thread chiamante."""
@@ -151,10 +158,14 @@ class AudioCaptureThread(threading.Thread):
 
     def _determine_is_monitor(self) -> bool:
         name = self.device_name or ""
-        return self._audio_source in {
-            AudioSource.SYSTEM.value,
-            AudioSource.APPLICATION.value,
-        } or ".monitor" in name
+        return (
+            self._audio_source
+            in {
+                AudioSource.SYSTEM.value,
+                AudioSource.APPLICATION.value,
+            }
+            or ".monitor" in name
+        )
 
     def _open_stream(self) -> None:
         self._is_monitor = self._determine_is_monitor()
@@ -170,7 +181,7 @@ class AudioCaptureThread(threading.Thread):
         def open_stream() -> None:
             self._stream = sd.InputStream(
                 device=device,
-                samplerate=WHISPER_SAMPLE_RATE,
+                samplerate=self._recording_sample_rate or WHISPER_SAMPLE_RATE,
                 channels=self._settings.channels,
                 dtype=self._settings.dtype,
                 blocksize=0,
@@ -185,7 +196,7 @@ class AudioCaptureThread(threading.Thread):
         else:
             open_stream()
 
-        self._native_sr = WHISPER_SAMPLE_RATE
+        self._native_sr = self._recording_sample_rate or WHISPER_SAMPLE_RATE
         with self._lock:
             self._error = None
 
@@ -204,7 +215,9 @@ class AudioCaptureThread(threading.Thread):
         )
 
     def _open_stream_microphone(self) -> None:
-        self._native_sr = query_device_sample_rate(self.device_name)
+        self._native_sr = self._recording_sample_rate or query_device_sample_rate(
+            self.device_name
+        )
         self._stream = sd.InputStream(
             device=self.device_name,
             samplerate=self._native_sr,
@@ -251,4 +264,5 @@ class AudioCaptureThread(threading.Thread):
                 native_sr=self._native_sr,
                 needs_resample=self._native_sr != WHISPER_SAMPLE_RATE,
                 sample_sink=self._sample_sink,
+                preserve_native=bool(self._recording_sample_rate),
             )

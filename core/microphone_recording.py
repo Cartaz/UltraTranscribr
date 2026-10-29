@@ -1,7 +1,9 @@
 """Crash-resistant shared microphone recording for Live and Meeting sessions."""
+
 from __future__ import annotations
 
 import fcntl
+import json
 import logging
 import os
 import threading
@@ -72,7 +74,18 @@ class MicrophoneRecorder:
             journal_lock = self._lock_journal(self.part_path)
             try:
                 self._handle = open(self.part_path, "ab", buffering=0)
+                if self.sample_rate != ProcessDefaults.SAMPLE_RATE:
+                    meta = self.part_path.with_name(
+                        self.part_path.name + ".format.json"
+                    )
+                    with meta.open("w") as handle:
+                        json.dump({"sample_rate": self.sample_rate}, handle)
+                        handle.flush()
+                        os.fsync(handle.fileno())
             except Exception:
+                if self._handle is not None:
+                    self._handle.close()
+                    self._handle = None
                 journal_lock.close()
                 raise
             self._journal_lock = journal_lock
@@ -130,7 +143,8 @@ class MicrophoneRecorder:
                 self.part_path.unlink(missing_ok=True)
                 return None
             return self._finalize_partial(
-                self.part_path, final_path=self.final_path, sample_rate=self.sample_rate)
+                self.part_path, final_path=self.final_path, sample_rate=self.sample_rate
+            )
         finally:
             journal_lock.close()
 
@@ -173,7 +187,8 @@ class MicrophoneRecorder:
     ) -> RecordingInfo:
         with MicrophoneRecorder._lock_journal(Path(part_path)):
             return MicrophoneRecorder._finalize_partial(
-                part_path, final_path=final_path, sample_rate=sample_rate)
+                part_path, final_path=final_path, sample_rate=sample_rate
+            )
 
     @staticmethod
     def _lock_journal(part: Path):
@@ -197,40 +212,55 @@ class MicrophoneRecorder:
         part = Path(part_path)
         if not part.is_file():
             raise FileNotFoundError(part)
+        meta = part.with_name(part.name + ".format.json")
+        if meta.is_file():
+            sample_rate = int(json.loads(meta.read_text())["sample_rate"])
+            if not 8000 <= sample_rate <= 192000:
+                raise ValueError("frequenza journal non valida")
         size = part.stat().st_size
         if size < 2:
             raise RuntimeError("journal audio vuoto")
         # Ignore a trailing single byte if a process died during the final
         # sample write. PCM16 samples before it remain valid.
         usable_bytes = size - (size % 2)
-        target = Path(final_path) if final_path else part.with_suffix("").with_suffix(".flac")
+        target = (
+            Path(final_path)
+            if final_path
+            else part.with_suffix("").with_suffix(".flac")
+        )
         target.parent.mkdir(parents=True, exist_ok=True)
         temp = target.with_suffix(target.suffix + ".tmp")
         try:
-            with sf.SoundFile(
-                str(part),
-                mode="r",
-                samplerate=int(sample_rate),
-                channels=1,
-                subtype="PCM_16",
-                format="RAW",
-            ) as source, sf.SoundFile(
-                str(temp),
-                mode="w",
-                samplerate=int(sample_rate),
-                channels=1,
-                subtype="PCM_16",
-                format="FLAC",
-            ) as destination:
+            with (
+                sf.SoundFile(
+                    str(part),
+                    mode="r",
+                    samplerate=int(sample_rate),
+                    channels=1,
+                    subtype="PCM_16",
+                    format="RAW",
+                ) as source,
+                sf.SoundFile(
+                    str(temp),
+                    mode="w",
+                    samplerate=int(sample_rate),
+                    channels=1,
+                    subtype="PCM_16",
+                    format="FLAC",
+                ) as destination,
+            ):
                 remaining = usable_bytes // 2
                 while remaining > 0:
-                    block = source.read(min(65536, remaining), dtype="float32", always_2d=False)
+                    block = source.read(
+                        min(65536, remaining), dtype="float32", always_2d=False
+                    )
                     if len(block) == 0:
                         break
                     destination.write(block)
                     remaining -= len(block)
             os.replace(temp, target)
             part.unlink()
+            meta.unlink(missing_ok=True)
         except Exception:
             try:
                 temp.unlink(missing_ok=True)

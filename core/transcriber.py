@@ -1,11 +1,13 @@
 """Loss-resistant live transcription worker."""
+
 from __future__ import annotations
 
 import logging
+import os
 import struct
 import threading
 import time
-from pathlib import Path
+import wave
 from queue import Empty
 from typing import Any, Callable, Optional
 
@@ -43,9 +45,27 @@ class TranscriberThread(threading.Thread):
         self._stop_event = threading.Event()
         self._current_segment: list[np.ndarray] = []
         self._segment_sample_count = 0
-        self._segment_samples = int(settings.sample_rate * ProcessDefaults.SEGMENT_LENGTH_S)
-        self._min_segment_samples = int(settings.sample_rate * ProcessDefaults.MIN_SEGMENT_S)
-        self._overlap_samples = int(settings.sample_rate * ProcessDefaults.OVERLAP_DURATION_S)
+        self._segment_samples = int(
+            settings.sample_rate * ProcessDefaults.SEGMENT_LENGTH_S
+        )
+        self._active_segment_target = self._segment_samples
+        # Catch up with already-queued audio without making normal capture wait.
+        # Leave room for overlap and one producer chunk below the File window.
+        self._catchup_samples = int(
+            settings.sample_rate
+            * max(
+                ProcessDefaults.SEGMENT_LENGTH_S,
+                ProcessDefaults.FILE_SEGMENT_LENGTH_S
+                - ProcessDefaults.OVERLAP_DURATION_S
+                - settings.chunk_ms / 1000,
+            )
+        )
+        self._min_segment_samples = int(
+            settings.sample_rate * ProcessDefaults.MIN_SEGMENT_S
+        )
+        self._overlap_samples = int(
+            settings.sample_rate * ProcessDefaults.OVERLAP_DURATION_S
+        )
         self._overlap_buffer = np.array([], dtype=np.float32)
         self._last_emitted_text = ""
         self._terminal_error = False
@@ -73,11 +93,12 @@ class TranscriberThread(threading.Thread):
                     self._flush_segment(final=True)
                 except Exception as exc:
                     self._terminal_error = True
+                    self._persist_recovery_audio()
                     self._emit("transcriber_error", f"Errore flush finale: {exc}")
                     self._emit("transcriber_status_changed", StatusEnum.ERROR.value)
                 else:
                     self._emit("transcriber_drained", None)
-            elif self._stop_event.is_set() and self._current_segment:
+            elif not drained:
                 self._persist_recovery_audio()
             if not self._terminal_error:
                 self._emit("transcriber_status_changed", StatusEnum.STOPPED.value)
@@ -94,10 +115,26 @@ class TranscriberThread(threading.Thread):
                     return True
                 self._emit("transcriber_buffer_level", self._buffer.buffer_level)
                 continue
-            self._current_segment.append(np.asarray(chunk, dtype=np.float32).reshape(-1))
+            if not self._current_segment:
+                available = (
+                    int(self._buffer.pending_seconds * self._settings.sample_rate)
+                    + chunk.size
+                )
+                self._active_segment_target = max(
+                    self._segment_samples, min(self._catchup_samples, available)
+                )
+                if self._active_segment_target > self._segment_samples:
+                    logger.info(
+                        "Recupero Live: %.1f s già in attesa; blocco obiettivo %.1f s",
+                        available / self._settings.sample_rate,
+                        self._active_segment_target / self._settings.sample_rate,
+                    )
+            self._current_segment.append(
+                np.asarray(chunk, dtype=np.float32).reshape(-1)
+            )
             self._segment_sample_count += chunk.shape[0]
             self._emit("transcriber_buffer_level", self._buffer.buffer_level)
-            if self._segment_sample_count >= self._segment_samples:
+            if self._segment_sample_count >= self._active_segment_target:
                 self._flush_segment(final=False)
         return False
 
@@ -119,14 +156,20 @@ class TranscriberThread(threading.Thread):
         cleaned = deduplicate_text(cleaned)
         if cleaned:
             self._emit("transcriber_new_text", cleaned)
-            self._last_emitted_text = (self._last_emitted_text + " " + cleaned).strip()[-1200:]
+            self._last_emitted_text = (self._last_emitted_text + " " + cleaned).strip()[
+                -1200:
+            ]
         self._commit_segment(body, final)
 
     def _commit_segment(self, body: np.ndarray, final: bool) -> None:
         self._current_segment.clear()
         self._segment_sample_count = 0
-        if not final and self._overlap_samples > 0 and body.size > self._overlap_samples:
-            self._overlap_buffer = body[-self._overlap_samples:].copy()
+        if (
+            not final
+            and self._overlap_samples > 0
+            and body.size > self._overlap_samples
+        ):
+            self._overlap_buffer = body[-self._overlap_samples :].copy()
         else:
             self._overlap_buffer = np.array([], dtype=np.float32)
 
@@ -149,35 +192,75 @@ class TranscriberThread(threading.Thread):
                 )
                 if self._stop_event.is_set():
                     raise RuntimeError("trascrizione interrotta")
-                return result if isinstance(result, str) else str(result.get("text", ""))
+                return (
+                    result if isinstance(result, str) else str(result.get("text", ""))
+                )
             except RuntimeError as exc:
                 last = exc
                 if self._stop_event.is_set():
                     raise
                 if attempt < 2:
                     self._stop_event.wait(ProcessDefaults.TRANSCRIBE_RETRY_DELAY_S)
-        self._persist_recovery_audio(audio)
         raise RuntimeError(f"segmento live non trascritto dopo 3 tentativi: {last}")
 
     def _on_queue_wait(self, wait_ms: float) -> None:
+        logger.debug(
+            "Attesa scheduler sessione %s: %.1f ms; audio FIFO %.2f s, %d chunk su disco",
+            self._session_id,
+            wait_ms,
+            self._buffer.pending_seconds,
+            self._buffer.spooled_chunks,
+        )
         self._emit("transcriber_queue_wait", float(wait_ms))
 
     def _persist_recovery_audio(self, audio: np.ndarray | None = None) -> None:
-        if audio is None:
-            parts = ([self._overlap_buffer] if self._overlap_buffer.size else []) + self._current_segment
-            if not parts:
-                return
-            audio = np.concatenate(parts)
         try:
             AppMeta.CACHE_DIR.mkdir(parents=True, exist_ok=True)
             session_part = self._safe_session_component(self._session_id)
             suffix = f"-{session_part}" if session_part else ""
             path = AppMeta.CACHE_DIR / f"recovery-live{suffix}-{time.time_ns()}.wav"
-            path.write_bytes(self._numpy_to_wav(audio))
+            temporary = path.with_suffix(".wav.tmp")
+            parts = (
+                [audio]
+                if audio is not None
+                else [self._overlap_buffer, *self._current_segment]
+            )
+            written = 0
+            with wave.open(str(temporary), "wb") as output:
+                output.setnchannels(1)
+                output.setsampwidth(2)
+                output.setframerate(self._settings.sample_rate)
+
+                def append(part):
+                    nonlocal written
+                    if part is not None and part.size:
+                        output.writeframesraw(
+                            (np.clip(part, -1, 1) * 32767).astype("<i2").tobytes()
+                        )
+                        written += part.size
+
+                for part in parts:
+                    append(part)
+                if audio is None:
+                    while True:
+                        try:
+                            append(self._buffer.get_nowait())
+                        except Empty:
+                            break
+            if not written:
+                temporary.unlink(missing_ok=True)
+                return
+            with temporary.open("rb") as persisted:
+                os.fsync(persisted.fileno())
+            os.replace(temporary, path)
             logger.warning("Audio non trascritto salvato per recupero: %s", path)
             self._emit("recovery_audio_saved", str(path))
         except OSError:
             logger.exception("Impossibile salvare recovery audio")
+            self._emit(
+                "transcriber_error",
+                "Impossibile salvare l’audio residuo: verifica lo spazio su disco",
+            )
 
     @staticmethod
     def _safe_session_component(session_id: Optional[str]) -> str:
@@ -219,5 +302,5 @@ class TranscriberThread(threading.Thread):
         win = max(1, self._settings.sample_rate // 2)
         peak = 0.0
         for i in range(0, audio.size, win):
-            peak = max(peak, self._compute_rms(audio[i:i + win]))
+            peak = max(peak, self._compute_rms(audio[i : i + win]))
         return peak < ProcessDefaults.SILENCE_RMS_THRESHOLD

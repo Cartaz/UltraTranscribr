@@ -83,7 +83,7 @@ Ogni intervento di review conserva separatamente:
 - `speaker_id`: risultato automatico;
 - `speaker_override`: scelta manuale opzionale.
 
-La UI permette di scegliere uno degli speaker noti o tornare a **Automatico**. Questo rende correggibili anche i segmenti `Speaker ?` senza distruggere il dato prodotto dal modello. `MeetingStore` valida l'override contro gli speaker effettivamente presenti e TXT/SRT/VTT usano lo speaker effettivo (`override` se presente, altrimenti automatico).
+La UI permette di scegliere uno degli speaker noti o tornare a **Automatico**. Questo rende correggibili anche i segmenti `Speaker ?` senza distruggere il dato prodotto dal modello. `MeetingStore` valida l'override contro gli speaker effettivamente presenti e TXT/SRT usano lo speaker effettivo (`override` se presente, altrimenti automatico).
 
 Le correzioni di testo continuano a vivere nel campo `text`, separato da `raw_text`. Le due classi di correzione sono quindi indipendenti e reversibili rispetto all'output automatico.
 
@@ -136,3 +136,14 @@ Python mantiene stato, lifecycle, persistenza, routing e device ownership canoni
 - `ApplicationService` è la boundary applicativa usata dalla UI.
 
 Il bridge QWebChannel valida e serializza gli input `startMeetingRealtime`, `startMeetingFile`, `rerunMeetingDiarization` e `setMeetingSegmentSpeaker`; non contiene algoritmi di diarizzazione o regole di review. La UI mantiene esclusivamente stato temporaneo di presentazione.
+
+
+## Revisione UX del 29 ottobre 2026
+
+Le nuove importazioni conservano una copia byte-identica dell'originale per il player.
+Le nuove catture conservano tracce e mix a 48 kHz mono per l'ascolto, con un derivato
+16 kHz distinto per i modelli. Gli originali mancanti nelle vecchie riunioni sono
+segnalati. Testo e speaker si salvano automaticamente; Undo/Redo appartengono al
+documento persistente. Lista compatta, Due colonne e Documento continuo condividono
+la stessa revisione e possono seguire l'audio. Vedi il
+[rapporto di verifica UX](UX_IMPLEMENTATION_2026-10-29.md) per prove e limiti.

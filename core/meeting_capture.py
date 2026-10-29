@@ -5,6 +5,7 @@ capture may have several independent inputs: each source is retained as its own
 track and the tracks are time-aligned into the canonical recording. Imported
 media is normalized directly to the same canonical representation.
 """
+
 from __future__ import annotations
 
 import logging
@@ -62,6 +63,7 @@ class MeetingTrack:
 class MeetingRecordingBundle:
     recording: RecordingInfo
     sources: list[dict[str, Any]]
+    original_recording: Optional[RecordingInfo] = None
 
 
 class MeetingCaptureSession:
@@ -93,7 +95,9 @@ class MeetingCaptureSession:
     @property
     def duration_s(self) -> float:
         with self._lock:
-            return max((track.recorder.duration_s for track in self._tracks), default=0.0)
+            return max(
+                (track.recorder.duration_s for track in self._tracks), default=0.0
+            )
 
     def start(self, selections: list[AudioInputSelection]) -> None:
         if not selections:
@@ -107,13 +111,19 @@ class MeetingCaptureSession:
             for index, selection in enumerate(selections):
                 lease = self._resolver.acquire(
                     selection,
-                    status_callback=lambda payload, idx=index: self._route_event(idx, payload),
+                    status_callback=lambda payload, idx=index: self._route_event(
+                        idx, payload
+                    ),
                 )
-                recorder = MicrophoneRecorder(f"{self.session_id}-source-{index + 1}")
+                recorder = MicrophoneRecorder(
+                    f"{self.session_id}-source-{index + 1}", sample_rate=48000
+                )
                 recorder.start()
                 track_ref: list[MeetingTrack] = []
 
-                def write(samples: np.ndarray, ref: list[MeetingTrack] = track_ref) -> None:
+                def write(
+                    samples: np.ndarray, ref: list[MeetingTrack] = track_ref
+                ) -> None:
                     if not ref:
                         return
                     track = ref[0]
@@ -127,8 +137,11 @@ class MeetingCaptureSession:
                     lease.capture_sink,
                     selection.source,
                     session_id=f"meeting-{self.session_id}-{index + 1}",
-                    event_sink=lambda event, payload, idx=index: self._capture_event(idx, event, payload),
+                    event_sink=lambda event, payload, idx=index: self._capture_event(
+                        idx, event, payload
+                    ),
                     sample_sink=write,
+                    recording_sample_rate=48000,
                 )
                 track = MeetingTrack(
                     index=index,
@@ -157,7 +170,10 @@ class MeetingCaptureSession:
         for track in tracks:
             track.capture.stop()
         for track in tracks:
-            if track.capture.is_alive() and track.capture is not threading.current_thread():
+            if (
+                track.capture.is_alive()
+                and track.capture is not threading.current_thread()
+            ):
                 track.capture.join(timeout=self._CAPTURE_JOIN_TIMEOUT_S)
         alive = [track.id for track in tracks if track.capture.is_alive()]
         if alive:
@@ -202,13 +218,19 @@ class MeetingCaptureSession:
             )
             mix_inputs.append((info, offset))
 
-        canonical = mix_recordings(
+        original = mix_recordings(
             mix_inputs,
-            AppMeta.RECORDINGS_DIR / f"{self.session_id}.flac",
+            AppMeta.RECORDINGS_DIR / f"{self.session_id}-original.flac",
+            sample_rate=48000,
+        )
+        canonical = normalize_media_to_flac(
+            original.path, AppMeta.RECORDINGS_DIR / f"{self.session_id}.flac"
         )
         with self._lock:
             self._closed = True
-        return MeetingRecordingBundle(recording=canonical, sources=source_records)
+        return MeetingRecordingBundle(
+            recording=canonical, sources=source_records, original_recording=original
+        )
 
     def abandon(self) -> None:
         with self._lock:
@@ -234,7 +256,10 @@ class MeetingCaptureSession:
         for track in reversed(tracks):
             try:
                 track.capture.stop()
-                if track.capture.is_alive() and track.capture is not threading.current_thread():
+                if (
+                    track.capture.is_alive()
+                    and track.capture is not threading.current_thread()
+                ):
                     track.capture.join(timeout=self._CAPTURE_JOIN_TIMEOUT_S)
             except Exception:
                 logger.exception("Cleanup capture Meeting fallito")
@@ -371,6 +396,8 @@ def normalize_media_to_flac(
 def mix_recordings(
     sources: list[tuple[RecordingInfo, float]],
     target: Path | str,
+    *,
+    sample_rate: int = ProcessDefaults.SAMPLE_RATE,
 ) -> RecordingInfo:
     """Time-align mono tracks and stream a bounded-memory canonical FLAC mix."""
     if not sources:
@@ -384,9 +411,11 @@ def mix_recordings(
     try:
         for info, offset_s in sources:
             handle = sf.SoundFile(info.path, mode="r")
-            if handle.samplerate != ProcessDefaults.SAMPLE_RATE or handle.channels != 1:
+            if handle.samplerate != sample_rate or handle.channels != 1:
                 handle.close()
-                raise RuntimeError("traccia Meeting non normalizzata a mono 16 kHz")
+                raise RuntimeError(
+                    f"traccia Meeting incompatibile: richiesti mono {sample_rate} Hz"
+                )
             offset_frames = max(0, int(round(float(offset_s) * handle.samplerate)))
             handles.append((handle, offset_frames))
         total_frames = max(offset + len(handle) for handle, offset in handles)
@@ -397,7 +426,7 @@ def mix_recordings(
         with sf.SoundFile(
             str(temp),
             mode="w",
-            samplerate=ProcessDefaults.SAMPLE_RATE,
+            samplerate=sample_rate,
             channels=1,
             subtype="PCM_16",
             format="FLAC",

@@ -205,6 +205,7 @@ ApplicationWindow {
             spacing: 0
             Item {
                 objectName: 'topbar'
+                visible: false
                 Layout.fillWidth: true
                 implicitHeight: 31
                 Text {

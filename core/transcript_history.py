@@ -4,6 +4,7 @@ The web UI is intentionally not the source of truth for transcripts. This
 module stores session text and metadata under XDG_DATA_HOME so a completed or
 partially completed transcription survives a UI/app restart.
 """
+
 from __future__ import annotations
 
 import json
@@ -46,6 +47,34 @@ def _clean_session_name(name: str) -> str:
     return value
 
 
+def session_title(session) -> str:
+    if session.name:
+        return session.name
+    source_names = {
+        "microphone": "Microfono",
+        "system": "Audio di sistema",
+        "application": "Applicazione",
+        "file": "File",
+        "meeting": "Riunione",
+    }
+    source = source_names.get(session.source, "Trascrizione")
+    if session.kind == "file" or session.source == "file":
+        source = Path(session.source_path).name or "File"
+    elif (
+        session.source == "application"
+        and session.source_path
+        and not any(token in session.source_path for token in ("alsa_", "pci-", "/"))
+    ):
+        source = session.source_path
+    timestamp = _parse_timestamp(session.started_at)
+    date = (
+        timestamp.astimezone().strftime("%d/%m/%Y %H:%M")
+        if timestamp
+        else "Data non disponibile"
+    )
+    return f"{source} · {date}"
+
+
 @dataclass
 class TranscriptSession:
     id: str
@@ -65,6 +94,7 @@ class TranscriptSession:
 
     def summary(self) -> dict[str, Any]:
         data = asdict(self)
+        data["display_name"] = session_title(self)
         text = data.pop("text", "")
         segments = data.pop("segments", [])
         derived = data.pop("derived_outputs", {})
@@ -188,7 +218,9 @@ class TranscriptHistoryStore:
                     session = self._read_session(session_id)
                     cleaned = _clean_session_name(str(raw_name or ""))
                 except (ValueError, OSError):
-                    logger.warning("Nome sessione legacy non valido ignorato: %s", session_id)
+                    logger.warning(
+                        "Nome sessione legacy non valido ignorato: %s", session_id
+                    )
                     continue
                 if session is None or not cleaned or session.name:
                     continue
@@ -203,7 +235,9 @@ class TranscriptHistoryStore:
             logger.warning("Rimozione sidecar nomi sessione legacy fallita: %s", exc)
         return migrated
 
-    def set_status(self, session_id: str, status: str, *, terminal: bool = False) -> None:
+    def set_status(
+        self, session_id: str, status: str, *, terminal: bool = False
+    ) -> None:
         with self._lock:
             session = self._read_session_required(session_id)
             now = _utc_now()
@@ -219,6 +253,7 @@ class TranscriptHistoryStore:
             if session is None:
                 return None
             value = asdict(session)
+            value["display_name"] = session_title(session)
             try:
                 value["quality_issues"] = self._read_quality_issues(session_id)
             except (OSError, ValueError, TypeError) as exc:
@@ -250,13 +285,16 @@ class TranscriptHistoryStore:
                 try:
                     session = self._read_path(path)
                 except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
-                    logger.warning("Cronologia illeggibile ignorata (%s): %s", path, exc)
+                    logger.warning(
+                        "Cronologia illeggibile ignorata (%s): %s", path, exc
+                    )
                     continue
                 if terms:
                     haystack = "\n".join(
                         (
                             session.text,
                             session.name,
+                            session_title(session),
                             session.source_path,
                             session.source,
                             session.model,
@@ -295,7 +333,7 @@ class TranscriptHistoryStore:
     ) -> Path:
         """Export raw/derived text or persisted timestamp segments atomically."""
         fmt = str(format_name or "txt").strip().lower().lstrip(".")
-        if fmt not in {"txt", "srt", "vtt"}:
+        if fmt not in {"txt", "srt"}:
             raise ValueError(f"formato export non supportato: {format_name}")
         with self._lock:
             session = self._read_session_required(session_id)
@@ -314,7 +352,9 @@ class TranscriptHistoryStore:
             if target.suffix.lower() != f".{fmt}":
                 target = target.with_suffix(f".{fmt}")
             if not target.parent.is_dir():
-                raise FileNotFoundError(f"directory di destinazione non trovata: {target.parent}")
+                raise FileNotFoundError(
+                    f"directory di destinazione non trovata: {target.parent}"
+                )
             fd, tmp_name = tempfile.mkstemp(
                 prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
             )
@@ -361,7 +401,9 @@ class TranscriptHistoryStore:
                     self._quality_path(session.id).unlink(missing_ok=True)
                     deleted += 1
                 except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
-                    logger.warning("Retention cronologia ignorata per %s: %s", path, exc)
+                    logger.warning(
+                        "Retention cronologia ignorata per %s: %s", path, exc
+                    )
         return deleted
 
     @staticmethod
@@ -383,7 +425,9 @@ class TranscriptHistoryStore:
                 continue
             result.append(
                 {
-                    "name": path.name,
+                    "name": "Audio Live · "
+                    + datetime.fromtimestamp(stat.st_mtime).strftime("%d/%m/%Y %H:%M")
+                    + " · Recuperabile",
                     "path": str(path),
                     "size_bytes": stat.st_size,
                     "modified_at": datetime.fromtimestamp(
@@ -394,7 +438,9 @@ class TranscriptHistoryStore:
         return result
 
     @staticmethod
-    def resolve_recovery_audio(path: Path | str, cache_dir: Optional[Path] = None) -> Path:
+    def resolve_recovery_audio(
+        path: Path | str, cache_dir: Optional[Path] = None
+    ) -> Path:
         root = Path(cache_dir or AppMeta.CACHE_DIR).expanduser().resolve()
         candidate = Path(path).expanduser()
         try:
@@ -476,18 +522,20 @@ class TranscriptHistoryStore:
                 pass
             raise
 
-
     def _read_quality_issues(self, session_id: str) -> list[dict[str, Any]]:
         path = self._quality_path(session_id)
         if not path.exists():
             return []
         value = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        if not isinstance(value, list) or any(
+            not isinstance(item, dict) for item in value
+        ):
             raise ValueError("avvisi qualità non validi")
         return value
 
-
-    def append_quality_issues(self, session_id: str, issues: list[dict[str, Any]]) -> None:
+    def append_quality_issues(
+        self, session_id: str, issues: list[dict[str, Any]]
+    ) -> None:
         with self._lock:
             self._read_session_required(session_id)
             values = [
@@ -507,7 +555,6 @@ class TranscriptHistoryStore:
                 os.replace(tmp, path)
             finally:
                 Path(tmp).unlink(missing_ok=True)
-
 
     def _quality_path(self, session_id: str) -> Path:
         return self._root / "quality" / self._path(session_id).name

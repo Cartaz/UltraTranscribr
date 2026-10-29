@@ -92,7 +92,7 @@ ScrollView {
                             Text {
                                 textFormat: Text.PlainText
                                 width: parent.width
-                                text: record.name || record.source_path || record.id
+                                text: record.display_name || record.name || record.source_path || record.id
                                 color: Theme.primary
                                 font.family: Theme.font
                                 font.pixelSize: 14
@@ -100,7 +100,7 @@ ScrollView {
                                 elide: Text.ElideRight
                             }
                             Help {
-                                text: Theme.statusName(record.status) + ' · ' + (record.language || 'auto')
+                                text: Theme.statusName(record.status) + ' · ' + Theme.languageName(record.language)
                             }
                             Help {
                                 width: parent.width
@@ -143,7 +143,7 @@ ScrollView {
                         Text {
                             textFormat: Text.PlainText
                             width: 133
-                            text: archive.selected.name || (archive.selected.id ? 'Trascrizione' : 'Seleziona una trascrizione')
+                            text: archive.selected.display_name || archive.selected.name || (archive.selected.id ? 'Trascrizione' : 'Seleziona una trascrizione')
                             wrapMode: Text.WordWrap
                             color: Theme.primary
                             font.family: Theme.font
@@ -159,7 +159,7 @@ ScrollView {
                             id: sessionName
                             Layout.fillWidth: true
                             placeholderText: 'Nome sessione'
-                            text: archive.selected.name || ''
+                            text: archive.selected.display_name || archive.selected.name || ''
                             maximumLength: 120
                             enabled: !!archive.selected.id
                         }
@@ -185,12 +185,7 @@ ScrollView {
                                 enabled: !!archive.selected.id
                                 onClicked: archive.export('txt')
                             }
-                            NeuButton {
-                                text: 'Esporta .vtt'
-                                compact: true
-                                enabled: !!archive.selected.id
-                                onClicked: archive.export('vtt')
-                            }
+
                             NeuButton {
                                 text: 'Esporta .srt'
                                 compact: true
@@ -343,7 +338,7 @@ ScrollView {
                     height: 60
                     Help {
                         Layout.fillWidth: true
-                        text: record.path || record.name || ''
+                        text: record.path || record.display_name || record.name || ''
                     }
                     NeuButton {
                         compact: true

@@ -1,4 +1,5 @@
 """Tests for crash-resistant transcript history persistence."""
+
 from __future__ import annotations
 
 import json
@@ -30,7 +31,9 @@ def test_session_is_persisted_incrementally(tmp_path: Path) -> None:
     assert session["status"] == "completed"
     assert session["ended_at"] is not None
 
-    persisted = json.loads((store.root / f"{session_id}.json").read_text(encoding="utf-8"))
+    persisted = json.loads(
+        (store.root / f"{session_id}.json").read_text(encoding="utf-8")
+    )
     assert persisted["text"] == session["text"]
 
 
@@ -112,7 +115,8 @@ def test_recovery_audio_inventory_and_safe_delete(tmp_path: Path) -> None:
 
     items = TranscriptHistoryStore.list_recovery_audio(cache)
     assert len(items) == 1
-    assert items[0]["name"] == wav.name
+    assert items[0]["name"].startswith("Audio Live · ")
+    assert items[0]["name"].endswith(" · Recuperabile")
     assert items[0]["path"] == str(wav)
     assert items[0]["size_bytes"] == wav.stat().st_size
     assert TranscriptHistoryStore.resolve_recovery_audio(wav, cache) == wav.resolve()

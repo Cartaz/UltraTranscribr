@@ -11,151 +11,84 @@ ScrollView {
         id: pageContent
         width: page.availableWidth - 19
         spacing: 18
-        RowLayout {
-            id: inputRow
+        Card {
+            objectName: 'fileInputCard'
             Layout.fillWidth: true
-            spacing: 18
-            Card {
-                objectName: 'fileInputCard'
+
+            Layout.preferredHeight: 290
+            CardHead {
+
+                title: 'Selezione file'
+            }
+            ColumnLayout {
                 Layout.fillWidth: true
-                Layout.preferredWidth: (inputRow.width - 18) * .54
-                Layout.preferredHeight: 394
-                CardHead {
-                    kicker: 'MEDIA'
-                    title: 'Trascrivi un file'
+                spacing: 7
+                FieldLabel {
+                    text: 'File audio o video'
                 }
-                ColumnLayout {
+                RowLayout {
                     Layout.fillWidth: true
-                    spacing: 7
-                    FieldLabel {
-                        text: 'File audio o video'
-                    }
-                    RowLayout {
+                    spacing: 9
+                    NeuField {
                         Layout.fillWidth: true
-                        spacing: 9
-                        NeuField {
-                            Layout.fillWidth: true
-                            readOnly: true
-                            text: files.selection
-                            placeholderText: 'Nessun file selezionato'
-                        }
-                        NeuButton {
-                            text: 'Sfoglia multipli'
-                            enabled: !settings.dirty && !settings.saving && !meeting.busy && !live.activeCount
-                            onClicked: files.choose()
-                        }
+                        readOnly: true
+                        text: files.selection
+                        placeholderText: 'Nessun file selezionato'
+                    }
+                    NeuButton {
+                        text: 'Sfoglia multipli'
+                        enabled: !settings.dirty && !settings.saving && !meeting.busy && !live.activeCount
+                        onClicked: files.choose()
                     }
                 }
-                ColumnLayout {
+            }
+            ColumnLayout {
+                Layout.fillWidth: true
+                FieldLabel {
+                    text: 'Lingua dei nuovi file'
+                }
+                RowLayout {
                     Layout.fillWidth: true
-                    FieldLabel { text: 'Lingua dei nuovi file' }
-                    RowLayout {
+                    LanguageCombo {
+                        objectName: 'fileLanguageField'
                         Layout.fillWidth: true
-                        NeuField {
-                            objectName: 'fileLanguageField'
-                            Layout.fillWidth: true
-                            Layout.minimumWidth: 45
-                            text: files.language
-                            placeholderText: 'it, en, auto'
-                            onTextEdited: files.editLanguage(text)
-                        }
-                        NeuButton {
-                            text: 'Predefinita'
-                            compact: true
-                            onClicked: files.resetLanguage()
-                        }
+                        Layout.minimumWidth: 45
+                        selectedValue: files.language
+
+                        onChosen: value => files.editLanguage(value)
+                    }
+                    NeuButton {
+                        text: 'Predefinita'
+                        compact: true
+                        onClicked: files.resetLanguage()
                     }
                 }
+            }
+            RowLayout {
+                Layout.fillWidth: true
                 NeuToggle {
                     id: song
                     Layout.fillWidth: true
                     text: 'Modalità musica'
-                    description: 'Preserva ripetizioni utili nei testi cantati.'
                 }
                 NeuToggle {
                     id: isolate
                     Layout.fillWidth: true
                     enabled: song.checked
                     text: 'Isola voce'
-                    description: 'Usa Demucs se installato; solo in modalità musica.'
-                }
-                RowLayout {
-                    NeuButton {
-                        text: 'Accoda'
-                        selected: true
-                        enabled: !settings.dirty && !settings.saving && !meeting.busy && !live.activeCount
-                        onClicked: files.start(song.checked, isolate.checked)
-                    }
-                    NeuButton {
-                        text: 'Ferma'
-                        enabled: files.busy
-                        onClicked: files.cancel()
-                    }
                 }
             }
-            Card {
-                objectName: 'fileStatusCard'
-                Layout.fillWidth: true
-                Layout.preferredWidth: (inputRow.width - 18) * .46
-                Layout.preferredHeight: 394
-                CardHead {
-                    kicker: 'SESSIONE'
-                    title: 'Elaborazione file'
-                    Rectangle {
-                        implicitWidth: 9
-                        implicitHeight: 9
-                        Layout.alignment: Qt.AlignTop
-                        Layout.topMargin: 4
-                        radius: 4.5
-                        color: files.busy ? Theme.accent : Theme.muted
-                    }
+            RowLayout {
+                NeuButton {
+                    text: 'Accoda'
+                    selected: true
+                    enabled: !settings.dirty && !settings.saving && !meeting.busy && !live.activeCount
+                    onClicked: files.start(song.checked, isolate.checked)
                 }
-                Item {
-                    Layout.fillWidth: true
-                    implicitHeight: 63
-                    InsetSurface {
-                        anchors.fill: parent
-                    }
-                    GridLayout {
-                        anchors.fill: parent
-                        anchors.margins: 13
-                        anchors.topMargin: 3
-                        anchors.bottomMargin: 3
-                        columns: 2
-                        columnSpacing: 16
-                        rowSpacing: 0
-                        uniformCellWidths: true
-                        Metric {
-                            Layout.fillWidth: true
-                            label: 'Stato'
-                            value: Theme.statusName(files.status)
-                        }
-                        Metric {
-                            Layout.fillWidth: true
-                            label: 'Modello'
-                            value: Theme.modelName(files.activeModel || settings.applied.model_size)
-                        }
-                        Metric {
-                            Layout.fillWidth: true
-                            label: 'Lingua'
-                            value: files.activeLanguage
-                        }
-                        Metric {
-                            Layout.fillWidth: true
-                            label: 'File'
-                            value: files.selection || '—'
-                        }
-                    }
-                }
-                NeuProgress {
-                    Layout.fillWidth: true
-                    value: files.progress
-                }
-                Help {
-                    text: 'Avanzamento: ' + Math.round(files.progress) + '%.'
-                }
-                Item {
-                    Layout.fillHeight: true
+                NeuButton {
+                    text: 'Ferma'
+                    enabled: files.busy
+                    onClicked: files.cancel()
                 }
             }
         }
@@ -163,9 +96,9 @@ ScrollView {
             objectName: 'fileQueueCard'
             Layout.fillWidth: true
             Layout.topMargin: 12
-            Layout.preferredHeight: 168.796875 + (fileQueue.count ? Math.min(230, fileQueue.count * 80) - 46 : 0)
+            Layout.preferredHeight: 180 + (fileQueue.count ? Math.min(230, fileQueue.count * 80) - 46 : 0)
             CardHead {
-                kicker: 'BATCH'
+
                 title: 'Coda file'
                 NeuButton {
                     text: 'Pulisci completati'
@@ -181,7 +114,20 @@ ScrollView {
             }
             Help {
                 Layout.fillWidth: true
-                text: 'Seleziona più file oppure trascinali nella finestra. La coda usa un solo worker File alla volta e conserva la cronologia di ogni elemento.'
+                text: Theme.statusName(files.status) + ' · ' + files.queueSummary
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                FieldLabel {
+                    text: 'File corrente'
+                }
+                NeuProgress {
+                    Layout.fillWidth: true
+                    value: files.progress
+                }
+                Help {
+                    text: Math.round(files.progress) + '%'
+                }
             }
             QueueList {
                 Layout.fillWidth: true
@@ -196,7 +142,7 @@ ScrollView {
             Layout.minimumHeight: 180
             Layout.preferredHeight: 220
             CardHead {
-                kicker: 'OUTPUT'
+
                 title: 'Trascrizione file'
                 NeuButton {
                     text: 'Copia'
@@ -209,6 +155,15 @@ ScrollView {
                     enabled: !files.busy
                     onClicked: files.clearText()
                 }
+            }
+            NeuField {
+                Layout.fillWidth: true
+                visible: files.hasSession
+                text: files.title
+                placeholderText: 'Titolo della trascrizione'
+                Accessible.name: 'Titolo della trascrizione'
+                maximumLength: 120
+                onEditingFinished: files.rename(text)
             }
             Transcript {
                 Layout.fillWidth: true
