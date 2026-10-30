@@ -338,7 +338,14 @@ ScrollView {
                     height: 60
                     Help {
                         Layout.fillWidth: true
-                        text: record.path || record.display_name || record.name || ''
+                        text: record.display_name || record.name || record.path || ''
+                        maximumLineCount: 2
+                        elide: Text.ElideRight
+                        ToolTip.visible: recoveryNameHover.hovered
+                        ToolTip.text: record.path || ''
+                        HoverHandler {
+                            id: recoveryNameHover
+                        }
                     }
                     NeuButton {
                         compact: true

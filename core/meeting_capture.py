@@ -329,6 +329,9 @@ def normalize_media_to_flac(
             "-i",
             str(src),
             "-vn",
+            # Keep leading gaps and discontinuities on the original media clock.
+            "-af",
+            "aresample=async=1:first_pts=0",
             "-ar",
             str(ProcessDefaults.SAMPLE_RATE),
             "-ac",

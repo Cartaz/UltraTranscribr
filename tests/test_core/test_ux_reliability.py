@@ -1,6 +1,10 @@
 """UX roadmap: persisted review commands, source fidelity and lossless backlog."""
 
 import json
+import shutil
+import subprocess
+import threading
+from queue import Empty
 from unittest.mock import Mock
 
 import numpy as np
@@ -15,6 +19,83 @@ from core.microphone_recording import MicrophoneRecorder
 from core.review_timeline import ReviewTimeline
 from core.transcriber import TranscriberThread
 from tests.test_core.test_meeting_store import _meeting
+
+
+def test_stop_while_consumer_waits_retains_unfinished_segment(tmp_path, monkeypatch):
+    monkeypatch.setattr(AppMeta, "CACHE_DIR", tmp_path / "cache")
+    buffer = BufferManager()
+    audio = np.full(4000, 0.25, dtype=np.float32)
+    buffer.put(audio)
+    waiting, release = threading.Event(), threading.Event()
+    original_get = buffer.get
+
+    def get(timeout=None):
+        if not buffer.is_empty:
+            return original_get(timeout)
+        waiting.set()
+        assert release.wait(3)
+        raise Empty
+
+    monkeypatch.setattr(buffer, "get", get)
+    backend = Mock()
+    worker = TranscriberThread(buffer, backend, Settings(), session_id="stop-race")
+    worker.start()
+    try:
+        assert waiting.wait(3)
+        worker.stop()
+        buffer.close_input()
+    finally:
+        release.set()
+        worker.join(3)
+        buffer.close()
+    assert not worker.is_alive()
+    recovery, = (tmp_path / "cache").glob("recovery-live-*.wav")
+    recovered, rate = sf.read(recovery)
+    assert rate == 16000 and len(recovered) == len(audio)
+    assert np.allclose(recovered, audio, atol=1 / 16000)
+    backend.transcribe_audio.assert_not_called()
+
+
+@pytest.mark.parametrize("workflow", ["meeting", "file"])
+def test_video_audio_offset_preserves_original_playback_clock(tmp_path, workflow):
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg unavailable")
+    source = tmp_path / "delayed.mkv"
+    tone = tmp_path / "tone.wav"
+    samples = np.sin(2 * np.pi * 440 * np.arange(12000) / 48000) * 0.3
+    sf.write(tone, samples, 48000)
+    subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-itsoffset", "2", "-i", str(tone),
+            "-f", "lavfi", "-i", "color=c=black:s=16x16:r=10:d=3",
+            "-map", "1:v", "-map", "0:a", "-c:v", "ffv1",
+            "-c:a", "pcm_s16le", "-t", "3", str(source),
+        ],
+        check=True,
+    )
+    before = source.read_bytes()
+    converted = None
+    try:
+        if workflow == "meeting":
+            from core.meeting_capture import normalize_media_to_flac
+
+            converted = tmp_path / "canonical.flac"
+            normalize_media_to_flac(source, converted)
+        else:
+            from core.file_transcriber import FileTranscriberThread
+
+            worker = FileTranscriberThread(str(source), Mock(), Settings())
+            converted = worker._convert_to_pcm_wav(str(source))
+        data, rate = sf.read(converted)
+        assert rate == 16000
+        assert len(data) / rate == pytest.approx(2.25, abs=0.002)
+        assert np.max(np.abs(data[: 2 * rate])) < 0.001
+        assert np.sqrt(np.mean(data[2 * rate :] ** 2)) > 0.1
+        assert source.read_bytes() == before
+    finally:
+        if workflow == "file" and converted:
+            shutil.rmtree(str(converted.rsplit("/", 1)[0]))
 
 
 def test_fifty_review_edits_survive_restart_with_persistent_undo_and_redo(tmp_path):
@@ -116,6 +197,19 @@ def test_missing_or_tampered_original_is_not_silently_replaced_by_analysis_audio
     assert store.playback_path(sid) is None
     path.unlink()
     assert store.playback_path(sid) is None
+
+
+def test_relocated_original_does_not_block_reading_review(tmp_path):
+    _, store, sid = _meeting(tmp_path)
+    source = tmp_path / "old-location-original.wav"
+    source.write_bytes(b"original outside current managed storage")
+    metadata = store.get(sid)["meeting"]
+    before = metadata["review_segments"]
+    metadata["original_recording"] = {"path": str(source), "size_bytes": source.stat().st_size}
+    store._write(sid, metadata)
+    assert store.playback_path(sid) is None
+    assert store.get(sid)["meeting"]["review_segments"] == before
+    assert source.read_bytes() == b"original outside current managed storage"
 
 
 def test_native_rate_journal_recovers_at_48khz_after_crash(tmp_path):

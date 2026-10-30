@@ -6,23 +6,32 @@ ScrollView {
     id: page
     property bool fromFile: false
     property bool reviewRequested: false
-    NumberAnimation {
-        id: navigateReview
-        target: page.contentItem
-        property: 'contentY'
-        duration: 240
-        easing.type: Easing.InOutQuad
+    readonly property Flickable reviewViewport: page.contentItem as Flickable
+    function showRequestedReview() {
+        if (!reviewRequested || !meeting.review.id || !reviewViewport || !reviewArea.visible || reviewArea.height <= 0 || reviewArea.y <= 0)
+            return;
+        // Review data arrives before the layout has expanded its scroll extent.
+        if (page.contentHeight < reviewArea.y + reviewArea.height || reviewViewport.contentHeight < reviewArea.y + reviewArea.height)
+            return;
+        let destination = Math.max(0, Math.min(reviewArea.y, page.contentHeight - page.availableHeight));
+        reviewArea.forceActiveFocus(Qt.OtherFocusReason);
+        reviewViewport.contentY = destination;
+        if (Math.abs(reviewViewport.contentY - destination) < 1)
+            reviewRequested = false;
     }
+    Timer {
+        interval: 30
+        repeat: true
+        running: page.reviewRequested && !!meeting.review.id
+        onTriggered: page.showRequestedReview()
+    }
+    onContentHeightChanged: Qt.callLater(showRequestedReview)
     Connections {
         target: meeting
         function onReviewOpened() {
             if (!page.reviewRequested)
                 return;
-            page.reviewRequested = false;
-            Qt.callLater(() => {
-                navigateReview.to = Math.max(0, Math.min(reviewArea.y, page.contentHeight - page.availableHeight));
-                navigateReview.start();
-            });
+            Qt.callLater(page.showRequestedReview);
         }
     }
     property real acquisitionHeight: acquisitionCard.implicitHeight
@@ -581,6 +590,8 @@ ScrollView {
         }
         RowLayout {
             id: reviewArea
+            onYChanged: Qt.callLater(page.showRequestedReview)
+            onHeightChanged: Qt.callLater(page.showRequestedReview)
             visible: !!meeting.review.id
             Layout.fillWidth: true
             Layout.alignment: Qt.AlignTop

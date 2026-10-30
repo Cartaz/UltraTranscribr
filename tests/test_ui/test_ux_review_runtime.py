@@ -4,11 +4,35 @@ import threading
 
 import pytest
 from conftest import visual_child, wait_until
-from PySide6.QtCore import QObject, Qt
+from PySide6.QtCore import QObject, QPointF, Qt
 from PySide6.QtTest import QTest
 
 from tests.test_ui.test_qml_runtime import seed_meeting
 from ui.adapters.meeting import MeetingAdapter
+
+
+def test_opening_archive_scrolls_after_async_review_expands_layout(quick_window):
+    app, window, _service, controller, _messages = quick_window
+    sid = seed_meeting(controller, 50)
+    root = window._window
+    root.setProperty("view", "meeting")
+    window.runtime.archive.refresh()
+    wait_until(lambda: window.runtime.archive.meetings.count == 1)
+    assert QTest.qWaitForWindowExposed(root)
+    QTest.qWait(50)
+    wait_until(lambda: visual_child(root.contentItem(), "recentMeetingOpen0") is not None)
+    button = visual_child(root.contentItem(), "recentMeetingOpen0")
+    assert button is not None
+    point = button.mapToScene(QPointF(button.width() / 2, button.height() / 2))
+    QTest.mouseClick(root, Qt.MouseButton.LeftButton, pos=point.toPoint())
+    wait_until(lambda: window.runtime.meeting.review.get("id") == sid)
+    page = root.findChild(QObject, "meetingPage")
+    viewport = page.property("contentItem")
+    wait_until(lambda: viewport.property("contentY") > 100)
+    wait_until(lambda: not page.property("reviewRequested"))
+    QTest.qWait(300)
+    review = root.findChild(QObject, "meetingCorrectionsCard")
+    assert review.mapToScene(QPointF(0, 0)).y() < root.height() / 2
 
 
 def test_fifty_edits_autosave_without_manual_confirmation_and_reload(quick_window):
@@ -37,6 +61,65 @@ def test_fifty_edits_autosave_without_manual_confirmation_and_reload(quick_windo
         assert replacement.segments.get(49)["text"] == "Correzione persistente 49"
     finally:
         replacement.close()
+
+
+def test_manual_review_scrollbar_suspends_audio_follow(quick_window):
+    _app, window, _service, controller, _messages = quick_window
+    seed_meeting(controller, 50)
+    root = window._window
+    root.setProperty("view", "meeting")
+    window.runtime.archive.refresh()
+    wait_until(lambda: window.runtime.archive.meetings.count == 1)
+    assert QTest.qWaitForWindowExposed(root)
+    QTest.qWait(50)
+    wait_until(lambda: visual_child(root.contentItem(), "recentMeetingOpen0") is not None)
+    button = visual_child(root.contentItem(), "recentMeetingOpen0")
+    point = button.mapToScene(QPointF(button.width() / 2, button.height() / 2))
+    QTest.mouseClick(root, Qt.MouseButton.LeftButton, pos=point.toPoint())
+    page = root.findChild(QObject, "meetingPage")
+    wait_until(lambda: page.property("contentItem").property("contentY") > 100)
+    listing = root.findChild(QObject, "meetingReviewList")
+    modes = root.findChild(QObject, "reviewEditorModes")
+    bar = visual_child(root.contentItem(), "reviewScrollBar")
+    assert modes.property("following")
+    start = bar.mapToScene(QPointF(bar.width() / 2, bar.property("size") * bar.height() / 2))
+    end = start + QPointF(0, 60)
+    QTest.mousePress(root, Qt.MouseButton.LeftButton, pos=start.toPoint())
+    QTest.mouseMove(root, end.toPoint())
+    QTest.mouseRelease(root, Qt.MouseButton.LeftButton, pos=end.toPoint())
+    wait_until(lambda: listing.property("contentY") > 0)
+    assert not modes.property("following")
+    position = listing.property("contentY")
+    window.runtime.meeting.setPlaybackPosition(80)
+    QTest.qWait(100)
+    assert listing.property("contentY") == pytest.approx(position, abs=1)
+
+
+def test_language_keyboard_choice_scrolls_into_view_and_commits_code(quick_window):
+    _app, window, _service, _controller, _messages = quick_window
+    root = window._window
+    root.setProperty("view", "file")
+    combo = root.findChild(QObject, "fileLanguageField")
+    assert QTest.qWaitForWindowExposed(root)
+    QTest.qWait(50)
+    combo.forceActiveFocus()
+    QTest.keyClick(root, Qt.Key.Key_Space)
+    wait_until(lambda: visual_child(root.contentItem(), "fileLanguageFieldChoices") is not None)
+    QTest.keyClick(root, Qt.Key.Key_End)
+    assert QTest.qWaitForWindowExposed(root)
+    QTest.qWait(50)
+    listing = visual_child(root.contentItem(), "fileLanguageFieldChoices")
+    wait_until(lambda: listing.property("currentIndex") == combo.property("count") - 1)
+    selected = listing.property("currentItem")
+    assert selected is not None and selected.property("highlighted")
+    label = selected.property("contentItem")
+    wait_until(lambda: (
+        label.mapToItem(listing, QPointF(0, 0)).y() >= 0
+        and label.mapToItem(listing, QPointF(0, 0)).y() + label.height() <= listing.height() + 1
+    ))
+    QTest.keyClick(root, Qt.Key.Key_Return)
+    assert window.runtime.files.language == combo.property("currentValue")
+    assert window.runtime.files.language == combo.property("selectedValue")
 
 
 @pytest.mark.parametrize("mode", ["compact", "columns", "document"])

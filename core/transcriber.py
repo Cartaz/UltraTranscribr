@@ -98,7 +98,7 @@ class TranscriberThread(threading.Thread):
                     self._emit("transcriber_status_changed", StatusEnum.ERROR.value)
                 else:
                     self._emit("transcriber_drained", None)
-            elif not drained:
+            else:
                 self._persist_recovery_audio()
             if not self._terminal_error:
                 self._emit("transcriber_status_changed", StatusEnum.STOPPED.value)

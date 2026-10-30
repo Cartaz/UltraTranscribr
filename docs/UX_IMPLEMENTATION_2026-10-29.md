@@ -4,6 +4,13 @@ Questa è la verifica operativa di [ROADMAP_UX_2026-10-29.md](ROADMAP_UX_2026-10
 La scelta successiva dell'utente è sviluppare B1, B2 e B3; B4 e B5 rimangono
 concept di confronto. Le tre modalità selezionabili condividono il documento.
 
+## Collaudo successivo della copia installata
+
+Il [rapporto del 30 ottobre](UX_INSTALLED_VERIFICATION_2026-10-30.md) completa
+le verifiche delle voci implementate, documenta le correzioni emerse e il nuovo
+layout File affiancato. Le misure e le limitazioni sotto restano la baseline
+del primo ciclo; il rapporto successivo distingue le prove aggiuntive.
+
 ## Audit e baseline
 
 Baseline Git: `9f43d67`; suite iniziale: **778 test passati in 29,43 s**.

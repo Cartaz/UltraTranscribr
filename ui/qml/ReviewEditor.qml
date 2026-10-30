@@ -94,7 +94,9 @@ ColumnLayout {
             reuseItems: true
             spacing: 5
             ScrollBar.vertical: ScrollBar {
+                objectName: 'reviewIndexScrollBar'
                 policy: ScrollBar.AlwaysOn
+                onPressedChanged: if (pressed) root.following = false
             }
             onMovementStarted: root.following = false
             delegate: NeuButton {
@@ -119,7 +121,9 @@ ColumnLayout {
             contentWidth: availableWidth
             clip: true
             ScrollBar.vertical: ScrollBar {
+                objectName: 'reviewColumnScrollBar'
                 policy: ScrollBar.AsNeeded
+                onPressedChanged: if (pressed) root.following = false
             }
             ReviewSegment {
                 width: parent.width - 16
@@ -142,8 +146,10 @@ ColumnLayout {
             clip: true
             spacing: root.mode === 'document' ? 2 : 8
             ScrollBar.vertical: ScrollBar {
+                objectName: 'reviewScrollBar'
                 policy: ScrollBar.AlwaysOn
                 width: 14
+                onPressedChanged: if (pressed) root.following = false
             }
             onMovementStarted: root.following = false
             WheelHandler {

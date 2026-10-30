@@ -212,14 +212,18 @@ class MeetingStore:
             original = data.get("original_recording") or {}
         if not original.get("path"):
             return None
-        path = self._resolve_original_path(original["path"])
-        if not path.is_file() or path.stat().st_size != original.get("size_bytes"):
+        try:
+            path = self._resolve_original_path(original["path"])
+            if not path.is_file() or path.stat().st_size != original.get("size_bytes"):
+                return None
+            digest = hashlib.sha256()
+            with path.open("rb") as handle:
+                while block := handle.read(1024 * 1024):
+                    digest.update(block)
+            return path if digest.hexdigest() == original.get("sha256") else None
+        except (OSError, ValueError, TypeError):
+            # An unavailable original must not prevent opening the transcript.
             return None
-        digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            while block := handle.read(1024 * 1024):
-                digest.update(block)
-        return path if digest.hexdigest() == original.get("sha256") else None
 
     @staticmethod
     def _resolve_original_path(raw):
