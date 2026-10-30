@@ -1,16 +1,17 @@
 """Timestamp-preserving transcript export helpers."""
+
 from __future__ import annotations
 
 import math
 from typing import Any, Iterable
 
 
-def _timestamp(seconds: float, *, vtt: bool) -> str:
+def _timestamp(seconds: float) -> str:
     total_ms = max(0, int(round(float(seconds) * 1000.0)))
     hours, remainder = divmod(total_ms, 3_600_000)
     minutes, remainder = divmod(remainder, 60_000)
     secs, millis = divmod(remainder, 1000)
-    separator = "." if vtt else ","
+    separator = ","
     return f"{hours:02d}:{minutes:02d}:{secs:02d}{separator}{millis:03d}"
 
 
@@ -106,23 +107,11 @@ def render_srt(segments: Iterable[dict[str, Any]]) -> str:
     for index, segment in enumerate(normalized, start=1):
         blocks.append(
             f"{index}\n"
-            f"{_timestamp(segment['start'], vtt=False)} --> "
-            f"{_timestamp(segment['end'], vtt=False)}\n"
+            f"{_timestamp(segment['start'])} --> "
+            f"{_timestamp(segment['end'])}\n"
             f"{segment['text']}"
         )
     return "\n\n".join(blocks) + ("\n" if blocks else "")
-
-
-def render_vtt(segments: Iterable[dict[str, Any]]) -> str:
-    normalized = normalize_segments(segments)
-    blocks = ["WEBVTT"]
-    for segment in normalized:
-        blocks.append(
-            f"{_timestamp(segment['start'], vtt=True)} --> "
-            f"{_timestamp(segment['end'], vtt=True)}\n"
-            f"{segment['text']}"
-        )
-    return "\n\n".join(blocks) + "\n"
 
 
 def render_export(
@@ -140,6 +129,4 @@ def render_export(
         raise ValueError("La sessione non contiene segmenti temporizzati")
     if fmt == "srt":
         return render_srt(normalized)
-    if fmt == "vtt":
-        return render_vtt(normalized)
     raise ValueError(f"formato export non supportato: {format_name}")

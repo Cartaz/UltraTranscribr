@@ -39,7 +39,7 @@ function fileHistoryEnsureUI() {
     const exportButton = $("history-export");
     if (exportButton) {
       exportButton.textContent = "Esporta .txt";
-      for (const [id, caption] of [["history-export-srt", "Esporta .srt"], ["history-export-vtt", "Esporta .vtt"]]) {
+      for (const [id, caption] of [["history-export-srt", "Esporta .srt"]]) {
         const button = document.createElement("button");
         button.type = "button";
         button.id = id;
@@ -364,7 +364,6 @@ function fileHistoryClearSelection() {
   all(".history-item").forEach(item => item.classList.remove("active"));
   if ($("postprocess-bar")) $("postprocess-bar").hidden = true;
   if ($("history-export-srt")) $("history-export-srt").disabled = true;
-  if ($("history-export-vtt")) $("history-export-vtt").disabled = true;
   if ($("history-name")) {
     $("history-name").value = "";
     $("history-name").disabled = true;
@@ -398,7 +397,6 @@ function fileHistoryShowSession(session) {
   fileHistoryShowProfile("raw");
   const timed = Array.isArray(session.segments) && session.segments.length > 0;
   if ($("history-export-srt")) $("history-export-srt").disabled = !timed;
-  if ($("history-export-vtt")) $("history-export-vtt").disabled = !timed;
   if ($("history-name")) {
     $("history-name").disabled = false;
     $("history-name").value = String(session.name || "");
@@ -645,7 +643,6 @@ const fileHistoryModule = {
     $("history-refresh").onclick = fileHistoryRefresh;
     $("history-export").onclick = () => fileHistoryExport("txt");
     $("history-export-srt").onclick = () => fileHistoryExport("srt");
-    $("history-export-vtt").onclick = () => fileHistoryExport("vtt");
     $("history-delete").onclick = fileHistoryDeleteSelected;
     $("history-copy").onclick = () => copyValue(fileHistoryDisplayedText || state.historyText);
     $("history-profile").onchange = eventObject => fileHistoryShowProfile(eventObject.target.value);

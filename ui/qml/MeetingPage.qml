@@ -5,7 +5,36 @@ import QtQuick.Layouts
 ScrollView {
     id: page
     property bool fromFile: false
-    property real acquisitionHeight: 499.9375 + englishControls.implicitHeight + 12 + (fromFile ? Math.min(290, meetingDrafts.count * 132) : Math.max(0, Math.min(280, meetingSources.count * 61) - 61))
+    property bool reviewRequested: false
+    readonly property Flickable reviewViewport: page.contentItem as Flickable
+    function showRequestedReview() {
+        if (!reviewRequested || !meeting.review.id || !reviewViewport || !reviewArea.visible || reviewArea.height <= 0 || reviewArea.y <= 0)
+            return;
+        // Review data arrives before the layout has expanded its scroll extent.
+        if (page.contentHeight < reviewArea.y + reviewArea.height || reviewViewport.contentHeight < reviewArea.y + reviewArea.height)
+            return;
+        let destination = Math.max(0, Math.min(reviewArea.y, page.contentHeight - page.availableHeight));
+        reviewArea.forceActiveFocus(Qt.OtherFocusReason);
+        reviewViewport.contentY = destination;
+        if (Math.abs(reviewViewport.contentY - destination) < 1)
+            reviewRequested = false;
+    }
+    Timer {
+        interval: 30
+        repeat: true
+        running: page.reviewRequested && !!meeting.review.id
+        onTriggered: page.showRequestedReview()
+    }
+    onContentHeightChanged: Qt.callLater(showRequestedReview)
+    Connections {
+        target: meeting
+        function onReviewOpened() {
+            if (!page.reviewRequested)
+                return;
+            Qt.callLater(page.showRequestedReview);
+        }
+    }
+    property real acquisitionHeight: acquisitionCard.implicitHeight
     clip: true
     contentWidth: availableWidth
     contentHeight: pageContent.implicitHeight + 32
@@ -20,13 +49,14 @@ ScrollView {
             spacing: 16
             Layout.alignment: Qt.AlignTop
             Card {
+                id: acquisitionCard
                 objectName: 'meetingInputCard'
                 Layout.fillWidth: true
                 Layout.preferredWidth: 1
                 Layout.preferredHeight: page.acquisitionHeight
                 Layout.fillHeight: true
                 CardHead {
-                    kicker: 'RIUNIONE'
+
                     title: 'Acquisisci e analizza'
                 }
                 RowLayout {
@@ -49,8 +79,13 @@ ScrollView {
                 }
                 CardHead {
                     visible: !page.fromFile
-                    kicker: 'SORGENTI'
-                    title: 'Audio realtime'
+
+                    title: 'Sorgenti'
+                    ToolTip.visible: sourceHover.hovered
+                    ToolTip.text: 'Combina fino a 8 sorgenti conservate separatamente e sincronizzate.'
+                    HoverHandler {
+                        id: sourceHover
+                    }
                     NeuButton {
                         text: 'Aggiorna'
                         compact: true
@@ -87,15 +122,15 @@ ScrollView {
                             spacing: 7
                             Text {
                                 textFormat: Text.PlainText
-                                Layout.preferredWidth: 88
-                                text: 'Sorgente ' + (index + 1)
+                                Layout.preferredWidth: 24
+                                text: String(index + 1)
                                 color: Theme.primary
                                 font.family: Theme.font
                                 font.pixelSize: 13
                                 font.bold: true
                             }
                             EnumCombo {
-                                Layout.preferredWidth: 106
+                                Layout.preferredWidth: 136
                                 Layout.minimumWidth: 0
                                 model: [
                                     {
@@ -135,11 +170,7 @@ ScrollView {
                         }
                     }
                 }
-                Help {
-                    Layout.fillWidth: true
-                    visible: !page.fromFile
-                    text: 'Puoi combinare fino a 8 sorgenti: microfono, audio di sistema e singole applicazioni. Ogni sorgente viene conservata come traccia separata e sincronizzata nel mix della riunione.'
-                }
+
                 ColumnLayout {
                     Layout.fillWidth: true
                     visible: page.fromFile
@@ -157,18 +188,16 @@ ScrollView {
                         NeuButton {
                             text: 'Seleziona file'
                             enabled: !meeting.busy
-                            onClicked: meeting.choose(language.text, Number(speakerCount.text))
+                            onClicked: meeting.choose(language.selectedValue, Number(speakerCount.text))
                         }
-                    }
-                    Help {
-                        Layout.fillWidth: true
-                        text: 'Puoi selezionare più registrazioni e scegliere il percorso per ciascuna. Verranno elaborate una alla volta.'
                     }
                 }
                 ColumnLayout {
                     id: englishControls
                     Layout.fillWidth: true
-                    FieldLabel { text: 'Motore riunioni' }
+                    FieldLabel {
+                        text: 'Motore riunioni'
+                    }
                     NeuCombo {
                         id: meetingPipelineChoice
                         Layout.fillWidth: true
@@ -185,6 +214,7 @@ ScrollView {
                     }
                     Help {
                         Layout.fillWidth: true
+                        visible: !!meeting.englishStatus.error
                         text: meeting.englishStatus.error || (meeting.englishStatus.ready ? 'Qwen pronto. Testo e interlocutori vengono elaborati sul computer.' : 'Il motore riunioni richiede circa ' + (meeting.englishStatus.download_gb || '—') + ' GB di modelli locali.')
                     }
                     RowLayout {
@@ -217,13 +247,14 @@ ScrollView {
                         }
                         RowLayout {
                             Layout.fillWidth: true
-                            NeuField {
+                            LanguageCombo {
                                 id: language
                                 objectName: 'meetingLanguageField'
+                                model: Theme.meetingLanguages
                                 Layout.fillWidth: true
                                 Layout.minimumWidth: 45
-                                text: meeting.language
-                                onTextEdited: meeting.editLanguage(text)
+                                selectedValue: meeting.language
+                                onChosen: value => meeting.editLanguage(value)
                             }
                             NeuButton {
                                 text: '↺'
@@ -241,6 +272,8 @@ ScrollView {
                         }
                         NeuField {
                             id: speakerCount
+                            ToolTip.visible: hovered
+                            ToolTip.text: '0 = rilevamento automatico; da 1 a 20 per un numero noto.'
                             Layout.fillWidth: true
                             text: '0'
                             validator: IntValidator {
@@ -250,10 +283,7 @@ ScrollView {
                         }
                     }
                 }
-                Help {
-                    Layout.fillWidth: true
-                    text: page.fromFile ? '0 = rilevamento automatico. Dopo la selezione puoi modificare i valori separatamente per ogni registrazione.' : '0 = rilevamento automatico degli interlocutori.'
-                }
+
                 ListView {
                     id: drafts
                     visible: page.fromFile && meetingDrafts.count > 0
@@ -296,25 +326,33 @@ ScrollView {
                         }
                         RowLayout {
                             Layout.fillWidth: true
-                            FieldLabel { text: 'Lingua' }
-                            NeuField {
-                                objectName: 'draftLanguage' + index
-                                Layout.fillWidth: true
-                                text: record.language
-                                readOnly: false
-                                onTextEdited: meeting.editDraft(index, 'language', text)
+                            FieldLabel {
+                                text: 'Lingua'
                             }
-                            FieldLabel { text: 'Interlocutori' }
+                            LanguageCombo {
+                                objectName: 'draftLanguage' + index
+                                model: Theme.meetingLanguages
+                                Layout.fillWidth: true
+                                selectedValue: record.language
+                                onChosen: value => meeting.editDraft(index, 'language', value)
+                            }
+                            FieldLabel {
+                                text: 'Interlocutori'
+                            }
                             NeuField {
                                 objectName: 'draftSpeakers' + index
                                 Layout.preferredWidth: 65
                                 text: String(record.num_speakers)
-                                validator: IntValidator { bottom: 0; top: 20 }
+                                validator: IntValidator {
+                                    bottom: 0
+                                    top: 20
+                                }
                                 onTextEdited: meeting.editDraft(index, 'num_speakers', Number(text))
                             }
                         }
                     }
                 }
+
                 Flow {
                     Layout.fillWidth: true
                     Layout.preferredHeight: implicitHeight
@@ -323,7 +361,7 @@ ScrollView {
                         text: page.fromFile ? (meetingDrafts.count > 1 ? 'Avvia batch (' + meetingDrafts.count + ')' : 'Analizza registrazione') : 'Avvia riunione'
                         selected: true
                         enabled: !runtime.busy && !settings.dirty && !settings.saving && !!meeting.englishStatus.ready
-                        onClicked: meeting.start(page.fromFile, language.text, Number(speakerCount.text))
+                        onClicked: meeting.start(page.fromFile, language.selectedValue, Number(speakerCount.text))
                     }
                     NeuButton {
                         text: 'Termina e analizza'
@@ -344,7 +382,7 @@ ScrollView {
                 Layout.preferredHeight: page.acquisitionHeight
                 Layout.fillHeight: true
                 CardHead {
-                    kicker: 'STATO'
+
                     title: 'Pipeline riunione'
                     Rectangle {
                         implicitWidth: 9
@@ -393,7 +431,7 @@ ScrollView {
                         Metric {
                             Layout.fillWidth: true
                             label: 'Lingua'
-                            value: meeting.runtime.language || '—'
+                            value: Theme.languageName(meeting.runtime.language)
                         }
                     }
                 }
@@ -416,10 +454,7 @@ ScrollView {
                     Layout.fillWidth: true
                     value: meeting.runtime.diarization_progress || 0
                 }
-                Help {
-                    Layout.fillWidth: true
-                    text: 'La prima diarizzazione scarica Community-1 da Hugging Face; dopo il download il modello viene riutilizzato localmente.'
-                }
+
                 Help {
                     visible: !!meeting.modelProgress.model && meeting.busy
                     Layout.fillWidth: true
@@ -434,7 +469,7 @@ ScrollView {
             Layout.fillWidth: true
             visible: meetingQueue.count > 0
             CardHead {
-                kicker: 'BATCH'
+
                 title: 'Coda riunioni'
                 NeuButton {
                     text: 'Pulisci completate'
@@ -455,9 +490,9 @@ ScrollView {
         Card {
             objectName: 'meetingArchiveCard'
             Layout.fillWidth: true
-            Layout.preferredHeight: 80 + Math.max(57, Math.min(300, meetingsModel.count * 109 - 9))
+            Layout.preferredHeight: 80 + Math.max(57, Math.min(300, Math.ceil(meetingsModel.count / (page.width > 1050 ? 2 : 1)) * 124))
             CardHead {
-                kicker: 'ARCHIVIO'
+
                 title: 'Riunioni recenti'
                 NeuButton {
                     text: 'Aggiorna'
@@ -470,23 +505,30 @@ ScrollView {
                 visible: meetingsModel.count === 0
                 text: 'Nessuna riunione salvata.'
             }
-            ListView {
+            GridView {
                 id: recent
+                activeFocusOnTab: true
+                keyNavigationEnabled: true
+                Keys.onReturnPressed: if (currentIndex >= 0) {
+                    page.reviewRequested = true;
+                    meeting.select(meetingsModel.get(currentIndex).id);
+                }
                 objectName: 'recentMeetingsList'
                 visible: meetingsModel.count > 0
                 Layout.fillWidth: true
-                Layout.preferredHeight: Math.min(300, Math.max(0, meetingsModel.count * 109 - 9))
+                Layout.preferredHeight: Math.min(300, Math.max(0, Math.ceil(meetingsModel.count / (page.width > 1050 ? 2 : 1)) * 124))
                 model: meetingsModel
                 reuseItems: true
                 cacheBuffer: 0
                 clip: true
-                spacing: 9
+                cellWidth: width > 1050 ? width / 2 : width
+                cellHeight: 124
                 ScrollBar.vertical: ScrollBar {}
                 delegate: RowLayout {
                     required property var record
                     required property int index
-                    width: recent.width
-                    height: 100
+                    width: recent.cellWidth - 12
+                    height: recent.cellHeight - 10
                     Item {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
@@ -494,8 +536,11 @@ ScrollView {
                             objectName: 'recentMeetingOpen' + index
                             anchors.fill: parent
                             selected: meeting.review.id === record.id
-                            Accessible.name: record.name || record.started_at || record.id
-                            onClicked: meeting.select(record.id)
+                            Accessible.name: record.display_name || record.name || record.started_at || record.id
+                            onClicked: {
+                                page.reviewRequested = true;
+                                meeting.select(record.id);
+                            }
                         }
                         Column {
                             anchors.fill: parent
@@ -506,7 +551,7 @@ ScrollView {
                             Text {
                                 width: parent.width
                                 textFormat: Text.PlainText
-                                text: record.name || (record.started_at ? Qt.formatDateTime(new Date(record.started_at), 'dd/MM/yyyy HH:mm') : record.id)
+                                text: record.display_name || record.name || (record.started_at ? Qt.formatDateTime(new Date(record.started_at), 'dd/MM/yyyy HH:mm') : record.id)
                                 font.family: Theme.font
                                 font.pixelSize: 14
                                 font.bold: true
@@ -515,7 +560,7 @@ ScrollView {
                             }
                             Help {
                                 width: parent.width
-                                text: Theme.statusName(record.status) + ' · ' + (record.language || 'auto') + ' · ' + Theme.sourceName(record.source)
+                                text: Theme.statusName(record.status) + ' · ' + Theme.languageName(record.language) + ' · ' + Theme.sourceName(record.source)
                                 font.pixelSize: 11
                                 maximumLineCount: 1
                                 elide: Text.ElideRight
@@ -544,6 +589,9 @@ ScrollView {
             }
         }
         RowLayout {
+            id: reviewArea
+            onYChanged: Qt.callLater(page.showRequestedReview)
+            onHeightChanged: Qt.callLater(page.showRequestedReview)
             visible: !!meeting.review.id
             Layout.fillWidth: true
             Layout.alignment: Qt.AlignTop
@@ -555,8 +603,8 @@ ScrollView {
                 Layout.horizontalStretchFactor: 7
                 Layout.fillHeight: true
                 CardHead {
-                    kicker: 'REVISIONE'
-                    title: meeting.review.started_at ? 'Riunione · ' + Qt.formatDateTime(new Date(meeting.review.started_at), "M/d/yyyy, h:mm:ss AP") : 'Riunione'
+
+                    title: meeting.review.name || 'Revisione'
                 }
                 ListView {
                     id: tracks
@@ -581,6 +629,13 @@ ScrollView {
                     Layout.topMargin: 10
                     Layout.bottomMargin: 10
                     source: meeting.audioUrl
+                    onPositionChanged: meeting.setPlaybackPosition(position / 1000)
+                }
+                Help {
+                    Layout.fillWidth: true
+                    visible: !meeting.audioUrl
+                    text: 'Originale non disponibile. Le registrazioni precedenti possono contenere soltanto audio elaborato; la qualità originale non può essere ricostruita.'
+                    color: Theme.secondary
                 }
                 Flow {
                     Layout.fillWidth: true
@@ -594,10 +649,7 @@ ScrollView {
                         text: 'Esporta .srt'
                         onClicked: meeting.export('srt')
                     }
-                    CompactAction {
-                        text: 'Esporta .vtt'
-                        onClicked: meeting.export('vtt')
-                    }
+
                     CompactAction {
                         text: 'Elimina audio'
                         enabled: !!meeting.audioUrl
@@ -626,6 +678,8 @@ ScrollView {
                     }
                     NeuButton {
                         objectName: 'meetingRerunButton'
+                        ToolTip.visible: hovered
+                        ToolTip.text: 'Riusa audio e testo salvati senza ripetere la trascrizione. Conserva le correzioni compatibili e segnala i conflitti.'
                         Layout.fillWidth: true
                         text: 'Ricalcola diarizzazione'
                         wrapText: true
@@ -635,10 +689,7 @@ ScrollView {
                         onClicked: meeting.rerun(Number(recalc.text))
                     }
                 }
-                Help {
-                    Layout.fillWidth: true
-                    text: "Riusa l'audio e il testo già salvati senza ripetere la trascrizione. Le correzioni manuali e i nomi degli interlocutori vengono conservati."
-                }
+
                 Help {
                     Layout.fillWidth: true
                     visible: !!meeting.review.quality_notice
@@ -647,7 +698,7 @@ ScrollView {
                 }
                 Text {
                     textFormat: Text.PlainText
-                    text: 'Interlocutori'
+                    text: 'Interlocutori (' + meetingSpeakers.count + ')'
                     color: Theme.primary
                     font.family: Theme.font
                     font.pixelSize: 18
@@ -655,6 +706,12 @@ ScrollView {
                 }
                 ListView {
                     id: speakers
+                    activeFocusOnTab: true
+                    keyNavigationEnabled: true
+                    ScrollBar.vertical: ScrollBar {
+                        policy: ScrollBar.AlwaysOn
+                        width: 14
+                    }
                     Layout.fillWidth: true
                     Layout.preferredHeight: Math.min(250, meetingSpeakers.count * 55)
                     model: meetingSpeakers
@@ -664,7 +721,7 @@ ScrollView {
                     delegate: RowLayout {
                         required property var record
                         required property int index
-                        width: speakers.width
+                        width: speakers.width - 18
                         height: 50
                         Help {
                             Layout.preferredWidth: 110
@@ -677,7 +734,7 @@ ScrollView {
                             Layout.fillWidth: true
                             text: record.draft_name == null ? record.name : record.draft_name
                             onTextEdited: meeting.editSpeakerName(index, text)
-                            onEditingFinished: if (record.draft_name != null && !meeting.saving)
+                            onEditingFinished: if (record.draft_name != null)
                                 meeting.renameSpeaker(record.id, text)
                         }
                     }
@@ -711,25 +768,37 @@ ScrollView {
                 Layout.horizontalStretchFactor: 13
                 Layout.fillHeight: true
                 CardHead {
-                    kicker: 'TESTO REVISIONATO'
+
                     title: 'Interventi'
+                    NeuButton {
+                        text: '↶'
+                        compact: true
+                        enabled: meeting.canUndo
+                        onClicked: meeting.undo()
+                        ToolTip.text: 'Annulla · Ctrl+Z'
+                        ToolTip.visible: hovered
+                    }
+                    NeuButton {
+                        text: '↷'
+                        compact: true
+                        enabled: meeting.canRedo
+                        onClicked: meeting.redo()
+                        ToolTip.text: 'Ripristina · Ctrl+Shift+Z'
+                        ToolTip.visible: hovered
+                    }
                     Help {
                         text: meeting.draftStatus
                     }
                     NeuButton {
-                        text: 'Salva tutto'
+                        text: 'Riprova salvataggio'
                         compact: true
                         selected: true
+                        visible: meeting.draftStatus.indexOf('Errore') === 0
                         enabled: meeting.dirty && !meeting.saving
                         onClicked: meeting.saveAll()
                     }
                 }
-                NeuButton {
-                    text: 'Annulla correzioni'
-                    visible: meeting.dirty
-                    enabled: !meeting.saving
-                    onClicked: meeting.discardEdits()
-                }
+
                 NeuButton {
                     id: recoveredDraftsToggle
                     property bool expanded: false
@@ -743,136 +812,10 @@ ScrollView {
                     Layout.preferredHeight: 180
                     text: meeting.recoveredDraftsText
                 }
-                Help {
+
+                ReviewEditor {
                     Layout.fillWidth: true
-                    text: 'Speaker e testo possono essere corretti senza modificare il testo originale. Le nuove trascrizioni usano i timestamp parola-per-parola per separare cambi di interlocutore dentro lo stesso segmento riconosciuto. Le riunioni più vecchie restano modificabili manualmente.'
-                }
-                ListView {
-                    id: review
-                    objectName: 'meetingReviewList'
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 4
-                    Layout.preferredHeight: 520
-                    model: meetingSegments
-                    reuseItems: true
-                    cacheBuffer: 0
-                    clip: true
-                    spacing: 5
-                    ScrollBar.vertical: ScrollBar {
-                        policy: ScrollBar.AlwaysOn
-                        width: 15
-                        padding: 4
-                        contentItem: Rectangle {
-                            implicitWidth: 7
-                            radius: 4
-                            color: '#999999'
-                        }
-                        background: Rectangle {
-                            color: '#333333'
-                        }
-                    }
-                    delegate: Item {
-                        required property var record
-                        required property int index
-                        objectName: 'reviewSegment' + index
-                        width: review.width - 22
-                        height: Math.max(122, segmentLayout.implicitHeight + 18)
-                        RaisedSurface {
-                            anchors.fill: parent
-                            radius: 12
-                            soft: true
-                        }
-                        Rectangle {
-                            anchors.fill: parent
-                            color: 'transparent'
-                            radius: 12
-                            border.width: record.uncertain || record.overlap ? 1 : 0
-                            border.color: Theme.accent
-                        }
-                        ColumnLayout {
-                            id: segmentLayout
-                            anchors.fill: parent
-                            anchors.margins: 9
-                            anchors.topMargin: 8
-                            anchors.bottomMargin: 8
-                            spacing: 4
-                            RowLayout {
-                                Layout.fillWidth: true
-                                CompactAction {
-                                    text: Theme.timestamp(record.start || 0)
-                                    implicitWidth: 64
-                                    implicitHeight: 28
-                                    font.pixelSize: 12
-                                    onClicked: audio.seek(record.start || 0)
-                                }
-                                Item {
-                                    Layout.fillWidth: true
-                                }
-                                Help {
-                                    text: record.speaker_name
-                                    font.bold: true
-                                    color: Theme.primary
-                                }
-                                EnumCombo {
-                                    id: speakerSelect
-                                    Layout.preferredWidth: Math.max(160, Math.min(220, Math.max(...record.speaker_options.map(option => speakerMetrics.advanceWidth(option.label))) + 58))
-                                    implicitHeight: 29
-                                    font.pixelSize: 13
-                                    padding: 5
-                                    leftPadding: 8
-                                    model: record.speaker_options
-                                    selectedValue: record.speaker_choice
-                                    enabled: !meeting.saving
-                                    onChosen: value => meeting.setSpeaker(index, value)
-                                    FontMetrics {
-                                        id: speakerMetrics
-                                        font: speakerSelect.font
-                                    }
-                                }
-                            }
-                            Help {
-                                visible: !!record.uncertain || !!record.overlap
-                                text: record.overlap ? 'Voci sovrapposte' : 'Interlocutore incerto'
-                                color: Theme.accent
-                            }
-                            Help {
-                                id: qualityNotice
-                                Layout.fillWidth: true
-                                visible: !!record.quality_note
-                                text: record.quality_note || ''
-                                color: Theme.accent
-                            }
-                            TextArea {
-                                id: editor
-                                textFormat: TextEdit.PlainText
-                                objectName: 'reviewEditor' + index
-                                Layout.minimumHeight: 44
-                                Layout.fillWidth: true
-                                Layout.fillHeight: true
-                                text: record.draft_text || ''
-                                color: Theme.primary
-                                font.family: 'DejaVu Sans Mono'
-                                font.pixelSize: 14
-                                wrapMode: TextEdit.Wrap
-                                selectByMouse: true
-                                background: Rectangle {
-                                    color: '#3b3b3b'
-                                    border.color: '#858585'
-                                }
-                                padding: 6
-                                leftPadding: 8
-                                rightPadding: 8
-                                onTextChanged: if (activeFocus)
-                                    meeting.editText(index, text)
-                            }
-                            CompactAction {
-                                objectName: 'reviewSave' + index
-                                text: 'Salva correzione'
-                                enabled: !!record.dirty && !meeting.saving
-                                onClicked: meeting.saveSegment(index)
-                            }
-                        }
-                    }
+                    onSeekRequested: seconds => audio.seek(seconds)
                 }
             }
         }
@@ -882,7 +825,7 @@ ScrollView {
         onDropped: drop => {
             if (drop.hasUrls) {
                 page.fromFile = true;
-                meeting.dropFiles(drop.urls, language.text, Number(speakerCount.text));
+                meeting.dropFiles(drop.urls, language.selectedValue, Number(speakerCount.text));
                 drop.acceptProposedAction();
             }
         }

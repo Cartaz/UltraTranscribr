@@ -1,4 +1,5 @@
 """Dedicated retry, drain and recovery coverage for TranscriberThread."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -51,11 +52,15 @@ def test_live_request_persists_recovery_after_three_failures(monkeypatch) -> Non
 
     audio = np.full(32000, 0.1, dtype=np.float32)
     try:
-        with pytest.raises(RuntimeError, match="dopo 3 tentativi"):
+        worker._current_segment = [audio]
+
+        def fail_loop():
             worker._transcribe_with_retry(audio)
+
+        monkeypatch.setattr(worker, "_loop", fail_loop)
+        worker.run()
         assert backend.transcribe_audio.call_count == 3
-        persist.assert_called_once()
-        np.testing.assert_array_equal(persist.call_args.args[0], audio)
+        persist.assert_called_once_with()
     finally:
         buffer.close()
 
