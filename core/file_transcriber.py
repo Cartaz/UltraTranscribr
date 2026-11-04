@@ -268,6 +268,10 @@ class FileTranscriberThread(threading.Thread):
                 )
                 return result if isinstance(result, str) else str(result.get("text", ""))
             except RuntimeError as exc:
+                if getattr(exc, "retryable", True) is False:
+                    raise RuntimeError(
+                        f"chunk file non recuperabile: {exc}"
+                    ) from exc
                 last = exc
                 if getattr(self._backend, "is_running", True) is False:
                     break
@@ -303,6 +307,10 @@ class FileTranscriberThread(threading.Thread):
                     segments, list
                 ) else []
             except RuntimeError as exc:
+                if getattr(exc, "retryable", True) is False:
+                    raise RuntimeError(
+                        f"chunk file non recuperabile: {exc}"
+                    ) from exc
                 last = exc
                 if getattr(self._backend, "is_running", True) is False:
                     break
