@@ -1,5 +1,8 @@
 # UltraTranscribr Roadmap
 
+Current UX cycle: [approved roadmap](docs/ROADMAP_UX_2026-10-29.md) and [implementation/validation report](docs/UX_IMPLEMENTATION_2026-10-29.md).
+The checked phases below describe earlier development cycles.
+
 This roadmap is the implementation checklist for the next development cycle. Items are ordered to reduce data-loss risk first, then improve usability and finally expand the audio/session architecture.
 
 Legend: `[ ]` planned · `[~]` in progress · `[x]` completed

@@ -1,4 +1,5 @@
 """Meeting acquisition, final transcription, diarization and review lifecycle."""
+
 from __future__ import annotations
 
 import logging
@@ -114,7 +115,9 @@ class MeetingManager:
         self.store = MeetingStore(controller.history)
         self.models = DiarizationModelManager()
         self.english_models = EnglishModelManager()
-        self.english_diarization_models = DiarizationModelManager(self.english_models.path("community3").parent)
+        self.english_diarization_models = DiarizationModelManager(
+            self.english_models.path("community3").parent
+        )
         self._english_preparation: EnglishMeetingThread | None = None
         self._english_preparing = False
         self._english_preparation_progress = 0
@@ -135,7 +138,9 @@ class MeetingManager:
     def is_busy(self) -> bool:
         with self._lock:
             runtime = self._runtime
-            return self._english_preparing or bool(runtime and runtime.status not in self._TERMINAL_STATUSES)
+            return self._english_preparing or bool(
+                runtime and runtime.status not in self._TERMINAL_STATUSES
+            )
 
     def english_pipeline_status(self) -> dict[str, Any]:
         dependency_error = ""
@@ -143,13 +148,31 @@ class MeetingManager:
             self.english_models.dependencies()
         except RuntimeError as exc:
             dependency_error = str(exc)
-        ready = not dependency_error and not self.english_models.missing() and self.english_diarization_models.status()["ready"]
-        return {"ready": bool(ready and not self._english_preparing and not self._english_preparation_error),
-                "busy": self._english_preparing, "progress": self._english_preparation_progress,
-                "error": self._english_preparation_error or dependency_error,
-                "dependencies_ready": not bool(dependency_error),
-                "download_gb": round(sum(item["bytes"] for model in self.english_models.models.values()
-                                         for item in model["files"]) / 1_000_000_000, 1)}
+        ready = (
+            not dependency_error
+            and not self.english_models.missing()
+            and self.english_diarization_models.status()["ready"]
+        )
+        return {
+            "ready": bool(
+                ready
+                and not self._english_preparing
+                and not self._english_preparation_error
+            ),
+            "busy": self._english_preparing,
+            "progress": self._english_preparation_progress,
+            "error": self._english_preparation_error or dependency_error,
+            "dependencies_ready": not bool(dependency_error),
+            "download_gb": round(
+                sum(
+                    item["bytes"]
+                    for model in self.english_models.models.values()
+                    for item in model["files"]
+                )
+                / 1_000_000_000,
+                1,
+            ),
+        }
 
     def prepare_english_models(self) -> dict[str, Any]:
         with self._lock:
@@ -161,9 +184,11 @@ class MeetingManager:
             self._english_preparation_progress = 0
             self._english_preparing = True
             worker = EnglishMeetingThread(
-                AppMeta.CACHE_DIR, models=self.english_models,
+                AppMeta.CACHE_DIR,
+                models=self.english_models,
                 diarization_models=self.english_diarization_models.root,
-                prepare_models_only=True, event_sink=self._english_model_event,
+                prepare_models_only=True,
+                event_sink=self._english_model_event,
                 thread_name="EnglishModelPreparation",
             )
             self._english_preparation = worker
@@ -181,7 +206,9 @@ class MeetingManager:
             worker.stop()
             worker.join(timeout=5)
             if worker.is_alive():
-                raise RuntimeError("La preparazione dei modelli si sta ancora arrestando")
+                raise RuntimeError(
+                    "La preparazione dei modelli si sta ancora arrestando"
+                )
         self._english_preparing = False
         status = self.english_pipeline_status()
         self._emit("meeting_english_models_changed", status)
@@ -225,7 +252,9 @@ class MeetingManager:
         source_name = selections[0].source if len(selections) == 1 else "multisource"
         source_path = "; ".join(self._selection_label(item) for item in selections)
         session_id = self.store.create(
-            model="Qwen3-ASR-1.7B" if pipeline in QWEN_PIPELINES else settings.model_size,
+            model="Qwen3-ASR-1.7B"
+            if pipeline in QWEN_PIPELINES
+            else settings.model_size,
             language=settings.language,
             source=source_name,
             source_path=source_path,
@@ -247,7 +276,9 @@ class MeetingManager:
             session_id,
             settings,
             self._inputs,
-            event_sink=lambda event, payload: self._capture_event(session_id, event, payload),
+            event_sink=lambda event, payload: self._capture_event(
+                session_id, event, payload
+            ),
         )
         runtime = MeetingRuntime(
             id=session_id,
@@ -293,7 +324,9 @@ class MeetingManager:
         )
         pipeline = self._validate_pipeline(pipeline, settings.language)
         session_id = self.store.create(
-            model="Qwen3-ASR-1.7B" if pipeline in QWEN_PIPELINES else settings.model_size,
+            model="Qwen3-ASR-1.7B"
+            if pipeline in QWEN_PIPELINES
+            else settings.model_size,
             language=settings.language,
             source="file",
             source_path=str(source),
@@ -366,8 +399,12 @@ class MeetingManager:
         acquisition = dict(metadata.get("acquisition") or {})
         recording = dict(metadata.get("recording") or {})
         settings = self._controller.settings.with_(
-            model_size=(self._controller.settings.model_size if (metadata.get("processing_pipeline") or {}).get("id") in QWEN_PIPELINES
-                        else str(meeting.get("model") or self._controller.settings.model_size)),
+            model_size=(
+                self._controller.settings.model_size
+                if (metadata.get("processing_pipeline") or {}).get("id")
+                in QWEN_PIPELINES
+                else str(meeting.get("model") or self._controller.settings.model_size)
+            ),
             language=str(meeting.get("language") or self._controller.settings.language),
             live_microphone_recording=False,
         )
@@ -380,7 +417,11 @@ class MeetingManager:
             format=str(recording.get("format") or "flac"),
         )
         pipeline_id = (metadata.get("processing_pipeline") or {}).get("id", "whisper")
-        status_models = self.english_diarization_models if pipeline_id in QWEN_PIPELINES else self.models
+        status_models = (
+            self.english_diarization_models
+            if pipeline_id in QWEN_PIPELINES
+            else self.models
+        )
         runtime = MeetingRuntime(
             id=session_key,
             pipeline=pipeline_id,
@@ -401,7 +442,9 @@ class MeetingManager:
         )
         previous_diarization = list(metadata.get("diarization_segments") or [])
         previous_review = list(metadata.get("review_segments") or [])
-        previous_status = str(meeting.get("status") or metadata.get("processing_status") or "completed")
+        previous_status = str(
+            meeting.get("status") or metadata.get("processing_status") or "completed"
+        )
 
         with self._lock:
             if self._closed:
@@ -427,7 +470,7 @@ class MeetingManager:
 
     def audio_path(self, session_id: str) -> Optional[Path]:
         try:
-            return self.store.recording_path(session_id)
+            return self.store.playback_path(session_id)
         except KeyError:
             return None
 
@@ -483,8 +526,11 @@ class MeetingManager:
 
     def _prepare_file(self, runtime: MeetingRuntime, source: Path) -> None:
         try:
+            retained_source = self.store.retain_original(
+                runtime.id, source, stop_event=runtime.stop_event
+            )
             info = normalize_media_to_flac(
-                source,
+                retained_source,
                 AppMeta.RECORDINGS_DIR / f"{runtime.id}.flac",
                 stop_event=runtime.stop_event,
             )
@@ -569,7 +615,11 @@ class MeetingManager:
                 if runtime.transcriber is not None:
                     runtime.transcriber.stop()
                 processing = runtime.processing_thread
-                if processing and processing.is_alive() and processing is not threading.current_thread():
+                if (
+                    processing
+                    and processing.is_alive()
+                    and processing is not threading.current_thread()
+                ):
                     processing.join(timeout=self._PROCESSING_JOIN_TIMEOUT_S)
                     if processing.is_alive():
                         logger.warning(
@@ -580,12 +630,17 @@ class MeetingManager:
                 self._mark_rediarization_cancelled(runtime)
                 return
 
-            if runtime.capture is not None and previous_status in {"recording", "finishing"}:
+            if runtime.capture is not None and previous_status in {
+                "recording",
+                "finishing",
+            }:
                 try:
                     bundle = runtime.capture.stop_and_finalize()
                     self._store_bundle(runtime, bundle)
                 except Exception:
-                    logger.exception("Finalizzazione acquisizione Meeting annullata fallita")
+                    logger.exception(
+                        "Finalizzazione acquisizione Meeting annullata fallita"
+                    )
                     runtime.capture.abandon()
 
             transcriber = runtime.transcriber
@@ -593,14 +648,23 @@ class MeetingManager:
                 transcriber.stop()
                 if transcriber.is_alive() and runtime.pipeline not in QWEN_PIPELINES:
                     self._controller.backend.abort_active_request()
-                if transcriber.is_alive() and transcriber is not threading.current_thread():
+                if (
+                    transcriber.is_alive()
+                    and transcriber is not threading.current_thread()
+                ):
                     transcriber.join(timeout=self._TRANSCRIBER_JOIN_TIMEOUT_S)
 
             preparation = runtime.preparation_thread
-            if preparation and preparation.is_alive() and preparation is not threading.current_thread():
+            if (
+                preparation
+                and preparation.is_alive()
+                and preparation is not threading.current_thread()
+            ):
                 preparation.join(timeout=self._PREPARATION_JOIN_TIMEOUT_S)
                 if preparation.is_alive():
-                    logger.warning("Preparazione Meeting %s ancora attiva dopo cancel", runtime.id)
+                    logger.warning(
+                        "Preparazione Meeting %s ancora attiva dopo cancel", runtime.id
+                    )
 
             runtime.status = "cancelled"
             self.store.set_status(runtime.id, runtime.status, terminal=True)
@@ -620,7 +684,9 @@ class MeetingManager:
     def get(self, session_id: str) -> Optional[dict[str, Any]]:
         return self.store.get(session_id)
 
-    def set_speaker_name(self, session_id: str, speaker_id: str, name: str) -> dict[str, Any]:
+    def set_speaker_name(
+        self, session_id: str, speaker_id: str, name: str
+    ) -> dict[str, Any]:
         self.store.set_speaker_name(session_id, speaker_id, name)
         meeting = self.store.get(session_id)
         if meeting is None:
@@ -662,7 +728,9 @@ class MeetingManager:
         return deleted
 
     def prune_audio(self) -> int:
-        return self.store.prune_audio(self._controller.settings.meeting_audio_retention_days)
+        return self.store.prune_audio(
+            self._controller.settings.meeting_audio_retention_days
+        )
 
     def shutdown(self) -> None:
         with self._lock:
@@ -679,7 +747,9 @@ class MeetingManager:
         if recovery.is_alive() and recovery is not current:
             recovery.join(timeout=self._RECOVERY_JOIN_TIMEOUT_S)
             if recovery.is_alive():
-                logger.warning("MeetingRecordingRecovery ancora attivo dopo shutdown bounded")
+                logger.warning(
+                    "MeetingRecordingRecovery ancora attivo dopo shutdown bounded"
+                )
 
         if runtime is None:
             return
@@ -689,9 +759,15 @@ class MeetingManager:
         if control and control.is_alive() and control is not current:
             control.join(timeout=self._CONTROL_JOIN_TIMEOUT_S)
             if control.is_alive():
-                logger.warning("Control Meeting %s ancora attivo dopo shutdown bounded", runtime.id)
+                logger.warning(
+                    "Control Meeting %s ancora attivo dopo shutdown bounded", runtime.id
+                )
 
-        if runtime.capture is not None and runtime.status in {"recording", "finishing", "cancelling"}:
+        if runtime.capture is not None and runtime.status in {
+            "recording",
+            "finishing",
+            "cancelling",
+        }:
             try:
                 bundle = runtime.capture.stop_and_finalize()
                 self._store_bundle(runtime, bundle)
@@ -710,19 +786,28 @@ class MeetingManager:
             if transcriber.is_alive() and transcriber is not current:
                 transcriber.join(timeout=self._TRANSCRIBER_JOIN_TIMEOUT_S)
                 if transcriber.is_alive():
-                    logger.warning("Transcriber Meeting %s ancora attivo dopo shutdown bounded", runtime.id)
+                    logger.warning(
+                        "Transcriber Meeting %s ancora attivo dopo shutdown bounded",
+                        runtime.id,
+                    )
 
         preparation = runtime.preparation_thread
         if preparation and preparation.is_alive() and preparation is not current:
             preparation.join(timeout=self._PREPARATION_JOIN_TIMEOUT_S)
             if preparation.is_alive():
-                logger.warning("Preparazione Meeting %s ancora attiva dopo shutdown bounded", runtime.id)
+                logger.warning(
+                    "Preparazione Meeting %s ancora attiva dopo shutdown bounded",
+                    runtime.id,
+                )
 
         processing = runtime.processing_thread
         if processing and processing.is_alive() and processing is not current:
             processing.join(timeout=self._PROCESSING_JOIN_TIMEOUT_S)
             if processing.is_alive():
-                logger.warning("Processing Meeting %s ancora attivo dopo shutdown bounded", runtime.id)
+                logger.warning(
+                    "Processing Meeting %s ancora attivo dopo shutdown bounded",
+                    runtime.id,
+                )
 
         if runtime.operation == "rediarization":
             if runtime.status not in self._TERMINAL_STATUSES:
@@ -742,8 +827,11 @@ class MeetingManager:
                 return
             if runtime.pipeline in QWEN_PIPELINES:
                 worker = self._run_qwen_worker(
-                    runtime, info.path,
-                    event_sink=lambda event, payload: self._transcription_event(runtime, event, payload),
+                    runtime,
+                    info.path,
+                    event_sink=lambda event, payload: self._transcription_event(
+                        runtime, event, payload
+                    ),
                 )
             else:
                 self._controller.ensure_backend_started(
@@ -757,27 +845,37 @@ class MeetingManager:
                     self._controller.backend,
                     runtime.settings,
                     language=runtime.settings.language,
-                    event_sink=lambda event, payload: self._transcription_event(runtime, event, payload),
+                    event_sink=lambda event, payload: self._transcription_event(
+                        runtime, event, payload
+                    ),
                     thread_name=f"MeetingTranscriber-{runtime.id}",
                 )
             if runtime.pipeline not in QWEN_PIPELINES:
                 runtime.transcriber = worker
                 worker.start()
                 worker.join()
-            if runtime.stop_event.is_set() or self._shutdown_event.is_set() or runtime.status == "error":
+            if (
+                runtime.stop_event.is_set()
+                or self._shutdown_event.is_set()
+                or runtime.status == "error"
+            ):
                 return
             history = self._controller.history.get_session(runtime.id)
             if not history:
                 raise RuntimeError("trascrizione riunione non trovata")
             raw_segments = list(history.get("segments") or [])
             if not raw_segments:
-                raise RuntimeError("Il riconoscitore non ha prodotto segmenti timestampati")
+                raise RuntimeError(
+                    "Il riconoscitore non ha prodotto segmenti timestampati"
+                )
 
             if runtime.pipeline in QWEN_PIPELINES:
                 diarization = list(worker.exclusive_segments)
                 speaker_diarization = list(worker.speaker_segments)
                 review = align_speakers(raw_segments, diarization, speaker_diarization)
-                self.store.set_processing_pipeline(runtime.id, runtime.pipeline, worker.provenance)
+                self.store.set_processing_pipeline(
+                    runtime.id, runtime.pipeline, worker.provenance
+                )
             else:
                 diarization, speaker_diarization, review = self._compute_diarization(
                     runtime,
@@ -871,11 +969,13 @@ class MeetingManager:
         previous_diarization: Optional[list[dict[str, Any]]] = None,
         previous_review: Optional[list[dict[str, Any]]] = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-        models = self.english_diarization_models if runtime.pipeline in QWEN_PIPELINES else self.models
+        models = (
+            self.english_diarization_models
+            if runtime.pipeline in QWEN_PIPELINES
+            else self.models
+        )
         runtime.status = (
-            "downloading_diarization"
-            if not models.status()["ready"]
-            else "diarizing"
+            "downloading_diarization" if not models.status()["ready"] else "diarizing"
         )
         runtime.diarization_progress = 0
         if persist_transient_status:
@@ -903,16 +1003,28 @@ class MeetingManager:
                     errors.append(str(payload))
 
             worker = self._run_qwen_worker(
-                runtime, audio_path, diarization_only=True, event_sink=event,
+                runtime,
+                audio_path,
+                diarization_only=True,
+                event_sink=event,
             )
             if runtime.stop_event.is_set() or self._shutdown_event.is_set():
                 return [], [], []
             if worker._terminal_state != "completed":
-                raise RuntimeError(errors[-1] if errors else "Ricalcolo delle voci della riunione interrotto")
+                raise RuntimeError(
+                    errors[-1]
+                    if errors
+                    else "Ricalcolo delle voci della riunione interrotto"
+                )
             diarization = list(worker.exclusive_segments)
             speaker_diarization = list(worker.speaker_segments)
             saved = self.store.get(runtime.id) or {}
-            provenance = dict(((saved.get("meeting") or {}).get("processing_pipeline") or {}).get("provenance") or {})
+            provenance = dict(
+                ((saved.get("meeting") or {}).get("processing_pipeline") or {}).get(
+                    "provenance"
+                )
+                or {}
+            )
             provenance["last_diarization"] = worker.provenance
             self.store.set_processing_pipeline(runtime.id, runtime.pipeline, provenance)
         else:
@@ -984,7 +1096,9 @@ class MeetingManager:
         detail = payload.get("payload") if isinstance(payload, dict) else payload
         self._fail(runtime, str(detail or "Errore cattura sorgente riunione"))
 
-    def _model_progress(self, runtime: MeetingRuntime, label: str, percent: int) -> None:
+    def _model_progress(
+        self, runtime: MeetingRuntime, label: str, percent: int
+    ) -> None:
         if runtime.stop_event.is_set() or self._shutdown_event.is_set():
             return
         self._emit(
@@ -1014,7 +1128,11 @@ class MeetingManager:
     def _fail(self, runtime: MeetingRuntime, error: str) -> None:
         if runtime.status in self._TERMINAL_STATUSES:
             return
-        if runtime.capture is not None and runtime.status in {"recording", "finishing", "cancelling"}:
+        if runtime.capture is not None and runtime.status in {
+            "recording",
+            "finishing",
+            "cancelling",
+        }:
             try:
                 bundle = runtime.capture.stop_and_finalize()
                 self._store_bundle(runtime, bundle)
@@ -1039,6 +1157,8 @@ class MeetingManager:
         runtime.recording = bundle.recording
         runtime.sources = list(bundle.sources)
         self.store.set_recording(runtime.id, bundle.recording.to_dict())
+        if bundle.original_recording is not None:
+            self.store.retain_original(runtime.id, Path(bundle.original_recording.path))
         self.store.set_source_recordings(runtime.id, bundle.sources)
 
     def _run_qwen_worker(self, runtime, source, *, event_sink, diarization_only=False):
@@ -1046,20 +1166,26 @@ class MeetingManager:
         # Each stage owns a subprocess: joining the worker releases its GPU context.
         with self._controller.meeting_engine_session():
             if runtime.stop_event.is_set() or self._shutdown_event.is_set():
-                raise RuntimeError("Riunione annullata prima del caricamento del modello")
+                raise RuntimeError(
+                    "Riunione annullata prima del caricamento del modello"
+                )
             self.diarizer.release()
             worker = EnglishMeetingThread(
-                source, models=self.english_models,
+                source,
+                models=self.english_models,
                 diarization_models=self.english_diarization_models.root,
                 num_speakers=runtime.num_speakers,
                 language=runtime.settings.language,
-                diarization_only=diarization_only, event_sink=event_sink,
+                diarization_only=diarization_only,
+                event_sink=event_sink,
                 thread_name=f"QwenMeeting-{runtime.id}",
             )
             runtime.transcriber = worker
             try:
                 if runtime.stop_event.is_set() or self._shutdown_event.is_set():
-                    raise RuntimeError("Riunione annullata prima dell'avvio del modello")
+                    raise RuntimeError(
+                        "Riunione annullata prima dell'avvio del modello"
+                    )
                 worker.start()
                 worker.join()
             finally:
@@ -1068,12 +1194,21 @@ class MeetingManager:
                     if worker.is_alive():
                         worker.join()
                 except Exception as exc:
-                    raise MeetingEngineStillRunning("Il motore riunioni non si è arrestato: riavvia il programma") from exc
+                    raise MeetingEngineStillRunning(
+                        "Il motore riunioni non si è arrestato: riavvia il programma"
+                    ) from exc
                 child = getattr(worker, "_child", None)
                 if child is not None and child.poll() is None:
-                    raise MeetingEngineStillRunning("Un processo della riunione è ancora attivo: riavvia il programma")
-            if worker._terminal_state != "completed" and not runtime.stop_event.is_set():
-                raise RuntimeError(runtime.error or "Elaborazione della riunione interrotta")
+                    raise MeetingEngineStillRunning(
+                        "Un processo della riunione è ancora attivo: riavvia il programma"
+                    )
+            if (
+                worker._terminal_state != "completed"
+                and not runtime.stop_event.is_set()
+            ):
+                raise RuntimeError(
+                    runtime.error or "Elaborazione della riunione interrotta"
+                )
             return worker
 
     def _validate_pipeline(self, pipeline: str, language: str) -> str:
@@ -1082,18 +1217,26 @@ class MeetingManager:
             raise ValueError("Percorso di trascrizione non valido")
         if selected in QWEN_PIPELINES:
             if selected == "english_qwen" and language != "en":
-                raise ValueError("Il percorso Qwen verificato richiede la lingua inglese (en)")
+                raise ValueError(
+                    "Il percorso Qwen verificato richiede la lingua inglese (en)"
+                )
             meeting_language(language)
             self.english_models.dependencies()
             if self.english_models.missing():
-                raise RuntimeError("Prepara i modelli delle riunioni prima di avviare la riunione")
+                raise RuntimeError(
+                    "Prepara i modelli delle riunioni prima di avviare la riunione"
+                )
             if not self.english_diarization_models.status()["ready"]:
-                raise RuntimeError("Prepara i modelli degli interlocutori prima di avviare la riunione")
+                raise RuntimeError(
+                    "Prepara i modelli degli interlocutori prima di avviare la riunione"
+                )
         return selected
 
     def _require_start_available(self) -> None:
         if self._english_preparing:
-            raise RuntimeError("Attendi o annulla la preparazione dei modelli delle riunioni")
+            raise RuntimeError(
+                "Attendi o annulla la preparazione dei modelli delle riunioni"
+            )
         with self._lock:
             if self._closed:
                 raise RuntimeError("gestore Meeting chiuso")
@@ -1124,7 +1267,9 @@ class MeetingManager:
                 f"Una riunione supporta al massimo {self._MAX_REALTIME_SOURCES} sorgenti"
             )
         selections = [
-            value if isinstance(value, AudioInputSelection) else AudioInputSelection.from_mapping(value)
+            value
+            if isinstance(value, AudioInputSelection)
+            else AudioInputSelection.from_mapping(value)
             for value in values
         ]
         keys: set[tuple[str, str, Optional[int]]] = set()
@@ -1145,7 +1290,9 @@ class MeetingManager:
 
     @staticmethod
     def _snapshot(runtime: MeetingRuntime) -> dict[str, Any]:
-        duration = runtime.recording.duration_s if runtime.recording is not None else 0.0
+        duration = (
+            runtime.recording.duration_s if runtime.recording is not None else 0.0
+        )
         if runtime.capture is not None and runtime.status in {"recording", "finishing"}:
             duration = runtime.capture.duration_s
         return {
@@ -1187,15 +1334,24 @@ class MeetingManager:
                 if direct is not None:
                     canonical = direct
                 else:
+                    native_rate = infos[0].sample_rate
+                    mix_path = (
+                        AppMeta.RECORDINGS_DIR
+                        / f"{session_id}{'-original' if native_rate != 16000 else ''}.flac"
+                    )
                     canonical = mix_recordings(
                         [(info, 0.0) for info in infos],
-                        AppMeta.RECORDINGS_DIR / f"{session_id}.flac",
+                        mix_path,
+                        sample_rate=native_rate,
                     )
+                    if native_rate != 16000:
+                        self.store.retain_original(session_id, mix_path)
+                        canonical = normalize_media_to_flac(
+                            mix_path, AppMeta.RECORDINGS_DIR / f"{session_id}.flac"
+                        )
                 meeting = self.store.get(session_id) or {}
                 planned = list(
-                    (meeting.get("meeting") or {})
-                    .get("acquisition", {})
-                    .get("sources")
+                    (meeting.get("meeting") or {}).get("acquisition", {}).get("sources")
                     or []
                 )
                 source_records: list[dict[str, Any]] = []
@@ -1221,11 +1377,12 @@ class MeetingManager:
                 )
                 self._emit("history_changed", session_id)
             except Exception:
-                logger.exception("Associazione recovery Meeting fallita: %s", session_id)
+                logger.exception(
+                    "Associazione recovery Meeting fallita: %s", session_id
+                )
 
     def _emit(self, event: str, payload: Any = None) -> None:
         self._bus.emit(event, payload)
-
 
     def save_review_drafts(self, session_id, edits, owner, revision) -> None:
         self.store.save_review_drafts(session_id, edits, owner, revision)

@@ -20,10 +20,16 @@ class FileAdapter(Adapter):
         self._status = "idle"
         self._progress = 0.0
         self._busy = False
+        self._session_id = ""
+        self._title = ""
 
     @Property(str, notify=changed)
     def language(self):
-        return self._default_language if self._language_override is None else self._language_override
+        return (
+            self._default_language
+            if self._language_override is None
+            else self._language_override
+        )
 
     @Slot(str)
     def editLanguage(self, value):
@@ -41,13 +47,50 @@ class FileAdapter(Adapter):
 
     @Property(str, notify=changed)
     def activeLanguage(self):
-        return next((r.get("language", "") for r in self.queue.rows()
-                     if r.get("status") in {"starting", "running", "cancelling"}), self.language)
+        return next(
+            (
+                r.get("language", "")
+                for r in self.queue.rows()
+                if r.get("status") in {"starting", "running", "cancelling"}
+            ),
+            self.language,
+        )
 
     @Property(str, notify=changed)
     def activeModel(self):
-        return next((r.get("model_size", "") for r in self.queue.rows()
-                     if r.get("status") in {"starting", "running", "cancelling"}), "")
+        return next(
+            (
+                r.get("model_size", "")
+                for r in self.queue.rows()
+                if r.get("status") in {"starting", "running", "cancelling"}
+            ),
+            "",
+        )
+
+    @Property(str, notify=changed)
+    def title(self):
+        return self._title
+
+    @Property(bool, notify=changed)
+    def hasSession(self):
+        return bool(self._session_id)
+
+    @Slot(str)
+    def rename(self, name):
+        session_id = self._session_id
+        if not session_id:
+            return
+
+        def receive(value):
+            if self._session_id == session_id:
+                self._title = value
+                self.changed.emit()
+
+        self.background(
+            "qml-file-rename",
+            lambda: self.application.rename_history_session(session_id, name),
+            receive,
+        )
 
     @Property(str, notify=changed)
     def selection(self):
@@ -64,6 +107,13 @@ class FileAdapter(Adapter):
     @Property(float, notify=changed)
     def progress(self):
         return self._progress
+
+    @Property(str, notify=changed)
+    def queueSummary(self):
+        rows = self.queue.rows()
+        terminal = {"completed", "error", "cancelled", "stopped"}
+        done = sum(r.get("status") in terminal for r in rows)
+        return f"{done} / {len(rows)} file terminati"
 
     @Property(bool, notify=changed)
     def busy(self):
@@ -133,7 +183,10 @@ class FileAdapter(Adapter):
         self.changed.emit()
 
     def handle_event(self, name, value):
-        if name == "file_queue_changed":
+        if name == "file_session_started":
+            self._session_id = value.get("id", "")
+            self._title = value.get("name", "")
+        elif name == "file_queue_changed":
             self.queue.replace(value or [])
         elif name == "file_queue_job_updated":
             self.queue.upsert(value)

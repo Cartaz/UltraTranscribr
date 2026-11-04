@@ -43,6 +43,8 @@ ComboBox {
     delegate: ItemDelegate {
         id: choice
         required property var modelData
+        required property int index
+        highlighted: control.highlightedIndex === index
         width: control.width
         text: modelData.label
         contentItem: Text {
@@ -58,6 +60,8 @@ ComboBox {
         }
     }
     popup: Popup {
+        objectName: control.objectName + 'Popup'
+        onOpened: choiceList.revealCurrent()
         y: control.height + 3
         width: control.width
         padding: 5
@@ -68,8 +72,17 @@ ComboBox {
             border.color: Theme.secondary
         }
         contentItem: ListView {
+            id: choiceList
+            objectName: control.objectName + 'Choices'
+            function revealCurrent() {
+                if (currentIndex >= 0)
+                    positionViewAtIndex(currentIndex, ListView.Contain);
+            }
             implicitHeight: contentHeight
             model: control.popup.visible ? control.delegateModel : null
+            currentIndex: control.highlightedIndex
+            onCurrentIndexChanged: Qt.callLater(revealCurrent)
+            onCountChanged: Qt.callLater(revealCurrent)
             clip: true
             reuseItems: true
         }

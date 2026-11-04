@@ -162,7 +162,8 @@ def test_settings_normalization_and_immediate_model_selection(quick_window):
     assert settings.values["channels"] == 1 and "channels" not in settings._draft
     settings.selectModel("medium")
     wait_until(lambda: not settings.saving)
-    assert service.bootstrap_snapshot()["settings"]["model_size"] == "medium"
+    assert service.bootstrap_snapshot()["settings"]["model_size"] == "large-v3"
+    assert "Large v3" in quick_window[1].runtime.feedback.message
 
 
 def test_invalid_settings_report_error_without_losing_draft(quick_window):

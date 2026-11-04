@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from core.file_transcriber import FileTranscriberThread
-from core.transcript_export import render_srt, render_vtt
+from core.transcript_export import render_srt
 from core.transcript_history import TranscriptHistoryStore
 from core.transcript_postprocess import process_text
 
@@ -21,7 +23,9 @@ def _session(store: TranscriptHistoryStore, text: str = "Hello world") -> str:
     return session_id
 
 
-def test_old_history_record_without_phase9_fields_remains_readable(tmp_path: Path) -> None:
+def test_old_history_record_without_phase9_fields_remains_readable(
+    tmp_path: Path,
+) -> None:
     store = TranscriptHistoryStore(tmp_path)
     payload = {
         "id": "legacy-session",
@@ -98,11 +102,10 @@ def test_segments_are_persisted_deduplicated_and_exported(tmp_path: Path) -> Non
     assert len(loaded["segments"]) == 2
 
     srt = store.export_session(session_id, tmp_path / "out", format_name="srt")
-    vtt = store.export_session(session_id, tmp_path / "captions", format_name="vtt")
+    with pytest.raises(ValueError, match="non supportato"):
+        store.export_session(session_id, tmp_path / "captions", format_name="vtt")
     assert srt.suffix == ".srt"
     assert "00:00:00,000 --> 00:00:01,250" in srt.read_text(encoding="utf-8")
-    assert vtt.read_text(encoding="utf-8").startswith("WEBVTT\n\n")
-    assert "00:00:01.250 --> 00:00:02.500" in vtt.read_text(encoding="utf-8")
 
 
 def test_subtitle_renderers_are_stable_and_ordered() -> None:
@@ -111,13 +114,13 @@ def test_subtitle_renderers_are_stable_and_ordered() -> None:
         {"start": 0.5, "end": 1.0, "text": "one"},
     ]
     srt = render_srt(segments)
-    vtt = render_vtt(segments)
     assert srt.index("one") < srt.index("two")
     assert "00:00:00,500" in srt
-    assert "00:00:00.500" in vtt
 
 
-def test_search_matches_raw_text_and_metadata_with_and_semantics(tmp_path: Path) -> None:
+def test_search_matches_raw_text_and_metadata_with_and_semantics(
+    tmp_path: Path,
+) -> None:
     store = TranscriptHistoryStore(tmp_path)
     first = _session(store, "alpha beta gamma")
     second = store.create_session(

@@ -1,4 +1,5 @@
 """Independent live transcription sessions sharing one serialized backend."""
+
 from __future__ import annotations
 
 import logging
@@ -68,6 +69,8 @@ class TranscriptionSession:
             "model": self.settings.model_size,
             "language": self.settings.language,
             "buffer_level": self.buffer.buffer_level,
+            "pending_audio_s": self.buffer.pending_seconds,
+            "spooled_chunks": self.buffer.spooled_chunks,
             "queue_wait_ms": round(self.queue_wait_ms, 1),
             "queue_peak_ms": round(self.queue_peak_ms, 1),
             "queue_samples": self.queue_samples,
@@ -97,7 +100,9 @@ class LiveSessionManager:
     ) -> None:
         if input_resolver is None:
             if router is None or sink_resolver is None:
-                raise ValueError("Live richiede un AudioInputResolver o router+sink_resolver")
+                raise ValueError(
+                    "Live richiede un AudioInputResolver o router+sink_resolver"
+                )
             input_resolver = AudioInputResolver(router, sink_resolver)
         self._backend = backend
         self._inputs = input_resolver
@@ -148,6 +153,9 @@ class LiveSessionManager:
             buffer=BufferManager(warn_threshold=session_settings.buffer_warn_threshold),
             input_selection=selection,
         )
+        session.buffer.metrics_sink = lambda value: self._emit(
+            "live_session_buffer_level", {"session_id": session.id, **value}
+        )
         with self._lock:
             if self._closed:
                 session.buffer.close()
@@ -178,7 +186,9 @@ class LiveSessionManager:
         result.sort(key=lambda item: item["id"])
         return result
 
-    def get_session(self, session_id: str, *, include_text: bool = False) -> Optional[dict[str, Any]]:
+    def get_session(
+        self, session_id: str, *, include_text: bool = False
+    ) -> Optional[dict[str, Any]]:
         with self._lock:
             session = self._sessions.get(session_id)
         if session is None:
@@ -235,7 +245,11 @@ class LiveSessionManager:
 
     def stop_all(self, *, drain: bool = False) -> None:
         with self._lock:
-            ids = [session.id for session in self._sessions.values() if not session.terminal]
+            ids = [
+                session.id
+                for session in self._sessions.values()
+                if not session.terminal
+            ]
         for session_id in ids:
             try:
                 self.stop_session(session_id, drain=drain)
@@ -267,17 +281,26 @@ class LiveSessionManager:
             if startup and startup.is_alive() and startup is not current:
                 startup.join(timeout=self._STARTUP_JOIN_TIMEOUT_S)
                 if startup.is_alive():
-                    logger.warning("Startup Live %s ancora attivo dopo shutdown bounded", session.id)
+                    logger.warning(
+                        "Startup Live %s ancora attivo dopo shutdown bounded",
+                        session.id,
+                    )
             transcriber = session.transcriber
             if transcriber and transcriber.is_alive() and transcriber is not current:
                 transcriber.join(timeout=self._TRANSCRIBER_JOIN_TIMEOUT_S)
                 if transcriber.is_alive():
-                    logger.warning("Transcriber Live %s ancora attivo dopo shutdown bounded", session.id)
+                    logger.warning(
+                        "Transcriber Live %s ancora attivo dopo shutdown bounded",
+                        session.id,
+                    )
             cleanup = session.cleanup_thread
             if cleanup and cleanup.is_alive() and cleanup is not current:
                 cleanup.join(timeout=self._CLEANUP_JOIN_TIMEOUT_S)
                 if cleanup.is_alive():
-                    logger.warning("Cleanup Live %s ancora attivo dopo shutdown bounded", session.id)
+                    logger.warning(
+                        "Cleanup Live %s ancora attivo dopo shutdown bounded",
+                        session.id,
+                    )
             lease = session.input_lease
             session.input_lease = None
             if lease is not None:
@@ -311,7 +334,9 @@ class LiveSessionManager:
                 session.input_lease = None
                 return
 
-            callback = lambda event, payload: self._worker_event(session, event, payload)
+            callback = lambda event, payload: self._worker_event(
+                session, event, payload
+            )
             capture = AudioCaptureThread(
                 session.buffer,
                 session.settings,
@@ -349,11 +374,18 @@ class LiveSessionManager:
             if not session.terminal:
                 self._error(session, str(exc))
 
-    def _worker_event(self, session: TranscriptionSession, event: str, payload: Any) -> None:
+    def _worker_event(
+        self, session: TranscriptionSession, event: str, payload: Any
+    ) -> None:
         if event == "transcriber_buffer_level":
             self._emit(
                 "live_session_buffer_level",
-                {"session_id": session.id, "level": int(payload or 0)},
+                {
+                    "session_id": session.id,
+                    "level": int(payload or 0),
+                    "pending_audio_s": session.buffer.pending_seconds,
+                    "spooled_chunks": session.buffer.spooled_chunks,
+                },
             )
             return
         if event == "transcriber_queue_wait":
@@ -409,7 +441,9 @@ class LiveSessionManager:
             if not session.terminal and status:
                 self._set_status(session, status)
 
-    def _route_event(self, session: TranscriptionSession, payload: dict[str, Any]) -> None:
+    def _route_event(
+        self, session: TranscriptionSession, payload: dict[str, Any]
+    ) -> None:
         enriched = dict(payload)
         enriched["session_id"] = session.id
         stream = enriched.get("stream")
@@ -471,7 +505,11 @@ class LiveSessionManager:
             transcriber = session.transcriber
 
         def cleanup() -> None:
-            if transcriber and transcriber.is_alive() and transcriber is not threading.current_thread():
+            if (
+                transcriber
+                and transcriber.is_alive()
+                and transcriber is not threading.current_thread()
+            ):
                 transcriber.join(timeout=self._CLEANUP_JOIN_TIMEOUT_S)
                 if transcriber.is_alive():
                     logger.warning(

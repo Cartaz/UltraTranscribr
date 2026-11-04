@@ -1,4 +1,5 @@
 """Cattura microfono con resampling streaming stateful."""
+
 from __future__ import annotations
 
 import logging
@@ -15,15 +16,23 @@ logger = logging.getLogger(__name__)
 SampleSink = Callable[[np.ndarray], None]
 
 
-def microphone_capture_loop(*, stream: sd.InputStream, stop_event: threading.Event,
-                            lock: threading.Lock, buffer: BufferManager,
-                            chunk_samples: int, native_sr: int,
-                            needs_resample: bool,
-                            sample_sink: Optional[SampleSink] = None) -> None:
+def microphone_capture_loop(
+    *,
+    stream: sd.InputStream,
+    stop_event: threading.Event,
+    lock: threading.Lock,
+    buffer: BufferManager,
+    chunk_samples: int,
+    native_sr: int,
+    needs_resample: bool,
+    sample_sink: Optional[SampleSink] = None,
+    preserve_native: bool = False,
+) -> None:
     overflow = np.array([], dtype=np.float32)
     converter = (
         StreamingLinearResampler(native_sr, WHISPER_SAMPLE_RATE)
-        if needs_resample else None
+        if needs_resample
+        else None
     )
 
     while not stop_event.is_set():
@@ -40,9 +49,11 @@ def microphone_capture_loop(*, stream: sd.InputStream, stop_event: threading.Eve
             data = np.mean(data, axis=1, dtype=np.float32)
         else:
             data = np.asarray(data, dtype=np.float32).reshape(-1)
+        if preserve_native and data.size and sample_sink is not None:
+            sample_sink(data.copy())
         if converter is not None:
             data = converter.process(data)
-        if data.size and sample_sink is not None:
+        if data.size and sample_sink is not None and not preserve_native:
             # The recorder sees the exact normalized 16 kHz mono stream before
             # chunking for Whisper. A copy prevents later buffer operations from
             # mutating the persisted data.
@@ -59,7 +70,7 @@ def microphone_capture_loop(*, stream: sd.InputStream, stop_event: threading.Eve
     if converter is not None:
         tail = converter.flush()
         if tail.size:
-            if sample_sink is not None:
+            if sample_sink is not None and not preserve_native:
                 sample_sink(tail.copy())
             overflow = np.concatenate((overflow, tail)) if overflow.size else tail
     if overflow.size:

@@ -73,7 +73,9 @@ class ArchiveAdapter(Adapter):
                 f"{labels.get(issue.get('reason'), 'Qualità da verificare')} · {status}"
             )
         if self._selected.get("quality_read_error"):
-            rows.append("Avvisi di qualità non leggibili; il testo salvato è disponibile")
+            rows.append(
+                "Avvisi di qualità non leggibili; il testo salvato è disponibile"
+            )
         return "\n".join(rows)
 
     @Slot(str)
@@ -139,6 +141,9 @@ class ArchiveAdapter(Adapter):
         def receive(value):
             if self._selected.get("id") == session_id:
                 self._selected["name"] = value
+                self._selected["display_name"] = value or self._selected.get(
+                    "display_name", "Trascrizione"
+                )
                 self.changed.emit()
             self.refresh()
 

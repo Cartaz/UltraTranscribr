@@ -58,9 +58,9 @@ ScrollView {
                 Layout.preferredWidth: 1
                 Layout.row: 0
                 Layout.column: 0
-                Layout.preferredHeight: 296.5
+                Layout.preferredHeight: 260
                 CardHead {
-                    kicker: 'TRASCRIZIONE'
+
                     title: 'Riconoscimento'
                     NeuButton {
                         text: 'Ripristina'
@@ -73,29 +73,17 @@ ScrollView {
                     Layout.fillWidth: true
                     columns: 2
                     columnSpacing: 13
-                    rowSpacing: 13
+                    rowSpacing: 9
                     SettingField {
                         keyName: 'model_size'
                         label: 'Modello Whisper'
-                        options: [
-                            {
-                                value: 'large-v3',
-                                label: 'Large v3'
-                            },
-                            {
-                                value: 'large-v3-turbo',
-                                label: 'Large v3 Turbo'
-                            },
-                            {
-                                value: 'medium',
-                                label: 'Medium'
-                            }
-                        ]
+                        locked: true
+                        fixedValue: 'Whisper Large v3'
                     }
                     SettingField {
                         keyName: 'language'
                         label: 'Lingua predefinita'
-                        hint: 'it, en, auto'
+                        options: Theme.languages
                     }
                     SettingField {
                         Layout.columnSpan: 2
@@ -133,13 +121,13 @@ ScrollView {
             Card {
                 objectName: 'modelManagerCard'
                 Layout.fillWidth: true
-                Layout.preferredHeight: 358.796875
+                Layout.preferredHeight: 190
                 Layout.columnSpan: 2
                 Layout.row: 1
                 Layout.column: 0
                 CardHead {
-                    kicker: 'MODELLI'
-                    title: 'Gestione modelli Whisper'
+
+                    title: 'Whisper Large v3'
                     NeuButton {
                         text: 'Aggiorna'
                         compact: true
@@ -148,7 +136,7 @@ ScrollView {
                 }
                 Help {
                     Layout.fillWidth: true
-                    text: 'Scarica in anticipo i modelli disponibili o libera spazio. I download interrotti vengono ripresi dal file parziale quando possibile.'
+                    text: 'Live, File e Dettatura: Whisper Large v3. Riunioni: Qwen e Community-1.'
                 }
                 ListView {
                     id: modelList
@@ -186,7 +174,7 @@ ScrollView {
                                 }
                             }
                             ColumnLayout {
-                                Layout.preferredWidth: Math.min(460, modelList.width * .54)
+                                Layout.preferredWidth: Math.min(260, modelList.width * .3)
                                 RowLayout {
                                     Rectangle {
                                         implicitWidth: 9
@@ -326,7 +314,7 @@ ScrollView {
                 Layout.preferredHeight: 228
                 Layout.alignment: Qt.AlignTop
                 CardHead {
-                    kicker: 'TRASCRIZIONE'
+
                     title: 'Regolazioni Whisper'
                     NeuButton {
                         text: 'Ripristina'
@@ -339,7 +327,7 @@ ScrollView {
                     Layout.fillWidth: true
                     columns: 2
                     columnSpacing: 13
-                    rowSpacing: 13
+                    rowSpacing: 9
                     SettingField {
                         keyName: 'beam_size'
                         label: 'Beam size'
@@ -379,7 +367,7 @@ ScrollView {
                     Layout.fillWidth: true
                     columns: 2
                     columnSpacing: 13
-                    rowSpacing: 13
+                    rowSpacing: 9
                     SettingField {
                         keyName: 'chunk_ms'
                         label: 'Chunk (ms)'
@@ -432,7 +420,7 @@ ScrollView {
                     Layout.fillWidth: true
                     columns: 2
                     columnSpacing: 13
-                    rowSpacing: 13
+                    rowSpacing: 9
                     SettingField {
                         keyName: 'server_port'
                         label: 'Porta server'

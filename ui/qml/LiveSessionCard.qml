@@ -1,108 +1,54 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
 
 Item {
     id: card
-    property var record: ({})
-    opacity: record.terminal ? .78 : 1
+    required property var record
     RaisedSurface {
         anchors.fill: parent
         soft: true
-        radius: Theme.radiusLG
+        radius: Theme.radiusMD
     }
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 13
-        spacing: 10
+        anchors.margins: 12
+        spacing: 8
         RowLayout {
             Layout.fillWidth: true
-            Column {
+            NeuField {
                 Layout.fillWidth: true
-                spacing: 3
-                Text {
-                    textFormat: Text.PlainText
-                    text: Theme.sourceName(card.record.source || 'system').toUpperCase()
-                    color: Theme.accent
-                    font.family: Theme.font
-                    font.pixelSize: 10
-                    font.bold: true
-                    font.letterSpacing: 1.8
-                }
-                Text {
-                    textFormat: Text.PlainText
-                    width: parent.width
-                    text: card.record.source_path || Theme.sourceName(card.record.source || 'system')
-                    color: Theme.primary
-                    font.family: Theme.font
-                    font.pixelSize: 15
-                    font.bold: true
-                    elide: Text.ElideRight
-                }
-                Help {
-                    width: parent.width
-                    text: card.record.id || ''
-                    maximumLineCount: 1
-                    elide: Text.ElideRight
-                }
+                text: card.record.name || Theme.sourceName(card.record.source)
+                maximumLength: 120
+                Accessible.name: 'Titolo trascrizione'
+                onEditingFinished: live.rename(card.record.id, text)
             }
             Help {
-                text: Theme.statusName(card.record.status)
-            }
-        }
-        Item {
-            Layout.fillWidth: true
-            implicitHeight: 73
-            InsetSurface {
-                anchors.fill: parent
-            }
-            GridLayout {
-                anchors.fill: parent
-                anchors.margins: 12
-                columns: 2
-                rowSpacing: 1
-                columnSpacing: 14
-                uniformCellWidths: true
-                Metric {
-                    Layout.fillWidth: true
-                    label: 'Modello'
-                    value: Theme.modelName(card.record.model)
-                }
-                Metric {
-                    Layout.fillWidth: true
-                    label: 'Lingua'
-                    value: card.record.language || 'auto'
-                }
-                Metric {
-                    Layout.fillWidth: true
-                    label: 'Coda'
-                    value: Math.round(card.record.queue_wait_ms || 0) + ' ms'
-                }
-                Metric {
-                    Layout.fillWidth: true
-                    label: 'Routing'
-                    value: card.record.route_status || (card.record.source === 'application' ? 'isolato' : 'diretto')
-                }
+                text: card.record.terminal ? Theme.statusName(card.record.status) : ''
             }
         }
         RowLayout {
             Layout.fillWidth: true
-            FieldLabel {
-                text: 'Buffer'
-            }
-            NeuProgress {
-                Layout.fillWidth: true
-                value: card.record.buffer_level || 0
+            visible: (card.record.pending_audio_s || 0) > 0
+            Help {
+                text: Number(card.record.pending_audio_s || 0).toFixed(1) + ' s di audio in attesa'
+                color: (card.record.buffer_level || 0) >= 100 ? Theme.accent : Theme.secondary
             }
             Help {
-                text: Math.round(card.record.buffer_level || 0) + '%'
+                text: (card.record.spooled_chunks || 0) > 0 ? 'Conservato anche su disco' : ''
             }
         }
         Transcript {
+            objectName: 'liveTranscript' + card.record.id
             Layout.fillWidth: true
             Layout.fillHeight: true
             text: card.record.text || ''
+            autoScroll: true
         }
-        RowLayout {
+        Flow {
+            Layout.fillWidth: true
+            Layout.preferredHeight: implicitHeight
+            spacing: 6
             NeuButton {
                 compact: true
                 text: 'Copia'
@@ -111,15 +57,19 @@ Item {
             }
             NeuButton {
                 compact: true
-                text: 'Completa buffer'
+                text: 'Termina e completa'
                 enabled: !card.record.terminal && !card.record.draining && !!card.record.capture_running
                 onClicked: live.stop(card.record.id, true)
+                ToolTip.visible: hovered
+                ToolTip.text: 'Ferma la cattura e trascrive tutto l’audio residuo.'
             }
             NeuButton {
                 compact: true
                 text: 'Ferma'
                 enabled: !card.record.terminal
                 onClicked: live.stop(card.record.id, false)
+                ToolTip.visible: hovered
+                ToolTip.text: 'Interrompe subito. L’audio non ancora trascritto resta disponibile nel recovery.'
             }
             NeuButton {
                 compact: true

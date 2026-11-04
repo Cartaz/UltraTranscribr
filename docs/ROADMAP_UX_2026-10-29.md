@@ -1,6 +1,6 @@
 # UltraTranscribr 5.5.0 — Piano completo di miglioramento
 
-**Stato:** APPROVATO dall'utente il 29/10/2026; implementazione non iniziata in questo documento.  
+**Stato:** APPROVATO dall'utente il 29/10/2026. Stato dell'implementazione, verifiche e limiti in [UX_IMPLEMENTATION_2026-10-29.md](UX_IMPLEMENTATION_2026-10-29.md).
 **Origine:** commento Live trascritto il 29/10/2026 (271 righe) e screenshot "UI Live.png", "UI File.png", "UI Riunione 1.png", "UI Riunione 2.png" allegati alla conversazione.  
 **Destinatari:** agenti di sviluppo che dovranno esaminare il repository, realizzare, verificare e documentare le modifiche.  
 **Ambito:** tutti i flussi Live, File, Riunioni, Cronologia, Impostazioni e Log.  

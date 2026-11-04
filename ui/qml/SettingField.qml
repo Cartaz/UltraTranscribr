@@ -18,7 +18,7 @@ ColumnLayout {
         text: root.label
     }
     NeuField {
-        objectName: root.keyName + 'Field'
+        objectName: root.keyName === 'language' ? 'languageLegacyField' : root.keyName + 'Field'
         Layout.fillWidth: true
         visible: root.options.length === 0
         text: root.locked ? root.fixedValue : String(settings.values[root.keyName] == null ? '' : settings.values[root.keyName])
@@ -28,7 +28,7 @@ ColumnLayout {
         onTextEdited: settings.edit(root.keyName, text)
     }
     EnumCombo {
-        objectName: root.keyName + 'Control'
+        objectName: root.keyName === 'language' ? 'languageField' : root.keyName + 'Control'
         Layout.fillWidth: true
         visible: root.options.length > 0
         model: root.options

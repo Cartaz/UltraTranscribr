@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1650" height="930" viewBox="0 0 1650 930">
+<defs><filter id="raised" x="-20%" y="-30%" width="140%" height="160%"><feDropShadow dx="5" dy="5" stdDeviation="6" flood-color="#050505"/><feDropShadow dx="-2" dy="-2" stdDeviation="3" flood-color="#303030" flood-opacity=".65"/></filter></defs>
+<rect x="0" y="0" width="1650" height="930" rx="0" fill="#141414" stroke="none"/>
+<rect x="18" y="18" width="195" height="894" rx="12" fill="#191919" stroke="none"/>
+<text x="34" y="59" font-family="DejaVu Sans,sans-serif" font-size="19" fill="#e1e1e1" font-weight="600">UltraTranscribr</text>
+<text x="34" y="84" font-family="DejaVu Sans,sans-serif" font-size="12" fill="#aaaaaa" font-weight="400">5.5 · Proposta di revisione</text>
+<text x="45" y="140" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#cccccc" font-weight="400">Live</text>
+<text x="45" y="194" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#cccccc" font-weight="400">File</text>
+<rect x="30" y="220" width="170" height="42" rx="12" fill="#252525" stroke="#ff6600"/>
+<text x="45" y="248" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#ff6600" font-weight="400">Riunione</text>
+<text x="45" y="302" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#cccccc" font-weight="400">Cronologia</text>
+<text x="45" y="356" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#cccccc" font-weight="400">Impostazioni</text>
+<text x="45" y="410" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#cccccc" font-weight="400">Log</text>
+<text x="34" y="868" font-family="DejaVu Sans,sans-serif" font-size="12" fill="#aaaaaa" font-weight="400">Dati dimostrativi</text>
+<text x="241" y="51" font-family="DejaVu Sans,sans-serif" font-size="22" fill="#e1e1e1" font-weight="500">Riunione di prova · 29/10/2026 19:14</text>
+<text x="241" y="80" font-family="DejaVu Sans,sans-serif" font-size="14" fill="#aaaaaa" font-weight="400">A1 · Lista compatta</text>
+<text x="1310" y="51" font-family="DejaVu Sans,sans-serif" font-size="14" fill="#cccccc" font-weight="400">Tutte le modifiche salvate</text>
+<rect x="238" y="103" width="1385" height="70" rx="12" fill="#202020" stroke="none"/>
+<rect x="252" y="121" width="75" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="264" y="144" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">▶</text>
+<text x="345" y="144" font-family="DejaVu Sans,sans-serif" font-size="16" fill="#e1e1e1" font-weight="400">00:00 / 01:45</text>
+<rect x="505" y="135" width="680" height="5" rx="2" fill="#484848" stroke="none"/>
+<rect x="1210" y="121" width="185" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="1222" y="144" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">Audio originale</text>
+<rect x="1407" y="121" width="196" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="1419" y="144" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">Velocità 1×</text>
+<rect x="238" y="189" width="260" height="716" rx="12" fill="#191919" stroke="none"/>
+<text x="254" y="219" font-family="DejaVu Sans,sans-serif" font-size="17" fill="#e1e1e1" font-weight="500">Interlocutori (9)</text>
+<text x="254" y="259" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#aaaaaa" font-weight="400">1</text>
+<rect x="280" y="238" width="192" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="292" y="261" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">Maria  ✎</text>
+<text x="254" y="306" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#aaaaaa" font-weight="400">2</text>
+<rect x="280" y="285" width="192" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="292" y="308" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">Luca  ✎</text>
+<text x="254" y="353" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#aaaaaa" font-weight="400">3</text>
+<rect x="280" y="332" width="192" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="292" y="355" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">Anna  ✎</text>
+<text x="254" y="400" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#aaaaaa" font-weight="400">4</text>
+<rect x="280" y="379" width="192" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="292" y="402" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">Paolo  ✎</text>
+<text x="254" y="447" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#aaaaaa" font-weight="400">5</text>
+<rect x="280" y="426" width="192" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="292" y="449" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">Elena  ✎</text>
+<text x="254" y="494" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#aaaaaa" font-weight="400">6</text>
+<rect x="280" y="473" width="192" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="292" y="496" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">Sara  ✎</text>
+<text x="254" y="541" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#aaaaaa" font-weight="400">7</text>
+<rect x="280" y="520" width="192" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="292" y="543" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">Marco  ✎</text>
+<text x="254" y="588" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#aaaaaa" font-weight="400">8</text>
+<rect x="280" y="567" width="192" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="292" y="590" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">Giulia  ✎</text>
+<text x="254" y="635" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#aaaaaa" font-weight="400">9</text>
+<rect x="280" y="614" width="192" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="292" y="637" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">Andrea  ✎</text>
+<rect x="485" y="238" width="5" height="437" rx="2" fill="#505050" stroke="none"/>
+<rect x="485" y="238" width="5" height="260" rx="2" fill="#aaaaaa" stroke="none"/>
+<rect x="254" y="755" width="225" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="266" y="778" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">Esporta TXT</text>
+<rect x="254" y="801" width="225" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="266" y="824" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">Esporta SRT</text>
+<text x="520" y="219" font-family="DejaVu Sans,sans-serif" font-size="20" fill="#e1e1e1" font-weight="500">Interventi</text>
+<rect x="1340" y="193" width="115" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="1352" y="216" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">↶ Annulla</text>
+<rect x="1470" y="193" width="135" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="1482" y="216" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">↷ Ripristina</text>
+<rect x="520" y="239" width="1082" height="91" rx="12" fill="#1b1b1b" stroke="#303030"/>
+<rect x="532" y="251" width="82" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="544" y="274" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">00:00</text>
+<rect x="628" y="251" width="130" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="640" y="274" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">Maria ⌄</text>
+<text x="775" y="271" font-family="DejaVu Sans,sans-serif" font-size="17" fill="#e1e1e1" font-weight="400">Apriamo la riunione con il calendario delle attività del prossimo mese.</text>
+<rect x="520" y="340" width="1082" height="91" rx="12" fill="#1b1b1b" stroke="#303030"/>
+<rect x="532" y="352" width="82" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="544" y="375" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">00:18</text>
+<rect x="628" y="352" width="130" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="640" y="375" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">Luca ⌄</text>
+<text x="775" y="372" font-family="DejaVu Sans,sans-serif" font-size="17" fill="#e1e1e1" font-weight="400">Propongo di confermare il laboratorio del venerdì e aggiornare le famiglie</text>
+<text x="775" y="399" font-family="DejaVu Sans,sans-serif" font-size="17" fill="#e1e1e1" font-weight="400">entro lunedì.</text>
+<rect x="520" y="441" width="1082" height="91" rx="12" fill="#1b1b1b" stroke="#303030"/>
+<rect x="532" y="453" width="82" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="544" y="476" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">00:42</text>
+<rect x="628" y="453" width="130" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="640" y="476" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">Anna ⌄</text>
+<text x="775" y="473" font-family="DejaVu Sans,sans-serif" font-size="17" fill="#e1e1e1" font-weight="400">Per il laboratorio servono due gruppi. Posso coordinare il primo e preparare</text>
+<text x="775" y="500" font-family="DejaVu Sans,sans-serif" font-size="17" fill="#e1e1e1" font-weight="400">i materiali.</text>
+<rect x="520" y="542" width="1082" height="91" rx="12" fill="#1b1b1b" stroke="#303030"/>
+<rect x="532" y="554" width="82" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="544" y="577" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">00:50</text>
+<rect x="628" y="554" width="130" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="640" y="577" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">Luca ⌄</text>
+<text x="775" y="574" font-family="DejaVu Sans,sans-serif" font-size="17" fill="#e1e1e1" font-weight="400">Sono disponibile per il secondo gruppo. Verifichiamo insieme gli orari.</text>
+<text x="775" y="617" font-family="DejaVu Sans,sans-serif" font-size="12" fill="#ff8844" font-weight="400">Voci sovrapposte · 00:50–00:58</text>
+<rect x="520" y="643" width="1082" height="91" rx="12" fill="#1b1b1b" stroke="#303030"/>
+<rect x="532" y="655" width="82" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="544" y="678" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">00:58</text>
+<rect x="628" y="655" width="130" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="640" y="678" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">Maria ⌄</text>
+<text x="775" y="675" font-family="DejaVu Sans,sans-serif" font-size="17" fill="#e1e1e1" font-weight="400">Bene, registriamo le disponibilità e fissiamo la verifica per martedì.</text>
+<rect x="520" y="744" width="1082" height="91" rx="12" fill="#1b1b1b" stroke="#303030"/>
+<rect x="532" y="756" width="82" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="544" y="779" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">01:20</text>
+<rect x="628" y="756" width="130" height="34" rx="9" fill="#202020" stroke="#353535"/>
+<text x="640" y="779" font-family="DejaVu Sans,sans-serif" font-size="13" fill="#e1e1e1" font-weight="400">Paolo ⌄</text>
+<text x="775" y="776" font-family="DejaVu Sans,sans-serif" font-size="17" fill="#e1e1e1" font-weight="400">Invierò il riepilogo delle decisioni e raccoglierò le conferme.</text>
+<rect x="1613" y="239" width="6" height="640" rx="3" fill="#404040" stroke="none"/>
+<rect x="1613" y="239" width="6" height="290" rx="3" fill="#aaaaaa" stroke="none"/>
+</svg>

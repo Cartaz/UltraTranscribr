@@ -90,6 +90,10 @@ def main():
         (controller.meeting.store.root / f"{sid}.json").write_text(
             json.dumps(metadata, ensure_ascii=False)
         )
+        original = (metadata.get("original_recording") or {}).get("path")
+        if original and Path(original).is_file():
+            hashes[str(original)] = digest(original)
+            controller.meeting.store.retain_original(sid, Path(original))
     process = psutil.Process()
     result = {
         "frontend": args.frontend,
@@ -221,8 +225,8 @@ def main():
             output = qml_item("audioOutput")
             assert isinstance(player, QMediaPlayer) and isinstance(output, QAudioOutput)
             output.setMuted(True)
-            wait_until(lambda: player.duration() > 0)
             if not args.skip_playback:
+                wait_until(lambda: player.duration() > 0)
                 player.setPosition(120000)
                 player.play()
                 wait_until(lambda: player.position() > 120300)
@@ -231,7 +235,7 @@ def main():
                 "duration_ms": player.duration(),
                 "position_ms": player.position(),
                 "muted": output.isMuted(),
-                "actual_decoder": True,
+                "actual_decoder": player.duration() > 0,
                 "playback_exercised": not args.skip_playback,
             }
             window._window.grabWindow().save(str(args.output / "long-review.png"))

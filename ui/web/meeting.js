@@ -134,7 +134,6 @@ function meetingEnsureUI() {
           <div class="meeting-audio-actions">
             <button id="meeting-export-txt" type="button">Esporta .txt</button>
             <button id="meeting-export-srt" type="button">Esporta .srt</button>
-            <button id="meeting-export-vtt" type="button">Esporta .vtt</button>
             <button id="meeting-delete-audio" type="button">Elimina audio</button>
           </div>
           <div class="fields two meeting-rediarization-controls">
@@ -1126,7 +1125,6 @@ const meetingModule = {
     $("meeting-review-save-all").onclick = meetingSaveAllReviewEdits;
     $("meeting-export-txt").onclick = () => meetingExport("txt");
     $("meeting-export-srt").onclick = () => meetingExport("srt");
-    $("meeting-export-vtt").onclick = () => meetingExport("vtt");
     $("meeting-delete-audio").onclick = meetingDeleteAudio;
     $("meeting-open-history").onclick = () => {
       if (!meetingHistoryId) return;

@@ -1,4 +1,5 @@
 """Application controller coordinating live, file, meeting and dictation workflows."""
+
 from __future__ import annotations
 
 import logging
@@ -67,7 +68,9 @@ class _MeetingControllerView:
 
     def active_live_count(self) -> int:
         # Meeting is exclusive with Dictation as well as ordinary Live.
-        return self._controller.active_live_count() + int(self._controller.dictation_busy())
+        return self._controller.active_live_count() + int(
+            self._controller.dictation_busy()
+        )
 
     def is_file_busy(self) -> bool:
         return self._controller.is_file_busy()
@@ -196,7 +199,9 @@ class AppController:
             pactl_runner=self._pactl,
         )
         self._dictation_metrics = DictationMetricsTracker()
-        self._dictation_metrics_store = DictationMetricsStore(AppMeta.DICTATION_METRICS_PATH)
+        self._dictation_metrics_store = DictationMetricsStore(
+            AppMeta.DICTATION_METRICS_PATH
+        )
         self._dictation = DictationService(
             backend=self._backend.with_priority(InferencePriority.INTERACTIVE),
             backend_initializer=self._ensure_backend_for_dictation,
@@ -279,7 +284,10 @@ class AppController:
             return
         active = bool((payload or {}).get("active"))
         if active and self._settings_applying.is_set():
-            self._bus.emit("dictation_error", "Attendi il salvataggio delle impostazioni prima di avviare la dettatura")
+            self._bus.emit(
+                "dictation_error",
+                "Attendi il salvataggio delle impostazioni prima di avviare la dettatura",
+            )
             self._dictation_activation.cancel()
             return
         if active and self._meeting.is_busy():
@@ -310,10 +318,14 @@ class AppController:
         cfg = settings or self._settings
         wanted = cfg.vad_filter if vad is None else bool(vad)
         if self._meeting_engine_active.is_set():
-            raise RuntimeError("Attendi la fine della riunione prima di caricare Whisper")
+            raise RuntimeError(
+                "Attendi la fine della riunione prima di caricare Whisper"
+            )
         with self._backend_init_lock:
             if self._meeting_engine_active.is_set():
-                raise RuntimeError("Attendi la fine della riunione prima di caricare Whisper")
+                raise RuntimeError(
+                    "Attendi la fine della riunione prima di caricare Whisper"
+                )
             with self._lock:
                 already = self._backend_started and self._backend.is_running
                 loaded_model = self._backend_model_size
@@ -393,7 +405,9 @@ class AppController:
                 self._bus.emit("backend_status_changed", "switching_model")
                 self._backend.stop()
                 if self._backend.is_running:
-                    raise RuntimeError("Whisper non si è arrestato: cambio motore interrotto")
+                    raise RuntimeError(
+                        "Whisper non si è arrestato: cambio motore interrotto"
+                    )
                 with self._lock:
                     self._backend_started = False
                     self._backend_model_size = None
@@ -673,10 +687,18 @@ class AppController:
                 with self._settings_update_lock:
                     before = self._settings
                     candidate = before.with_(**overrides)
-                backend_changed = any(getattr(candidate, key) != getattr(before, key)
-                                      for key in self._BACKEND_RUNTIME_KEYS)
-                if backend_changed and (self.active_live_count() or self.is_file_busy() or self.dictation_busy()):
-                    raise RuntimeError("Ferma le trascrizioni attive prima di modificare il backend")
+                backend_changed = any(
+                    getattr(candidate, key) != getattr(before, key)
+                    for key in self._BACKEND_RUNTIME_KEYS
+                )
+                if backend_changed and (
+                    self.active_live_count()
+                    or self.is_file_busy()
+                    or self.dictation_busy()
+                ):
+                    raise RuntimeError(
+                        "Ferma le trascrizioni attive prima di modificare il backend"
+                    )
                 try:
                     if backend_changed:
                         self._backend.stop()
@@ -690,7 +712,9 @@ class AppController:
                         try:
                             self._backend.reconfigure(before)
                         except Exception:
-                            logger.exception("Ripristino della configurazione backend fallito")
+                            logger.exception(
+                                "Ripristino della configurazione backend fallito"
+                            )
                     raise
                 return self._settings
             finally:
@@ -700,14 +724,20 @@ class AppController:
         # Autosaved geometry and explicit preference saves must not overwrite
         # one another or publish a setting before its disk write succeeds.
         with self._settings_update_lock:
-            if self.dictation_busy() and self._BACKEND_RUNTIME_KEYS.intersection(overrides):
-                raise RuntimeError("Termina la dettatura prima di modificare il backend")
+            if self.dictation_busy() and self._BACKEND_RUNTIME_KEYS.intersection(
+                overrides
+            ):
+                raise RuntimeError(
+                    "Termina la dettatura prima di modificare il backend"
+                )
             candidate = self._settings.with_(**overrides)
             candidate.save()
             self._settings = candidate
             if "dictation_activation_mode" in overrides:
                 self._dictation_activation.set_mode(candidate.dictation_activation_mode)
-            self._bus.emit("config_changed", {key: getattr(candidate, key) for key in overrides})
+            self._bus.emit(
+                "config_changed", {key: getattr(candidate, key) for key in overrides}
+            )
             if "history_retention_days" in overrides:
                 if self.prune_history():
                     self._bus.emit("history_changed", None)
@@ -833,9 +863,7 @@ class AppController:
         return deleted
 
     def prune_history(self) -> int:
-        deleted = self._history.prune_older_than(
-            self._settings.history_retention_days
-        )
+        deleted = self._history.prune_older_than(self._settings.history_retention_days)
         if deleted:
             logger.info("Retention cronologia: eliminate %d sessioni", deleted)
         return deleted
@@ -887,16 +915,10 @@ class AppController:
 
         with self._lock:
             startup = self._startup_thread
-        if (
-            startup
-            and startup.is_alive()
-            and startup is not threading.current_thread()
-        ):
+        if startup and startup.is_alive() and startup is not threading.current_thread():
             startup.join(timeout=5.0)
             if startup.is_alive():
-                logger.warning(
-                    "ControllerStartup ancora attivo dopo shutdown bounded"
-                )
+                logger.warning("ControllerStartup ancora attivo dopo shutdown bounded")
 
         for event, handler in self._history_subscriptions:
             self._bus.unsubscribe(event, handler)
@@ -945,7 +967,9 @@ class AppController:
             ),
             (
                 "file_transcriber_completed",
-                lambda _payload: self._finish_history_session(StatusEnum.COMPLETED.value),
+                lambda _payload: self._finish_history_session(
+                    StatusEnum.COMPLETED.value
+                ),
             ),
         )
         for event, handler in handlers:
@@ -962,6 +986,14 @@ class AppController:
         with self._lock:
             self._file_history_id = session_id
         self._bus.emit("history_changed", session_id)
+        session = self._history.get_session(session_id) or {}
+        self._bus.emit(
+            "file_session_started",
+            {
+                "id": session_id,
+                "name": session.get("display_name", "Trascrizione file"),
+            },
+        )
 
     def _append_file_history_text(self, payload: Any) -> None:
         with self._lock:
@@ -1023,7 +1055,6 @@ class AppController:
             self._finish_history_session(status)
         else:
             self._set_file_history_status(status)
-
 
     def _append_file_history_quality(self, payload: Any) -> None:
         with self._lock:

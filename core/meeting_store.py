@@ -1,8 +1,9 @@
 """Persistent Meeting metadata layered beside the raw transcript history."""
+
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 import tempfile
 import threading
@@ -61,7 +62,9 @@ class MeetingStore:
                     "mode": mode,
                     "sources": [],
                 },
-                "processing_status": "recording" if mode == "realtime" else "preparing_file",
+                "processing_status": "recording"
+                if mode == "realtime"
+                else "preparing_file",
                 "num_speakers": max(0, int(num_speakers)),
                 "diarization_segments": [],
                 "speaker_diarization_segments": [],
@@ -107,7 +110,9 @@ class MeetingStore:
             metadata["draft_recovery_error"] = f"Bozze non leggibili: {exc}"
         return {**history, "meeting": metadata}
 
-    def set_status(self, session_id: str, status: str, *, terminal: bool = False) -> None:
+    def set_status(
+        self, session_id: str, status: str, *, terminal: bool = False
+    ) -> None:
         with self._lock:
             data = self._require(session_id)
             data["processing_status"] = str(status)
@@ -120,13 +125,17 @@ class MeetingStore:
             data["recording"] = dict(recording)
             self._write(session_id, data)
 
-    def set_processing_pipeline(self, session_id: str, pipeline: str,
-                                provenance: dict[str, Any] | None = None) -> None:
+    def set_processing_pipeline(
+        self, session_id: str, pipeline: str, provenance: dict[str, Any] | None = None
+    ) -> None:
         if pipeline not in {"whisper", "english_qwen", "qwen_meeting"}:
             raise ValueError("percorso riunione non valido")
         with self._lock:
             data = self._require(session_id)
-            data["processing_pipeline"] = {"id": pipeline, "provenance": dict(provenance or {})}
+            data["processing_pipeline"] = {
+                "id": pipeline,
+                "provenance": dict(provenance or {}),
+            }
             self._write(session_id, data)
 
     def set_source_recordings(
@@ -155,11 +164,76 @@ class MeetingStore:
             data = self._require(session_id)
             data["diarization_segments"] = list(diarization_segments)
             if speaker_diarization_segments is not None:
-                data["speaker_diarization_segments"] = list(speaker_diarization_segments)
+                data["speaker_diarization_segments"] = list(
+                    speaker_diarization_segments
+                )
             data["review_segments"] = list(review_segments)
             if num_speakers is not None:
                 data["num_speakers"] = max(0, int(num_speakers))
             self._write(session_id, data)
+
+    def retain_original(
+        self, session_id: str, source: Path, *, stop_event=None
+    ) -> Path:
+        """Copy the source bytes without re-encoding into managed retention storage."""
+        with self._lock:
+            self._require(session_id)
+        source = Path(source)
+        root = AppMeta.RECORDINGS_DIR
+        root.mkdir(parents=True, exist_ok=True)
+        target = root / f"{session_id}-original{source.suffix.lower()}"
+        temporary = target.with_suffix(target.suffix + ".tmp")
+        digest = hashlib.sha256()
+        try:
+            with source.open("rb") as incoming, temporary.open("wb") as output:
+                while block := incoming.read(1024 * 1024):
+                    if stop_event is not None and stop_event.is_set():
+                        raise RuntimeError("Conservazione originale annullata")
+                    digest.update(block)
+                    output.write(block)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, target)
+            with self._lock:
+                data = self._require(session_id)
+                data["original_recording"] = {
+                    "path": str(target),
+                    "size_bytes": target.stat().st_size,
+                    "sha256": digest.hexdigest(),
+                }
+                self._write(session_id, data)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return target
+
+    def playback_path(self, session_id: str) -> Optional[Path]:
+        with self._lock:
+            data = self._require(session_id)
+            original = data.get("original_recording") or {}
+        if not original.get("path"):
+            return None
+        try:
+            path = self._resolve_original_path(original["path"])
+            if not path.is_file() or path.stat().st_size != original.get("size_bytes"):
+                return None
+            digest = hashlib.sha256()
+            with path.open("rb") as handle:
+                while block := handle.read(1024 * 1024):
+                    digest.update(block)
+            return path if digest.hexdigest() == original.get("sha256") else None
+        except (OSError, ValueError, TypeError):
+            # An unavailable original must not prevent opening the transcript.
+            return None
+
+    @staticmethod
+    def _resolve_original_path(raw):
+        path = Path(raw).expanduser().resolve()
+        if (
+            path.parent != AppMeta.RECORDINGS_DIR.expanduser().resolve()
+            or "-original" not in path.name
+        ):
+            raise ValueError("percorso originale non valido")
+        return path
 
     def recording_path(self, session_id: str) -> Optional[Path]:
         """Return the validated canonical Meeting audio path when it still exists."""
@@ -185,8 +259,20 @@ class MeetingStore:
                 names[key] = cleaned
             else:
                 names.pop(key, None)
+            before = (data.get("speaker_names") or {}).get(key)
             data["speaker_names"] = names
-            self._write(session_id, data)
+            self._commit_review(
+                session_id,
+                data,
+                [
+                    {
+                        "scope": "name",
+                        "field": key,
+                        "before": before,
+                        "after": names.get(key),
+                    }
+                ],
+            )
 
     def edit_review_segments(
         self,
@@ -194,7 +280,7 @@ class MeetingStore:
         edits: dict[int, str],
     ) -> None:
         """Persist multiple review edits with one validated atomic sidecar write."""
-        normalized = {int(index): str(text or "").strip() for index, text in edits.items()}
+        normalized = {int(index): str(text or "") for index, text in edits.items()}
         if not normalized:
             return
         with self._lock:
@@ -204,20 +290,29 @@ class MeetingStore:
                 if idx < 0 or idx >= len(segments):
                     raise IndexError("segmento riunione non valido")
 
-            changed = False
+            changes = []
             for idx, text in normalized.items():
                 item = dict(segments[idx])
                 if str(item.get("text") or "") == text:
                     continue
+                changes.append(
+                    {
+                        "scope": "segment",
+                        "index": idx,
+                        "field": "text",
+                        "key": self._review_key(idx, item),
+                        "before": item.get("text", ""),
+                        "after": text,
+                    }
+                )
                 item.setdefault("raw_text", str(item.get("text") or ""))
                 item["text"] = text
                 segments[idx] = item
-                changed = True
 
-            if not changed:
+            if not changes:
                 return
             data["review_segments"] = segments
-            self._write(session_id, data)
+            self._commit_review(session_id, data, changes)
 
     def edit_review_segment(self, session_id: str, index: int, text: str) -> None:
         self.edit_review_segments(session_id, {int(index): text})
@@ -249,12 +344,80 @@ class MeetingStore:
                 if override not in known:
                     raise ValueError("speaker non presente nella riunione")
             item = dict(segments[idx])
+            before = item.get("speaker_override")
+            anchor = self._review_key(idx, item)
             if override:
                 item["speaker_override"] = override
             else:
                 item.pop("speaker_override", None)
             segments[idx] = item
             data["review_segments"] = segments
+            self._commit_review(
+                session_id,
+                data,
+                [
+                    {
+                        "scope": "segment",
+                        "index": idx,
+                        "key": anchor,
+                        "field": "speaker_override",
+                        "before": before,
+                        "after": item.get("speaker_override"),
+                    }
+                ],
+            )
+
+    def _commit_review(self, session_id, data, changes):
+        changes = [c for c in changes if c["before"] != c["after"]]
+        if not changes:
+            return
+        data["review_undo"] = [*(data.get("review_undo") or []), changes][-500:]
+        data["review_redo"] = []
+        data["review_revision"] = int(data.get("review_revision", 0)) + 1
+        self._write(session_id, data)
+
+    def undo_review(self, session_id, *, redo=False):
+        """Persist the command and its inverse together; delegates own no history.
+
+        Anchors prevent applying old edits to unrelated rows after re-diarization.
+        Storage failures leave the document and both stacks unchanged.
+        """
+        with self._lock:
+            data = self._require(session_id)
+            source, target = (
+                ("review_redo", "review_undo")
+                if redo
+                else ("review_undo", "review_redo")
+            )
+            stack = list(data.get(source) or [])
+            if not stack:
+                return
+            changes = stack.pop()
+            rows = data.get("review_segments") or []
+            for change in changes:
+                if change["scope"] == "segment":
+                    idx = change["index"]
+                    if (
+                        idx >= len(rows)
+                        or self._review_key(idx, rows[idx]) != change["key"]
+                    ):
+                        raise ValueError(
+                            "Interventi cambiati dopo il ricalcolo: annullamento non compatibile"
+                        )
+            for change in changes:
+                value = change["after" if redo else "before"]
+                item = (
+                    data.setdefault("speaker_names", {})
+                    if change["scope"] == "name"
+                    else rows[change["index"]]
+                )
+                if value is None:
+                    item.pop(change["field"], None)
+                else:
+                    item[change["field"]] = value
+            data[source] = stack
+            data[target] = [*(data.get(target) or []), changes][-500:]
+            data["review_revision"] = int(data.get("review_revision", 0)) + 1
             self._write(session_id, data)
 
     def delete_audio(self, session_id: str) -> bool:
@@ -268,6 +431,7 @@ class MeetingStore:
                 except FileNotFoundError:
                     continue
             data["recording"] = {}
+            data["original_recording"] = {}
             acquisition = dict(data.get("acquisition") or {})
             sources = []
             for item in acquisition.get("sources") or []:
@@ -317,7 +481,7 @@ class MeetingStore:
         if meeting is None:
             raise KeyError("riunione non trovata")
         format_name = str(fmt or "txt").lower().lstrip(".")
-        if format_name not in {"txt", "srt", "vtt"}:
+        if format_name not in {"txt", "srt"}:
             raise ValueError("formato riunione non supportato")
         metadata = meeting["meeting"]
         names = dict(metadata.get("speaker_names") or {})
@@ -344,13 +508,20 @@ class MeetingStore:
             path = path.with_suffix(f".{format_name}")
         if not path.parent.is_dir():
             raise FileNotFoundError(path.parent)
-        fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+        fd, tmp = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(content)
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp, path)
+            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
         except Exception:
             try:
                 os.unlink(tmp)
@@ -381,6 +552,7 @@ class MeetingStore:
                 for audio_path in existing:
                     audio_path.unlink()
                 data["recording"] = {}
+                data["original_recording"] = {}
                 acquisition = dict(data.get("acquisition") or {})
                 sources = []
                 for item in acquisition.get("sources") or []:
@@ -411,10 +583,15 @@ class MeetingStore:
             if source_recording.get("path"):
                 raw_paths.append(str(source_recording["path"]))
         result: list[Path] = []
-        seen: set[Path] = set()
+        original = (data.get("original_recording") or {}).get("path")
+        if original:
+            result.append(self._resolve_original_path(original))
+        seen: set[Path] = set(result)
         for raw in raw_paths:
             try:
-                resolved = self._resolve_recording_path(raw, require_exists=require_exists)
+                resolved = self._resolve_recording_path(
+                    raw, require_exists=require_exists
+                )
             except FileNotFoundError:
                 if require_exists:
                     raise
@@ -435,7 +612,10 @@ class MeetingStore:
 
     def _path(self, session_id: str) -> Path:
         safe = str(session_id)
-        if not safe or any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for ch in safe):
+        if not safe or any(
+            ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+            for ch in safe
+        ):
             raise ValueError("meeting id non valido")
         return self.root / f"{safe}.json"
 
@@ -459,7 +639,9 @@ class MeetingStore:
     @staticmethod
     def _atomic_json(path: Path, data: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+        fd, tmp = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 json.dump(data, handle, ensure_ascii=False, indent=2)
@@ -467,6 +649,11 @@ class MeetingStore:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp, path)
+            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
         except Exception:
             try:
                 os.unlink(tmp)
@@ -474,10 +661,8 @@ class MeetingStore:
                 pass
             raise
 
-
     def _draft_path(self, session_id: str) -> Path:
         return self.root / "review-drafts" / self._path(session_id).name
-
 
     def _read_drafts(self, session_id: str) -> dict[str, Any]:
         path = self._draft_path(session_id)
@@ -502,7 +687,6 @@ class MeetingStore:
         ):
             raise ValueError("conflitti bozze non validi")
         return value
-
 
     def save_review_drafts(self, session_id, edits, owner, revision) -> None:
         """Atomically checkpoint small UI drafts separately from approved text.
@@ -547,7 +731,6 @@ class MeetingStore:
                 },
             )
 
-
     @staticmethod
     def _review_key(index: int, row: dict[str, Any]) -> str:
         fields = [
@@ -559,4 +742,6 @@ class MeetingStore:
             row.get("end"),
             row.get("raw_text", row.get("text", "")),
         ]
-        return hashlib.sha256(json.dumps(fields, ensure_ascii=False).encode()).hexdigest()
+        return hashlib.sha256(
+            json.dumps(fields, ensure_ascii=False).encode()
+        ).hexdigest()

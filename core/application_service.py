@@ -5,6 +5,7 @@ workflow exclusivity, background execution, settings/backend transitions, histor
 naming and artifact cleanup. The UI bridge only validates/serializes values and
 invokes this service.
 """
+
 from __future__ import annotations
 
 import logging
@@ -13,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from config.constants import AppMeta
-from config.settings import AudioSource, ModelSize, Settings, normalize_language
+from config.settings import AudioSource, Settings, normalize_language
 from core.app_controller import AppController
 from core.audio_diagnostics import build_audio_diagnostics
 from core.background_tasks import BackgroundTaskGroup
@@ -180,8 +181,8 @@ class ApplicationService:
         sessions = self.controller.list_live_sessions(include_text=True)
         return {
             "settings": asdict(self.controller.settings),
-            "modelChoices": ModelSize.choices(),
-            "models": self.controller.list_models(),
+            "modelChoices": ["large-v3"],
+            "models": self.list_models(),
             "audioSources": AudioSource.choices(),
             "devices": discovery["devices"],
             "playbackStreams": discovery["streams"],
@@ -215,19 +216,25 @@ class ApplicationService:
         return {key: value for key, value in payload.items() if key in allowed}
 
     def apply_settings(self, overrides: dict[str, Any]) -> Settings:
+        if overrides.get("model_size", "large-v3") != "large-v3":
+            raise ValueError("Il modello supportato è Whisper Large v3")
         if self.meeting.is_busy() or self.meeting_batch.is_busy():
             raise RuntimeError(
                 "Termina la riunione o la coda Riunioni prima di modificare le impostazioni"
             )
         if self.controller.dictation_busy():
-            raise RuntimeError("Termina la dettatura prima di modificare le impostazioni")
+            raise RuntimeError(
+                "Termina la dettatura prima di modificare le impostazioni"
+            )
         before = self.controller.settings
         backend_changed = any(
             key in overrides and overrides[key] != getattr(before, key, None)
             for key in self._BACKEND_SETTING_KEYS
         )
         if backend_changed and (
-            self.controller.active_live_count() > 0 or self.controller.is_file_busy() or self.batch_busy()
+            self.controller.active_live_count() > 0
+            or self.controller.is_file_busy()
+            or self.batch_busy()
         ):
             raise RuntimeError(
                 "Ferma le trascrizioni attive prima di modificare il backend"
@@ -251,7 +258,9 @@ class ApplicationService:
         self.controller.request_audio_discovery(devices=False, streams=True)
         return self.controller.audio_discovery_snapshot()["streams"]
 
-    def probe_audio_source(self, audio_source: str, selected_input: str) -> dict[str, Any]:
+    def probe_audio_source(
+        self, audio_source: str, selected_input: str
+    ) -> dict[str, Any]:
         source = (
             audio_source
             if audio_source in AudioSource.choices()
@@ -279,7 +288,9 @@ class ApplicationService:
                 else settings.audio_source
             )
             selection = str(selected_input or "").strip()
-            resolved_language = normalize_language(str(language or "").strip() or settings.language)
+            resolved_language = normalize_language(
+                str(language or "").strip() or settings.language
+            )
             sink_name: str | None = None
             stream_id: int | None = None
 
@@ -346,10 +357,12 @@ class ApplicationService:
         isolate_vocals: bool,
     ) -> None:
         settings = self.controller.settings
-        resolved_language = normalize_language(str(language or "").strip() or settings.language)
-        resolved_model = (
-            model_size if model_size in ModelSize.choices() else settings.model_size
+        resolved_language = normalize_language(
+            str(language or "").strip() or settings.language
         )
+        if model_size and model_size != "large-v3":
+            raise ValueError("Il modello supportato è Whisper Large v3")
+        resolved_model = "large-v3"
         source = Path(path).expanduser()
         if not source.is_file():
             raise FileNotFoundError("Seleziona un file esistente")
@@ -382,10 +395,12 @@ class ApplicationService:
         isolate_vocals: bool,
     ) -> list[dict[str, Any]]:
         settings = self.controller.settings
-        resolved_language = normalize_language(str(language or "").strip() or settings.language)
-        resolved_model = (
-            model_size if model_size in ModelSize.choices() else settings.model_size
+        resolved_language = normalize_language(
+            str(language or "").strip() or settings.language
         )
+        if model_size and model_size != "large-v3":
+            raise ValueError("Il modello supportato è Whisper Large v3")
+        resolved_model = "large-v3"
         if self.meeting.is_busy() or self.meeting_batch.is_busy():
             raise RuntimeError(
                 "Termina la riunione o la coda Riunioni prima di accodare file"
@@ -555,6 +570,10 @@ class ApplicationService:
     ) -> dict[str, Any]:
         return self.meeting.edit_segments(session_id, edits)
 
+    def undo_meeting_review(self, session_id: str, *, redo: bool = False) -> dict:
+        self.meeting.store.undo_review(session_id, redo=redo)
+        return self.meeting.get(session_id)
+
     def edit_meeting_segment(
         self, session_id: str, index: int, text: str
     ) -> dict[str, Any]:
@@ -581,9 +600,15 @@ class ApplicationService:
             )
 
     def list_models(self) -> list[dict[str, object]]:
-        return self.controller.list_models()
+        return [
+            row
+            for row in self.controller.list_models()
+            if row.get("model") == "large-v3"
+        ]
 
     def download_model(self, model_size: str) -> None:
+        if model_size != "large-v3":
+            raise ValueError("Il modello supportato è Whisper Large v3")
         self.require_meeting_idle("gestire i modelli")
         self._require_transcription_idle()
         self.submit(
@@ -659,16 +684,26 @@ class ApplicationService:
             try:
                 self.meeting.store.delete_audio(session_id)
             except Exception as exc:
-                logger.warning("Rimozione audio meeting %s fallita: %s", session_id, exc)
+                logger.warning(
+                    "Rimozione audio meeting %s fallita: %s", session_id, exc
+                )
             (self.meeting.store.root / f"{session_id}.json").unlink(missing_ok=True)
-        elif session and session.get("kind") == "live" and session.get("source") == "microphone":
+        elif (
+            session
+            and session.get("kind") == "live"
+            and session.get("source") == "microphone"
+        ):
             delete_recording(session_id)
         self._bus.emit("history_changed", session_id)
         return True
 
     def session_recording_info(self, session_id: str) -> dict[str, Any]:
         session = self.controller.get_history_session(session_id)
-        if not session or session.get("kind") != "live" or session.get("source") != "microphone":
+        if (
+            not session
+            or session.get("kind") != "live"
+            or session.get("source") != "microphone"
+        ):
             return {"exists": False, "session_id": session_id}
         return recording_info(session_id)
 
@@ -679,7 +714,11 @@ class ApplicationService:
                 "Ferma la sessione Live prima di eliminare la registrazione"
             )
         session = self.controller.get_history_session(session_id)
-        if not session or session.get("kind") != "live" or session.get("source") != "microphone":
+        if (
+            not session
+            or session.get("kind") != "live"
+            or session.get("source") != "microphone"
+        ):
             raise ValueError("La sessione non è una Live da microfono")
         deleted = delete_recording(session_id)
         self._bus.emit("history_changed", session_id)
@@ -715,7 +754,6 @@ class ApplicationService:
             ),
             "audio_diagnostics_error",
         )
-
 
     def save_meeting_review_drafts(self, session_id, edits, owner, revision) -> None:
         self.meeting.save_review_drafts(session_id, edits, owner, revision)

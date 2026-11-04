@@ -12,6 +12,7 @@ PRESENTATION_EVENTS = (
     "file_transcriber_segments",
     "file_transcriber_quality",
     "file_queue_changed",
+    "file_session_started",
     "file_queue_job_updated",
     "config_changed",
     "history_changed",

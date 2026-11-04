@@ -68,6 +68,7 @@ class Adapter(QObject):
     def background(self, name, operation, receive, failed=None):
         if self._closed:
             return
+
         def error(message):
             self.feedback.show(message)
             if failed:
@@ -99,7 +100,7 @@ def choose_files():
 
 
 def export_session(adapter, session_id, fmt, profile="raw"):
-    if fmt not in {"txt", "srt", "vtt"}:
+    if fmt not in {"txt", "srt"}:
         raise ValueError("formato export non supportato")
     target, _ = QFileDialog.getSaveFileName(
         None,
