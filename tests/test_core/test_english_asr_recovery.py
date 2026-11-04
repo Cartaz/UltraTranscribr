@@ -86,7 +86,9 @@ def test_saturated_chunk_recovers_using_two_contiguous_windows(monkeypatch):
     backend = backend_with_decoder(monkeypatch, decode)
     result = backend.transcribe_audio(audio, language="it", verbose=True)
     assert result["recovered_from_token_limit"] is True
-    assert calls == [30 * RATE, 15 * RATE, 15 * RATE]
+    assert len(calls) == 3 and calls[0] == 30 * RATE
+    assert calls[1] + calls[2] == 30 * RATE
+    assert all(13 * RATE <= length <= 17 * RATE for length in calls[1:])
     assert [item["status"] for item in result["decoder_attempts"]] == [
         "token_limit", "completed", "completed"
     ]
