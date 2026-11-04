@@ -147,7 +147,12 @@ def run_stage(
                     "completed": False,
                 }
                 chunks.append(entry)
-                response = super()._request_checked_chunk(pcm16, prompt, offset_s)
+                try:
+                    response = super()._request_checked_chunk(pcm16, prompt, offset_s)
+                except RuntimeError as exc:
+                    raise RuntimeError(
+                        f"Blocco riunione {entry['start_s']:.2f}–{entry['end_s']:.2f} s: {exc}"
+                    ) from exc
                 entry["completed"] = True
                 return response
 
