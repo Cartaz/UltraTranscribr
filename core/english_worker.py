@@ -115,7 +115,7 @@ def run_stage(
         ProcessDefaults.FILE_SEGMENT_LENGTH_S = 30
         ProcessDefaults.FILE_OVERLAP_DURATION_S = 0
         backend = EnglishASRBackend(models.path("qwen-asr"), Event())
-        rows, quality, chunks, requests = [], [], [], []
+        rows, quality, chunks, requests, errors = [], [], [], [], []
         original_request = backend.transcribe_audio
 
         def transcribe(audio_data, **kwargs):
@@ -158,6 +158,8 @@ def run_stage(
                 quality.extend(payload)
             elif name == "file_transcriber_progress":
                 progress(int(payload))
+            elif name == "file_transcriber_error":
+                errors.append(str(payload))
 
         try:
             backend.start()
@@ -170,7 +172,10 @@ def run_stage(
             )
             worker.run()
             if worker._terminal_state != "completed":
-                raise RuntimeError("La trascrizione della riunione non è stata completata.")
+                raise RuntimeError(
+                    errors[-1] if errors
+                    else "La trascrizione della riunione non è stata completata."
+                )
             provenance = load(work / "provenance.json")
             if not chunks or not all(chunk["completed"] for chunk in chunks):
                 raise RuntimeError("La trascrizione della riunione ha perso un blocco audio.")
