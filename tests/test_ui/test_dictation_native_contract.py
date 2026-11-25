@@ -9,22 +9,6 @@ def test_native_dictation_does_not_use_xdotool_or_pynput():
     assert "pynput" not in source
 
 
-def test_overlay_is_local_qml_without_webchannel_and_cannot_focus():
-    source = (ROOT / "ui" / "native" / "dictation_overlay.py").read_text(encoding="utf-8")
-    html = (ROOT / "ui" / "web" / "dictation_overlay.html").read_text(encoding="utf-8")
-    css = (ROOT / "ui" / "web" / "dictation_overlay.css").read_text(encoding="utf-8")
-    assert "QQmlApplicationEngine" in source
-    assert "QUrl.fromLocalFile" in source
-    assert "QtWebChannel" not in source
-    assert "registerObject(" not in source
-    qml = (ROOT / "ui" / "qml" / "DictationOverlay.qml").read_text()
-    assert "WindowDoesNotAcceptFocus" in qml
-    assert "WindowTransparentForInput" in qml
-    assert "dictation_overlay.css" in html
-    assert "rgb(20, 20, 20)" in css
-    assert "rgb(255, 102, 0)" in css
-
-
 def test_remote_desktop_requests_keyboard_only_with_typed_dbus_variants():
     source = (ROOT / "ui" / "native" / "remote_desktop.py").read_text(encoding="utf-8")
     assert "KEYBOARD = 1" in source
@@ -82,3 +66,9 @@ def test_native_integration_prepares_remote_desktop_before_first_hotkey():
     remote = source.index("self._remote.ensure_ready()", start)
     shortcut = source.index("self._shortcut.start()", start)
     assert remote < shortcut
+
+
+def test_text_injection_exposes_only_the_paste_shortcut():
+    injector = (ROOT / "ui" / "native" / "text_injector.py").read_text(encoding="utf-8")
+    assert "paste_shortcut" in injector
+    assert "send_key" not in injector

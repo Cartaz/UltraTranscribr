@@ -51,43 +51,118 @@ def test_tray_owns_context_menu_for_full_lifetime() -> None:
         tray.hide()
 
 
-def test_close_path_requires_explicit_tray_readiness_contract() -> None:
-    source = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
+class _Tray:
+    def __init__(self, ready: bool) -> None:
+        self.ready = ready
 
-    assert "ready_for_background()" in source
-    assert "System tray non utilizzabile" in source
-    assert "self.hide()" in source
-    assert "app.quit()" in source
+    def ready_for_background(self) -> bool:
+        return self.ready
+
+    def set_running(self, _running) -> None:
+        pass
 
 
-def test_unsaved_meeting_review_blocks_real_shutdown_until_confirmed() -> None:
-    source = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
-    bridge = (ROOT / "ui" / "bridge.py").read_text(encoding="utf-8")
+def test_close_hides_to_ready_tray_and_otherwise_shuts_down(quick_window, monkeypatch):
+    from unittest.mock import Mock
 
-    assert "meetingReviewDirtyChanged = Signal(bool)" in bridge
-    assert "def setMeetingReviewDirty" in bridge
-    assert "self.runtime.meeting.dirtyChanged.connect" in source
-    assert "_confirm_discard_unsaved_meeting_review" in source
-    assert "QMessageBox.StandardButton.Discard" in source
-    assert "if not self._confirm_discard_unsaved_meeting_review():" in source
-    assert source.index("if tray_ready:") < source.rindex(
-        "if not self._confirm_discard_unsaved_meeting_review():"
+    from PySide6.QtGui import QCloseEvent
+
+    import ui.main_window as main_window
+
+    _app, window, _service, _controller, _messages = quick_window
+    quit_app = Mock()
+    monkeypatch.setattr(
+        main_window.QApplication, "instance", staticmethod(lambda: quit_app)
     )
+    monkeypatch.setattr(main_window.QTimer, "singleShot", lambda _ms, call: call())
+
+    window.set_tray_icon(_Tray(ready=True))
+    event = QCloseEvent()
+    window.closeEvent(event)
+    assert not event.isAccepted() and not window._closing
+    quit_app.quit.assert_not_called()
+
+    window.set_tray_icon(_Tray(ready=False))
+    event = QCloseEvent()
+    window.closeEvent(event)
+    assert event.isAccepted() and window._closing
+    quit_app.quit.assert_called_once()
+
+
+def test_unsaved_meeting_review_blocks_real_shutdown_until_confirmed(
+    quick_window, monkeypatch
+):
+    from unittest.mock import Mock
+
+    from PySide6.QtGui import QCloseEvent
+    from PySide6.QtWidgets import QMessageBox
+
+    import ui.main_window as main_window
+
+    _app, window, _service, _controller, _messages = quick_window
+    quit_app = Mock()
+    monkeypatch.setattr(
+        main_window.QApplication, "instance", staticmethod(lambda: quit_app)
+    )
+    monkeypatch.setattr(main_window.QTimer, "singleShot", lambda _ms, call: call())
+    window.set_tray_icon(_Tray(ready=False))
+    window.runtime.meeting.dirtyChanged.emit(True)
+    assert window._meeting_review_dirty
+    monkeypatch.setattr(window.runtime.meeting, "_flush_drafts", lambda: False)
+    answers = [QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Discard]
+    monkeypatch.setattr(
+        main_window.QMessageBox, "warning", staticmethod(lambda *a, **k: answers.pop(0))
+    )
+
+    event = QCloseEvent()
+    window.closeEvent(event)
+    assert not event.isAccepted() and not window._closing
+    window.force_quit()
+    assert window._closing
+    quit_app.quit.assert_called_once()
 
 
 def test_terminal_signals_route_through_qt_shutdown() -> None:
-    source = (ROOT / "main.py").read_text(encoding="utf-8")
+    import signal
+    from unittest.mock import Mock
 
-    assert "signal.SIGINT" in source
-    assert "signal.SIGTERM" in source
-    assert "install_process_signal_handlers(app)" in source
-    assert "timer.setInterval(250)" in source
+    import main
+
+    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    app = _app()
+    fake = Mock(wraps=None)
+    fake.quit = Mock()
+    try:
+        timer = main.install_process_signal_handlers(app)
+        timer.stop()
+        assert timer.interval() == 250
+        handler = signal.getsignal(signal.SIGTERM)
+        assert signal.getsignal(signal.SIGINT) is handler
+        original_quit = app.quit
+        app.quit = fake.quit
+        try:
+            handler(signal.SIGTERM, None)
+        finally:
+            app.quit = original_quit
+        fake.quit.assert_called_once()
+    finally:
+        for sig, value in previous.items():
+            signal.signal(sig, value)
 
 
-def test_move_and_resize_share_debounced_geometry_persistence() -> None:
-    source = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
+def test_move_and_resize_share_debounced_geometry_persistence(quick_window, monkeypatch):
+    from unittest.mock import Mock
 
-    assert "QEvent.Type.Move" in source
-    assert "QEvent.Type.Resize" in source
-    assert "self._schedule_geometry_save()" in source
-    assert "self._application.persist_window_geometry(" in source
+    from conftest import wait_until
+
+    app, window, service, _controller, _messages = quick_window
+    persist = Mock()
+    monkeypatch.setattr(service, "persist_window_geometry", persist)
+    wait_until(lambda: window._geometry_tracking_ready)
+    window._window.resize(1300, 860)
+    window._window.setPosition(40, 30)
+    app.processEvents()
+    assert persist.call_count == 0  # debounced, not one write per event
+    wait_until(lambda: persist.call_count == 1, timeout=2000)
+    _x, _y, width, height = persist.call_args.args
+    assert (width, height) == (1300, 860)

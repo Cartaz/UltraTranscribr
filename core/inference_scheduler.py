@@ -80,11 +80,6 @@ class InferenceScheduler(Generic[T]):
         with self._condition:
             return self._closed
 
-    @property
-    def queued_count(self) -> int:
-        with self._condition:
-            return sum(1 for item in self._waiters if not item.cancelled)
-
     def acquire(self, priority: InferencePriority | str | int) -> tuple[T, float]:
         requested = InferencePriority.coerce(priority)
         with self._condition:

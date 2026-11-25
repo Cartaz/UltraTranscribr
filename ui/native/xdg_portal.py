@@ -12,11 +12,14 @@ from dbus_next import BusType, Message, MessageType, Variant
 from dbus_next.aio import MessageBus
 from PySide6.QtCore import QObject, Signal, Slot
 
+from config.constants import AppMeta
+
 logger = logging.getLogger(__name__)
 PORTAL_SERVICE = "org.freedesktop.portal.Desktop"
 PORTAL_PATH = "/org/freedesktop/portal/desktop"
 REQUEST_INTERFACE = "org.freedesktop.portal.Request"
 SESSION_INTERFACE = "org.freedesktop.portal.Session"
+REGISTRY_INTERFACE = "org.freedesktop.host.portal.Registry"
 REQUEST_PATH_PREFIX = "/org/freedesktop/portal/desktop/request/"
 _DBUS_SERVICE = "org.freedesktop.DBus"
 _DBUS_PATH = "/org/freedesktop/DBus"
@@ -95,6 +98,9 @@ class PortalTransport(QObject):
 
         self._bus: MessageBus | None = None
         self._bus_task: asyncio.Task[MessageBus] | None = None
+        # Portal calls in flight on the worker loop; shutdown lets them finish
+        # before disconnecting so none fails on a closed bus unobserved.
+        self._tasks: set[asyncio.Task[Any]] = set()
         self._request_waiters: dict[str, tuple[str, asyncio.Future[tuple[int, dict[str, Any]]]]] = {}
         self._active_request_paths: dict[str, str] = {}
         self._cancelled_requests: set[str] = set()
@@ -238,22 +244,30 @@ class PortalTransport(QObject):
             pending_tasks = asyncio.all_tasks(loop)
             for task in pending_tasks:
                 task.cancel()
-            if pending_tasks:
-                loop.run_until_complete(asyncio.gather(*pending_tasks, return_exceptions=True))
+            # Always run once more: done-callbacks queued just before stop()
+            # must still observe their task's exception.
+            loop.run_until_complete(
+                asyncio.gather(*pending_tasks, return_exceptions=True)
+            )
+            for task in list(self._tasks):
+                if task.done() and not task.cancelled():
+                    task.exception()
+            self._tasks.clear()
             loop.close()
             with self._lock:
                 self._loop = None
 
-    @staticmethod
-    def _start_task(factory: Callable[[], Any], on_rejected: Callable[[str], None]) -> None:
+    def _start_task(self, factory: Callable[[], Any], on_rejected: Callable[[str], None]) -> None:
         try:
             coroutine = factory()
             task = asyncio.create_task(coroutine)
         except Exception as exc:
             on_rejected(str(exc))
             return
+        self._tasks.add(task)
 
         def done(completed: asyncio.Task) -> None:
+            self._tasks.discard(completed)
             if completed.cancelled():
                 return
             try:
@@ -287,11 +301,35 @@ class PortalTransport(QObject):
                 "interface='org.freedesktop.portal.GlobalShortcuts',member='Deactivated'",
             ):
                 await self._dbus_match(bus, "AddMatch", rule)
+            await self._register_host_app(bus)
         except Exception:
             bus.disconnect()
             raise
         self._bus = bus
         return bus
+
+    async def _register_host_app(self, bus: MessageBus) -> None:
+        """Identify this host app to the portal before any other portal call.
+
+        Started from a terminal (not the .desktop launcher), the portal cannot
+        derive the app id from the systemd scope and GlobalShortcuts rejects
+        the session with "An app id is required". Older portals lack the
+        Registry interface; failures are harmless and only logged.
+        """
+        try:
+            reply = await bus.call(
+                Message(
+                    destination=PORTAL_SERVICE,
+                    path=PORTAL_PATH,
+                    interface=REGISTRY_INTERFACE,
+                    member="Register",
+                    signature="sa{sv}",
+                    body=[AppMeta.ID, {}],
+                )
+            )
+            self._raise_for_error(reply, "Portal Registry.Register")
+        except Exception as exc:
+            logger.debug("Registrazione app id presso il portal non applicata: %s", exc)
 
     async def _dbus_match(self, bus: MessageBus, member: str, rule: str) -> None:
         reply = await bus.call(
@@ -446,6 +484,11 @@ class PortalTransport(QObject):
         self._raise_for_error(reply, f"Portal Close {path}")
 
     async def _shutdown_worker(self) -> None:
+        # Let in-flight calls (typically a session Close) reach the portal
+        # before the bus is disconnected underneath them.
+        in_flight = [task for task in self._tasks if not task.done()]
+        if in_flight:
+            await asyncio.wait(in_flight, timeout=1.0)
         paths = list(self._active_request_paths.values())
         self._active_request_paths.clear()
         for _path, (_request_id, future) in list(self._request_waiters.items()):

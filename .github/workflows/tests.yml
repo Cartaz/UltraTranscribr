@@ -3,22 +3,25 @@ on:
   push:
     branches:
       - main
-      - strategic-architecture-cleanup
   pull_request:
 jobs:
   pytest:
     # ubuntu-26.04 PortAudio fails Pa_Initialize without a sound server.
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 is the supported minimum; install.sh picks the system python3,
+        # which is 3.14 on the reference CachyOS install.
+        python-version: ["3.12", "3.14"]
     env:
       QT_QPA_PLATFORM: offscreen
       QT_QUICK_BACKEND: software
-      QTWEBENGINE_DISABLE_SANDBOX: "1"
-      QTWEBENGINE_CHROMIUM_FLAGS: "--no-sandbox --disable-gpu"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - run: >-
           sudo apt-get update && sudo apt-get install -y
           ffmpeg libportaudio2 libpulse0 libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0
@@ -26,10 +29,5 @@ jobs:
       - run: pip install -r requirements.txt pytest
       - run: bash -n install.sh
       - run: python -m compileall -q main.py config core ui tests
-      - run: node --check ui/web/app.js
-      - run: node --check ui/web/multi_live.js
-      - run: node --check ui/web/settings_cleanup.js
-      - run: node --check ui/web/file_history.js
-      - run: node --check ui/web/meeting.js
       - run: pyside6-qmllint --unqualified info -I ui/qml ui/qml/*.qml
       - run: pytest -q

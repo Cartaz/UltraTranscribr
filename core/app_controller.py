@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from config.constants import AppMeta
-from config.settings import AudioSource, Settings, normalize_language
+from config.settings import (
+    BACKEND_SETTING_KEYS,
+    AudioSource,
+    Settings,
+    normalize_language,
+)
 from core.audio_discovery import AudioDiscoveryService
 from core.audio_inputs import AudioInputResolver
 from core.audio_routing import PulseAudioRouter
@@ -134,16 +139,7 @@ class _FileBatchControllerView:
 class AppController:
     """Own application services and the canonical runtime state."""
 
-    _BACKEND_RUNTIME_KEYS = {
-        "model_size",
-        "beam_size",
-        "vad_filter",
-        "vad_min_silence_ms",
-        "server_port",
-        "gpu_layers",
-        "compute_type",
-        "backend_instances",
-    }
+    _BACKEND_RUNTIME_KEYS = BACKEND_SETTING_KEYS
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -241,12 +237,6 @@ class AppController:
     @property
     def file_batch(self) -> FileBatchCoordinator:
         return self._file_batch
-
-    def dictation_session_snapshot(self) -> dict[str, Any]:
-        return self._dictation.snapshot()
-
-    def dictation_activation_snapshot(self) -> dict[str, Any]:
-        return self._dictation_activation.snapshot()
 
     def dictation_shortcut_pressed(self) -> None:
         self._dictation_activation.press()
@@ -520,26 +510,6 @@ class AppController:
 
     def active_live_count(self) -> int:
         return self._live_sessions.active_count()
-
-    def start_transcription(
-        self,
-        sink_name=None,
-        audio_source=None,
-        language=None,
-        stream_id: Optional[int] = None,
-    ) -> dict[str, Any]:
-        return self.start_live_session(
-            sink_name=sink_name,
-            audio_source=audio_source,
-            language=language,
-            stream_id=stream_id,
-        )
-
-    def stop_transcription(self) -> None:
-        self.stop_all_live_sessions(drain=False)
-
-    def stop_listening(self) -> None:
-        self.stop_all_live_sessions(drain=True)
 
     def is_running(self) -> bool:
         return any(
@@ -846,9 +816,6 @@ class AppController:
 
     def get_history_session(self, session_id: str) -> Optional[dict[str, Any]]:
         return self._history.get_session(session_id)
-
-    def export_history_session(self, session_id: str, target_path: str) -> str:
-        return str(self._history.export_text(session_id, target_path))
 
     def delete_history_session(self, session_id: str) -> bool:
         live = self._live_sessions.get_session(session_id)

@@ -98,18 +98,78 @@ def test_application_service_explicit_unsubscribe_updates_owned_registry() -> No
     ]
 
 
-def test_composition_root_owns_runtime_shutdown_after_application_cleanup() -> None:
-    main = (ROOT / "main.py").read_text(encoding="utf-8")
-    window = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
-    application = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
+def test_composition_root_owns_runtime_shutdown_after_application_cleanup(
+    monkeypatch,
+) -> None:
+    """Run main() with recording fakes: UI first, application, then the core."""
+    from unittest.mock import Mock
 
-    assert "application.close()" in main
-    assert "controller.shutdown()" in main
-    assert main.index("application.close()") < main.index("controller.shutdown()")
-    assert "self._application.close()" not in window
-    assert "AppController" not in window
-    assert "self.controller.shutdown()" not in application
-    assert "self._closed = False" in application
-    assert "self._subscriptions" in application
-    assert "self.controller.unsubscribe(event, handler)" in application
-    assert "self.meeting_batch.close()" in application
+    import main
+    from config.settings import Settings
+
+    events: list[str] = []
+
+    class _Recorder:
+        def __init__(self, *args, **kwargs) -> None:
+            self.__dict__.update(
+                {name: Mock() for name in ("show", "raise_", "activateWindow", "on_start", "on_stop", "force_quit", "set_tray_icon", "setWindowIcon", "start", "log_readiness")}
+            )
+            for signal_name in ("show_window_requested", "quit_requested"):
+                setattr(self, signal_name, Mock())
+
+    class _Controller(_Recorder):
+        def shutdown(self) -> None:
+            events.append("controller.shutdown")
+
+    class _Application(_Recorder):
+        def close(self) -> None:
+            events.append("application.close")
+
+    class _Window(_Recorder):
+        def dispose(self) -> None:
+            events.append("window.dispose")
+
+    class _Dictation(_Recorder):
+        def close(self) -> None:
+            events.append("dictation.close")
+
+    class _Tray(_Recorder):
+        def connect_start_action(self, _slot) -> None:
+            pass
+
+        def connect_stop_action(self, _slot) -> None:
+            pass
+
+    class _App:
+        def __init__(self, _argv) -> None:
+            pass
+
+        def __getattr__(self, _name):
+            return lambda *args, **kwargs: None
+
+        def exec(self) -> int:
+            events.append("app.exec")
+            return 0
+
+    monkeypatch.setattr(main, "setup_logging", lambda: None)
+    monkeypatch.setattr(main.Settings, "load", classmethod(lambda cls: Settings()))
+    monkeypatch.setattr(main, "QApplication", _App)
+    monkeypatch.setattr(main, "install_process_signal_handlers", lambda app: Mock())
+    monkeypatch.setattr(main.QTimer, "singleShot", lambda *args: None)
+    monkeypatch.setattr(main, "QIcon", Mock())
+    monkeypatch.setattr(main, "AppController", _Controller)
+    monkeypatch.setattr(main, "ApplicationService", _Application)
+    monkeypatch.setattr(main, "MainWindow", _Window)
+    monkeypatch.setattr(main, "DictationNativeIntegration", _Dictation)
+    monkeypatch.setattr(main, "TrayIcon", _Tray)
+
+    with pytest.raises(SystemExit) as exited:
+        main.main()
+    assert exited.value.code == 0
+    assert events == [
+        "app.exec",
+        "window.dispose",
+        "dictation.close",
+        "application.close",
+        "controller.shutdown",
+    ]

@@ -399,7 +399,7 @@ def test_rerun_diarization_reuses_raw_segments_without_starting_whisper(
     raw_segments = list(raw_before["segments"])
     raw_text = raw_before["text"]
     manager.set_speaker_name(session_id, "SPEAKER_00", "Marco")
-    manager.edit_segment(session_id, 0, "Correzione manuale")
+    manager.edit_segments(session_id, {0: "Correzione manuale"})
     starts_before = controller.backend_starts
 
     started = manager.rerun_diarization(session_id, num_speakers=4)

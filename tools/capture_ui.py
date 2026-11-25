@@ -10,7 +10,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--frontend", choices=["qml", "web"], default="qml")
 parser.add_argument(
     "--source-root", type=Path, default=Path(__file__).resolve().parents[1]
 )
@@ -27,10 +26,6 @@ sys.path.insert(0, str(args.source_root.resolve()))
 isolated = Path(tempfile.mkdtemp(prefix="ut-capture-"))
 for key in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME"):
     os.environ[key] = str(isolated / key)
-os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
-os.environ.setdefault(
-    "QTWEBENGINE_CHROMIUM_FLAGS", "--no-sandbox --disable-gpu --disable-dev-shm-usage"
-)
 os.environ["TZ"] = "UTC"
 time.tzset()
 from PySide6.QtCore import QEventLoop, QLocale, QObject, QPointF, QTimer
@@ -45,7 +40,7 @@ from ui.main_window import MainWindow
 app = QApplication([])
 QLocale.setDefault(QLocale("en_US"))
 app.setQuitOnLastWindowClosed(False)
-# Keep the visible fixture date identical across frontends and capture runs.
+# Keep the visible fixture date identical across capture runs.
 fixture_clock = patch(
     "core.transcript_history._utc_now", return_value="2026-10-01T07:00:00+00:00"
 )
@@ -134,18 +129,12 @@ if args.populated:
                 "record_audio": False,
             },
         )
-    if args.frontend == "web":
-        window._web_page.runJavaScript(
-            f"fileHistoryLoadSession({json.dumps(history_id)}); meetingLoad({json.dumps(meeting_id)});"
-        )
-    else:
-        window.runtime.archive.select(history_id)
-        window.runtime.meeting.select(meeting_id)
+    window.runtime.archive.select(history_id)
+    window.runtime.meeting.select(meeting_id)
     wait(800)
-if args.frontend == "qml":
-    window._window.findChild(QObject, "reviewEditorModes").setProperty(
-        "mode", args.review_mode
-    )
+window._window.findChild(QObject, "reviewEditorModes").setProperty(
+    "mode", args.review_mode
+)
 args.output.mkdir(parents=True, exist_ok=True)
 suffix = f"{args.width}x{args.height}" + (
     "-dpr2" if float(os.environ.get("QT_SCALE_FACTOR", "1")) == 2 else ""
@@ -161,73 +150,48 @@ try:
         "settings-advanced",
         *(("meeting-review",) if args.populated else ()),
     ):
-        if args.frontend == "web":
-            window._web_page.runJavaScript(
-                f"switchView({json.dumps('meeting' if page == 'meeting-review' else page)})"
-                if page != "settings-advanced"
-                else 'switchView("settings"); switchSettingsTab("advanced")'
+        window._window.setProperty(
+            "view",
+            "settings"
+            if page == "settings-advanced"
+            else "meeting"
+            if page == "meeting-review"
+            else page,
+        )
+        if page == "settings-advanced":
+            window._window.findChild(QObject, "settingsPage").setProperty(
+                "advanced", True
             )
-        else:
-            window._window.setProperty(
-                "view",
-                "settings"
-                if page == "settings-advanced"
-                else "meeting"
-                if page == "meeting-review"
-                else page,
-            )
-            if page == "settings-advanced":
-                window._window.findChild(QObject, "settingsPage").setProperty(
-                    "advanced", True
-                )
         wait(600)
         if page == "meeting-review":
-            if args.frontend == "web":
-                window._web_page.runJavaScript(
-                    "document.querySelector('[data-panel=meeting]').scrollTop=850"
-                )
-            else:
-                flick = window._window.findChild(QObject, "meetingPage").property(
-                    "contentItem"
-                )
-                flick.setProperty(
-                    "contentY",
-                    min(
-                        660,
-                        max(
-                            0,
-                            flick.property("contentHeight") - flick.property("height"),
-                        ),
+            flick = window._window.findChild(QObject, "meetingPage").property(
+                "contentItem"
+            )
+            flick.setProperty(
+                "contentY",
+                min(
+                    660,
+                    max(
+                        0,
+                        flick.property("contentHeight") - flick.property("height"),
                     ),
-                )
+                ),
+            )
             wait(200)
-        if args.frontend == "web":
-            window._web_view.grab().save(str(args.output / f"{page}-{suffix}.png"))
-            result = []
-            window._web_page.runJavaScript(
-                'JSON.stringify([...document.querySelectorAll(".sidebar,.topbar,.view.active .card,.view.active input,.view.active select,.view.active .button,.view.active .metrics")].filter(e=>e.getBoundingClientRect().height).map(e=>({id:e.id,cls:e.className,text:e.textContent.trim().slice(0,60),rect:e.getBoundingClientRect().toJSON()})))',
-                lambda r, target=result: target.append(r),
-            )
-            wait(100)
-            if result:
-                (args.output / f"{page}-{suffix}-geometry.json").write_text(
-                    result[0] or "[]"
-                )
-        else:
-            window._window.grabWindow().save(str(args.output / f"{page}-{suffix}.png"))
-            geom = {}
-            for item in window._window.findChildren(QQuickItem):
-                if item.objectName() and item.isVisible():
-                    pt = item.mapToScene(QPointF(0, 0))
-                    geom[item.objectName()] = {
-                        "x": pt.x(),
-                        "y": pt.y(),
-                        "width": item.width(),
-                        "height": item.height(),
-                    }
-            (args.output / f"{page}-{suffix}-geometry.json").write_text(
-                json.dumps(geom, indent=2)
-            )
+        window._window.grabWindow().save(str(args.output / f"{page}-{suffix}.png"))
+        geom = {}
+        for item in window._window.findChildren(QQuickItem):
+            if item.objectName() and item.isVisible():
+                pt = item.mapToScene(QPointF(0, 0))
+                geom[item.objectName()] = {
+                    "x": pt.x(),
+                    "y": pt.y(),
+                    "width": item.width(),
+                    "height": item.height(),
+                }
+        (args.output / f"{page}-{suffix}-geometry.json").write_text(
+            json.dumps(geom, indent=2)
+        )
 finally:
     window._prepare_shutdown()
     window.close()
@@ -236,4 +200,4 @@ finally:
     service.close()
     controller.shutdown()
     fixture_clock.stop()
-print("Captured", args.frontend, args.output)
+print("Captured", args.output)

@@ -165,7 +165,7 @@ Se il numero di interlocutori è noto viene passato direttamente a Community-1; 
 
 ### Batch di registrazioni
 
-In **Riunione → Da registrazione** è possibile selezionare più file audio/video e avviarli come coda FIFO. La coda esegue una sola pipeline Meeting alla volta, quindi Whisper/SYCL e Community-1/XPU non competono tra loro per GPU e RAM.
+In **Riunione → Da registrazione** è possibile selezionare più file audio/video e avviarli come coda FIFO. La coda esegue una sola pipeline Meeting alla volta, quindi Qwen e Community-1 su XPU non competono tra loro per GPU e RAM.
 
 I campi generali di lingua e numero interlocutori diventano valori predefiniti per i file appena selezionati. Prima di avviare il batch ogni registrazione ha una propria riga modificabile: lingua e numero di interlocutori (`0` = automatico, massimo `20`) vengono congelati nel relativo job. È quindi possibile mescolare nello stesso batch, per esempio, riunioni con 4, 5 e 9 interlocutori.
 
@@ -173,7 +173,7 @@ Se un job fallisce, viene marcato in errore e la coda continua con quello succes
 
 ### Allineamento speaker e review
 
-Per le nuove trascrizioni UltraTranscribr conserva i timestamp parola-per-parola restituiti da whisper.cpp. Ogni parola viene riconciliata con la timeline `exclusive_speaker_diarization`: se un singolo segmento Whisper contiene prima una domanda di uno speaker e subito dopo la risposta di un altro, la review viene spezzata automaticamente al cambio interlocutore invece di assegnare l'intero blocco a una sola persona.
+Per le nuove riunioni gli allineatori Qwen producono timestamp parola-per-parola; le riunioni Whisper precedenti conservano quelli restituiti da whisper.cpp. Ogni parola viene riconciliata con la timeline `exclusive_speaker_diarization`: se un singolo segmento contiene prima una domanda di uno speaker e subito dopo la risposta di un altro, la review viene spezzata automaticamente al cambio interlocutore invece di assegnare l'intero blocco a una sola persona.
 
 La timeline Community-1 regolare viene conservata separatamente e viene usata soltanto per rilevare sovrapposizioni acustiche reali, cioè intervalli in cui due speaker parlano contemporaneamente. In questi casi la review mostra un avviso e richiede controllo umano: da una singola traccia mono non è sempre possibile attribuire in modo affidabile ogni parola quando due persone parlano nello stesso istante.
 
@@ -185,9 +185,9 @@ Le riunioni create prima dell'introduzione dei timestamp parola-per-parola conti
 
 ### Ricalcolo della diarizzazione
 
-Dalla review di una Riunione è possibile scegliere nuovamente il numero di interlocutori e usare **Ricalcola diarizzazione**. Questo percorso non avvia whisper.cpp: riusa il FLAC canonico conservato e i segmenti Whisper timestampati già persistiti, quindi sostituisce soltanto la diarizzazione e il relativo allineamento speaker.
+Dalla review di una Riunione è possibile scegliere nuovamente il numero di interlocutori e usare **Ricalcola diarizzazione**. Questo percorso non ritrascrive l'audio: riusa il FLAC canonico conservato e i segmenti timestampati già persistiti (Qwen o, per le riunioni precedenti, Whisper), quindi sostituisce soltanto la diarizzazione e il relativo allineamento speaker.
 
-Il risultato precedente viene sostituito solo dopo un ricalcolo completato con successo. Se Community-1 fallisce o l'operazione viene annullata, review e diarizzazione già salvate restano utilizzabili. Le correzioni manuali di testo e speaker vengono riapplicate quando la loro identità di provenienza Whisper è ancora compatibile; gli ID speaker vengono inoltre stabilizzati per sovrapposizione temporale con la diarizzazione precedente, così i nomi manuali restano associati per quanto possibile allo stesso interlocutore.
+Il risultato precedente viene sostituito solo dopo un ricalcolo completato con successo. Se Community-1 fallisce o l'operazione viene annullata, review e diarizzazione già salvate restano utilizzabili. Le correzioni manuali di testo e speaker vengono riapplicate quando la loro identità di provenienza è ancora compatibile; gli ID speaker vengono inoltre stabilizzati per sovrapposizione temporale con la diarizzazione precedente, così i nomi manuali restano associati per quanto possibile allo stesso interlocutore.
 
 Il ricalcolo richiede che l'audio della Riunione sia ancora conservato. Dopo **Elimina audio** o dopo la retention automatica, la sola trascrizione testuale non è sufficiente per eseguire nuovamente Community-1.
 
@@ -222,9 +222,10 @@ Un requisito GPU non soddisfatto produce invece un errore esplicito e diagnostic
 ## Self-check
 
 ```bash
-source /opt/intel/oneapi/setvars.sh
-.venv/bin/python -m core.environment_check
+env -u LD_LIBRARY_PATH .venv/bin/python -m core.environment_check
 ```
+
+Non eseguire prima `source /opt/intel/oneapi/setvars.sh`: PyTorch XPU usa le proprie librerie Intel e quelle di oneAPI ne impediscono il caricamento. `whisper-server` riceve l'ambiente oneAPI in modo isolato dal programma.
 
 Il report controlla almeno Python, oneAPI, Level Zero, Intel Compute Runtime/GPU, PyTorch XPU, ffmpeg, whisper-server SYCL, modelli Whisper/VAD e le dipendenze pyannote/Demucs.
 
@@ -253,11 +254,7 @@ Trascrizione, diarizzazione e separazione vocale vengono eseguite localmente. La
 .venv/bin/python -m compileall -q main.py config core ui tests tools
 .venv/bin/python -m pytest -q
 bash -n install.sh
-node --check ui/web/app.js
-node --check ui/web/multi_live.js
-node --check ui/web/settings_cleanup.js
-node --check ui/web/file_history.js
-node --check ui/web/meeting.js
+pyside6-qmllint --unqualified info -I ui/qml ui/qml/*.qml
 ```
 
 La CI headless verifica logica, contratti, sintassi e lifecycle senza fingere la presenza di una GPU Intel reale. Il test fisico di PyTorch XPU, Community-1 e HTDemucs resta parte del self-check/installazione sul sistema target.
@@ -266,11 +263,11 @@ La documentazione della pipeline Riunione è in `docs/MEETING_PIPELINE.md`; il b
 
 ## Licenza
 
-MIT.
+MIT, vedi [LICENSE](LICENSE).
 
 ### Interfaccia QML
 
-`ui/qml/Main.qml` compone le sei viste native Qt Quick. Gli adapter in `ui/adapters/` espongono modelli Qt e delegano i flussi a `ApplicationService`; i risultati dei worker raggiungono la GUI con connessioni queued. Non viene inizializzato WebEngine nel programma. `ui/web/` e `ui/bridge.py` sono conservati come riferimento della UI precedente e per i relativi test di contratto.
+`ui/qml/Main.qml` compone le sei viste native Qt Quick. Gli adapter in `ui/adapters/` espongono modelli Qt e delegano i flussi a `ApplicationService`; i risultati dei worker raggiungono la GUI con connessioni queued. Non viene inizializzato WebEngine nel programma: la precedente interfaccia web è stata rimossa e resta consultabile nella cronologia git.
 
 Verifica locale: `QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software pytest -q` e `pyside6-qmllint --unqualified info -I ui/qml ui/qml/*.qml`. Il rendering software serve ai test funzionali; gli screenshot degli effetti richiedono il renderer grafico Qt Quick.
 

@@ -251,36 +251,6 @@ class FileTranscriberThread(threading.Thread):
         if not self._stop_event.is_set():
             self._emit("file_transcriber_progress", 100)
 
-    def _request_chunk(self, wav_bytes: bytes, prompt: Optional[str]) -> str:
-        """Backward-compatible plain-text request used by existing callers/tests."""
-        last: Exception | None = None
-        for attempt in range(3):
-            if self._stop_event.is_set():
-                return ""
-            try:
-                result = self._backend.transcribe_audio(
-                    wav_bytes,
-                    language=self._language,
-                    prompt=prompt,
-                    verbose=False,
-                    timeout=SYCLDefaults.FILE_CHUNK_REQUEST_TIMEOUT_S,
-                    vad=False if self._song_mode else self._settings.vad_filter,
-                )
-                return result if isinstance(result, str) else str(result.get("text", ""))
-            except RuntimeError as exc:
-                if getattr(exc, "retryable", True) is False:
-                    raise RuntimeError(
-                        f"chunk file non recuperabile: {exc}"
-                    ) from exc
-                last = exc
-                if getattr(self._backend, "is_running", True) is False:
-                    break
-                if attempt < 2:
-                    self._stop_event.wait(ProcessDefaults.TRANSCRIBE_RETRY_DELAY_S)
-                    if getattr(self._backend, "is_running", True) is False:
-                        break
-        raise RuntimeError(f"chunk file fallito dopo 3 tentativi: {last}")
-
     def _request_chunk_verbose(
         self,
         wav_bytes: bytes,

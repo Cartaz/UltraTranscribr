@@ -6,6 +6,7 @@ implementing independent GPU detection or CPU fallbacks.
 """
 from __future__ import annotations
 
+import importlib.util
 import logging
 import os
 import threading
@@ -21,6 +22,26 @@ def _import_torch() -> Any:
     import torch
 
     return torch
+
+
+def _torch_import_error(exc: ImportError) -> GPUNotAvailableError:
+    """Tell a missing runtime apart from an installed one that cannot load."""
+    if importlib.util.find_spec("torch") is None:
+        return GPUNotAvailableError(
+            "PyTorch XPU non installato",
+            "Esegui ./install.sh per installare il runtime Intel XPU richiesto.",
+        )
+    hint = ""
+    if os.environ.get("LD_LIBRARY_PATH"):
+        hint = (
+            " LD_LIBRARY_PATH è impostato (ad esempio da oneAPI setvars.sh): "
+            "PyTorch XPU usa le proprie librerie Intel, quindi avvia senza "
+            "`source setvars.sh` o con `env -u LD_LIBRARY_PATH`."
+        )
+    return GPUNotAvailableError(
+        "PyTorch XPU installato ma non caricabile",
+        f"{exc}.{hint}",
+    )
 
 
 class TorchXpuRuntime:
@@ -49,10 +70,7 @@ class TorchXpuRuntime:
             try:
                 torch = _import_torch()
             except ImportError as exc:
-                raise GPUNotAvailableError(
-                    "PyTorch XPU non installato",
-                    "Esegui ./install.sh per installare il runtime Intel XPU richiesto.",
-                ) from exc
+                raise _torch_import_error(exc) from exc
 
             xpu = getattr(torch, "xpu", None)
             if xpu is None or not callable(getattr(xpu, "is_available", None)):

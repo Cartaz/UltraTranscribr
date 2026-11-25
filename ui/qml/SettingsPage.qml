@@ -427,18 +427,6 @@ ScrollView {
                         numeric: true
                     }
                     SettingField {
-                        keyName: 'gpu_layers'
-                        label: 'Uso GPU'
-                        locked: true
-                        fixedValue: 'Automatico · SYCL'
-                    }
-                    SettingField {
-                        keyName: 'compute_type'
-                        label: 'Precisione'
-                        locked: true
-                        fixedValue: 'Dal modello installato'
-                    }
-                    SettingField {
                         keyName: 'device'
                         label: 'Device'
                         locked: true

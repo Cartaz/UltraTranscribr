@@ -714,9 +714,6 @@ class MeetingManager:
         self._emit("meeting_review_changed", session_id)
         return meeting
 
-    def edit_segment(self, session_id: str, index: int, text: str) -> dict[str, Any]:
-        return self.edit_segments(session_id, {int(index): text})
-
     def set_segment_speaker(
         self,
         session_id: str,

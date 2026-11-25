@@ -66,3 +66,28 @@ def test_runtime_refuses_unavailable_xpu(monkeypatch) -> None:
 
     with pytest.raises(GPUNotAvailableError, match="XPU non disponibile"):
         tx.TorchXpuRuntime().require_device()
+
+
+def test_installed_but_unloadable_torch_is_not_reported_as_missing(monkeypatch) -> None:
+    def broken_import():
+        raise ImportError("libsycl.so.8: undefined symbol: urEnqueueCooperativeKernelLaunchExp")
+
+    monkeypatch.setattr(tx, "_import_torch", broken_import)
+    monkeypatch.setattr(tx.importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/intel/oneapi/lib")
+    with pytest.raises(GPUNotAvailableError) as raised:
+        tx.TorchXpuRuntime().require_device()
+    assert raised.value.message == "PyTorch XPU installato ma non caricabile"
+    assert "LD_LIBRARY_PATH" in raised.value.detail
+    assert "undefined symbol" in raised.value.detail
+
+
+def test_missing_torch_still_points_to_installer(monkeypatch) -> None:
+    def missing():
+        raise ImportError("No module named 'torch'")
+
+    monkeypatch.setattr(tx, "_import_torch", missing)
+    monkeypatch.setattr(tx.importlib.util, "find_spec", lambda name: None)
+    with pytest.raises(GPUNotAvailableError) as raised:
+        tx.TorchXpuRuntime().require_device()
+    assert raised.value.message == "PyTorch XPU non installato"

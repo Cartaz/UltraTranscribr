@@ -14,7 +14,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from config.constants import AppMeta
-from config.settings import AudioSource, Settings, normalize_language
+from config.settings import (
+    BACKEND_SETTING_KEYS,
+    AudioSource,
+    Settings,
+    normalize_language,
+)
 from core.app_controller import AppController
 from core.audio_diagnostics import build_audio_diagnostics
 from core.background_tasks import BackgroundTaskGroup
@@ -31,16 +36,7 @@ logger = logging.getLogger(__name__)
 class ApplicationService:
     """Deep application boundary used by desktop presentation adapters."""
 
-    _BACKEND_SETTING_KEYS = {
-        "model_size",
-        "beam_size",
-        "vad_filter",
-        "vad_min_silence_ms",
-        "server_port",
-        "gpu_layers",
-        "compute_type",
-        "backend_instances",
-    }
+    _BACKEND_SETTING_KEYS = BACKEND_SETTING_KEYS
 
     def __init__(self, controller: AppController) -> None:
         self.controller = controller
@@ -211,10 +207,6 @@ class ApplicationService:
     def settings_defaults() -> dict[str, Any]:
         return asdict(Settings())
 
-    def filter_settings_overrides(self, payload: dict[str, Any]) -> dict[str, Any]:
-        allowed = set(self.controller.settings.__dataclass_fields__)
-        return {key: value for key, value in payload.items() if key in allowed}
-
     def apply_settings(self, overrides: dict[str, Any]) -> Settings:
         if overrides.get("model_size", "large-v3") != "large-v3":
             raise ValueError("Il modello supportato è Whisper Large v3")
@@ -378,13 +370,6 @@ class ApplicationService:
             isolate_vocals_flag=bool(isolate_vocals and song_mode),
         )
 
-    def stop_file(self) -> None:
-        self.submit(
-            "stop-file",
-            self.controller.stop_file_transcription,
-            "file_transcriber_error",
-        )
-
     def enqueue_files(
         self,
         paths: list[str],
@@ -420,9 +405,6 @@ class ApplicationService:
             if (path := Path(str(raw)).expanduser()).is_file()
         ]
 
-    def list_file_queue(self) -> list[dict[str, Any]]:
-        return self.file_batch.list_jobs()
-
     def cancel_file_queue(self) -> list[dict[str, Any]]:
         return self.file_batch.cancel(clear_pending=True)
 
@@ -434,9 +416,6 @@ class ApplicationService:
             str(job.get("status")) in {"queued", "starting", "running"}
             for job in self.file_batch.list_jobs()
         )
-
-    def meeting_batch_busy(self) -> bool:
-        return self.meeting_batch.is_busy()
 
     def enqueue_meeting_files(
         self,
@@ -472,9 +451,6 @@ class ApplicationService:
                 }
             )
         return self.meeting_batch.enqueue(normalized)
-
-    def list_meeting_queue(self) -> list[dict[str, Any]]:
-        return self.meeting_batch.list_jobs()
 
     def cancel_meeting_queue(self) -> list[dict[str, Any]]:
         return self.meeting_batch.cancel(clear_pending=True)
@@ -518,22 +494,6 @@ class ApplicationService:
             pipeline=pipeline,
         )
 
-    def start_meeting_file(
-        self,
-        file_path: str,
-        *,
-        language: str | None,
-        num_speakers: int,
-        pipeline: str = DEFAULT_MEETING_PIPELINE,
-    ) -> dict[str, Any]:
-        self._require_meeting_start_available()
-        return self.meeting.start_file(
-            file_path,
-            language=language,
-            num_speakers=num_speakers,
-            pipeline=pipeline,
-        )
-
     def rerun_meeting_diarization(
         self,
         session_id: str,
@@ -572,11 +532,6 @@ class ApplicationService:
 
     def undo_meeting_review(self, session_id: str, *, redo: bool = False) -> dict:
         return self.meeting.undo_review(session_id, redo=redo)
-
-    def edit_meeting_segment(
-        self, session_id: str, index: int, text: str
-    ) -> dict[str, Any]:
-        return self.edit_meeting_segments(session_id, {int(index): text})
 
     def set_meeting_segment_speaker(
         self, session_id: str, index: int, speaker_id: str

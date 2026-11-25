@@ -19,7 +19,6 @@ VALID = {
     "dtype": "float32",
     "model_size": "large-v3",
     "device": "sycl",
-    "compute_type": "f16",
     "language": " IT ",
     "audio_source": "microphone",
     "beam_size": 3,
@@ -31,7 +30,6 @@ VALID = {
     "live_microphone_recording": True,
     "sink_name": " forced.input ",
     "sink_search_keyword": "USB",
-    "gpu_layers": 99,
     "server_port": 18092,
     "backend_instances": 2,
     "preload_model": True,
@@ -73,8 +71,6 @@ def test_boolean_preferences_are_not_truthy_strings_or_numbers(key, value):
 @pytest.mark.parametrize(
     "key,value",
     [
-        ("compute_type", "f32"),
-        ("gpu_layers", 0),
         ("sample_rate", 8000),
         ("dtype", "int16"),
         ("device", "cpu"),

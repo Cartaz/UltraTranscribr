@@ -157,13 +157,6 @@ class TranscriptHistoryStore:
             session.updated_at = _utc_now()
             self._write_session(session)
 
-    def replace_text(self, session_id: str, text: str) -> None:
-        with self._lock:
-            session = self._read_session_required(session_id)
-            session.text = str(text or "").strip()
-            session.updated_at = _utc_now()
-            self._write_session(session)
-
     def append_segments(self, session_id: str, segments: list[dict[str, Any]]) -> None:
         additions = normalize_segments(segments)
         if not additions:

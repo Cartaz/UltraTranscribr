@@ -30,9 +30,6 @@ class TestAudioSource:
     def test_has_application_stream(self) -> None:
         assert AudioSource.APPLICATION.value == "application"
 
-    def test_legacy_firefox_symbol_is_system_alias(self) -> None:
-        assert AudioSource.FIREFOX is AudioSource.SYSTEM
-
     def test_has_microphone(self) -> None:
         assert AudioSource.MICROPHONE.value == "microphone"
 
@@ -51,7 +48,6 @@ class TestSettings:
         assert s.chunk_ms == 3000
         assert s.model_size == ModelSize.LARGE_V3.value
         assert s.device == ComputeDevice.SYCL.value
-        assert s.compute_type == "f16"
         assert s.language == "en"
         assert s.audio_source == AudioSource.SYSTEM.value
         assert s.sink_name is None

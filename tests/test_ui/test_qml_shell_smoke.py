@@ -1,4 +1,4 @@
-"""Real Qt Quick shell replaces the browser smoke test."""
+"""Smoke test of the real Qt Quick shell: navigation, every view, idempotent dispose."""
 
 from PySide6.QtCore import QObject, QPointF, Qt
 from PySide6.QtTest import QTest

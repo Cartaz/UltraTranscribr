@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import io
-import subprocess
 from unittest.mock import MagicMock
 
 import pytest
@@ -22,27 +21,28 @@ def _worker(backend=None) -> FileTranscriberThread:
 
 
 def test_file_chunk_retries_twice_then_succeeds(monkeypatch) -> None:
-    backend = MagicMock()
+    backend = MagicMock(is_running=True)
     backend.transcribe_audio.side_effect = [
         RuntimeError("temporary-1"),
         RuntimeError("temporary-2"),
-        {"text": "ok"},
+        {"text": "ok", "segments": [{"start": 0, "end": 1, "text": "ok"}]},
     ]
     worker = _worker(backend)
     monkeypatch.setattr(worker._stop_event, "wait", lambda timeout: False)
 
-    assert worker._request_chunk(b"wav", "prompt") == "ok"
+    text, segments = worker._request_chunk_verbose(b"wav", "prompt")
+    assert text == "ok" and segments == [{"start": 0, "end": 1, "text": "ok"}]
     assert backend.transcribe_audio.call_count == 3
 
 
 def test_file_chunk_raises_after_three_failures(monkeypatch) -> None:
-    backend = MagicMock()
+    backend = MagicMock(is_running=True)
     backend.transcribe_audio.side_effect = RuntimeError("backend down")
     worker = _worker(backend)
     monkeypatch.setattr(worker._stop_event, "wait", lambda timeout: False)
 
     with pytest.raises(RuntimeError, match="chunk file fallito dopo 3 tentativi"):
-        worker._request_chunk(b"wav", None)
+        worker._request_chunk_verbose(b"wav", None)
     assert backend.transcribe_audio.call_count == 3
 
 
@@ -51,7 +51,7 @@ def test_file_chunk_cancelled_before_request_never_calls_backend() -> None:
     worker = _worker(backend)
     worker.stop()
 
-    assert worker._request_chunk(b"wav", None) == ""
+    assert worker._request_chunk_verbose(b"wav", None) == ("", [])
     backend.transcribe_audio.assert_not_called()
 
 

@@ -49,10 +49,6 @@ class PrioritizedWhisperBackend:
         return self._backend.is_running
 
     @property
-    def api_endpoint(self) -> str:
-        return self._backend.api_endpoint
-
-    @property
     def server_vad_enabled(self) -> bool:
         return self._backend.server_vad_enabled
 

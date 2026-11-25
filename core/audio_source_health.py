@@ -18,7 +18,7 @@ def evaluate_audio_source_health(
 
     Discovery is intentionally performed by the caller. Keeping this function
     pure lets the same status semantics be exercised in headless CI without
-    importing QtWebEngine or talking to PipeWire/PulseAudio.
+    importing Qt or talking to PipeWire/PulseAudio.
     """
     selected_input = str(selection or "").strip()
 

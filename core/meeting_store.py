@@ -512,16 +512,6 @@ class MeetingStore:
             self._write(session_id, data)
             return deleted
 
-    def delete_sidecar(self, session_id: str) -> bool:
-        with self._lock:
-            self._draft_path(session_id).unlink(missing_ok=True)
-            path = self._path(session_id)
-            try:
-                path.unlink()
-                return True
-            except FileNotFoundError:
-                return False
-
     def rendered_text(self, session_id: str) -> str:
         meeting = self.get(session_id)
         if meeting is None:

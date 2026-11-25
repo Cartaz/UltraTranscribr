@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import numpy as np
-import pytest
 
 from config.settings import Settings
 from core.buffer_manager import BufferManager
