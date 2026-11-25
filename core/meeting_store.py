@@ -167,6 +167,11 @@ class MeetingStore:
                 data["speaker_diarization_segments"] = list(
                     speaker_diarization_segments
                 )
+            if list(review_segments) != list(data.get("review_segments") or []):
+                # Undo entries are anchored to the replaced rows: keeping them
+                # would leave an Undo that can never apply nor be skipped.
+                data["review_undo"] = []
+                data["review_redo"] = []
             data["review_segments"] = list(review_segments)
             if num_speakers is not None:
                 data["num_speakers"] = max(0, int(num_speakers))

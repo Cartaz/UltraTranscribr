@@ -290,3 +290,105 @@ def test_changing_meeting_waits_for_autosave_then_navigates_without_manual_save(
     meeting.select(second)
     wait_until(lambda: meeting.review.get('id') == second)
     assert service.get_meeting(first)['meeting']['review_segments'][0]['text'] == 'Correzione prima di cambiare'
+
+
+def test_unchanged_titles_do_not_pin_computed_names_and_clearing_restores_them(
+    quick_window,
+):
+    app, window, _service, controller, messages = quick_window
+    root = window._window
+    sid = controller.history.create_session(
+        kind="live", model="large-v3", language="it", source="microphone"
+    )
+    computed = controller.history.get_session(sid)["display_name"]
+    root.setProperty("view", "live")
+    live = window.runtime.live
+    live.hydrate([{"id": sid, "source": "microphone", "text": "", "terminal": False}])
+    wait_until(lambda: visual_child(root.contentItem(), "liveTitle" + sid) is not None)
+    field = visual_child(root.contentItem(), "liveTitle" + sid)
+    field.editingFinished.emit()
+    app.processEvents()
+    QTest.qWait(50)
+    assert controller.history.get_session(sid)["name"] == ""
+
+    archive = window.runtime.archive
+    archive.select(sid)
+    wait_until(lambda: archive.selected.get("id") == sid)
+    archive.rename("Nome scelto")
+    wait_until(lambda: archive.selected.get("display_name") == "Nome scelto")
+    archive.rename("")
+    wait_until(lambda: archive.selected.get("display_name") == computed)
+    assert controller.history.get_session(sid)["name"] == ""
+
+    files = window.runtime.files
+    files.handle_event("file_session_started", {"id": sid, "name": computed})
+    files.rename("Titolo file")
+    wait_until(lambda: files.title == "Titolo file")
+    files.rename("")
+    wait_until(lambda: files.title == computed)
+    assert not any("TypeError" in m or "ReferenceError" in m for m in messages)
+
+
+@pytest.mark.parametrize("default", ["auto", "nl", "en-US"])
+def test_meeting_language_shown_is_the_language_sent(quick_window, default):
+    app, window, _service, _controller, _messages = quick_window
+    root = window._window
+    root.setProperty("view", "meeting")
+    meeting = window.runtime.meeting
+    meeting.set_default_language(default)
+    app.processEvents()
+    combo = root.findChild(QObject, "meetingLanguageField")
+    wait_until(lambda: combo.property("currentValue") == meeting.language)
+    expected = "en" if default == "en-US" else "it"
+    assert meeting.language == expected
+
+
+def test_failed_save_cancels_queued_undo_and_pending_meeting_switch(
+    quick_window, monkeypatch
+):
+    app, window, service, controller, _messages = quick_window
+    other = seed_meeting(controller)
+    sid = seed_meeting(controller)
+    meeting = window.runtime.meeting
+    meeting.select(sid)
+    wait_until(lambda: meeting.segments.count == 2)
+    meeting.editText(1, "modifica salvata")
+    meeting.saveAll()
+    wait_until(lambda: not meeting.dirty and not meeting.saving)
+    original = service.edit_meeting_segments
+
+    def fail(*_args):
+        raise OSError("Disk full")
+
+    monkeypatch.setattr(service, "edit_meeting_segments", fail)
+    meeting.editText(0, "testo non salvato")
+    meeting.undo()
+    wait_until(lambda: bool(meeting._save_error) and not meeting.saving)
+    stored = service.get_meeting(sid)["meeting"]["review_segments"]
+    assert stored[1]["text"] == "modifica salvata"
+    assert meeting.dirty
+
+    meeting.select(other)
+    wait_until(lambda: not meeting.saving)
+    assert meeting._pending_selection is None
+    monkeypatch.setattr(service, "edit_meeting_segments", original)
+    meeting.saveAll()
+    wait_until(lambda: not meeting.dirty and not meeting.saving)
+    app.processEvents()
+    QTest.qWait(50)
+    assert meeting._review.get("id") == sid
+    stored = service.get_meeting(sid)["meeting"]["review_segments"]
+    assert stored[0]["text"] == "testo non salvato"
+    assert stored[1]["text"] == "modifica salvata"
+
+
+def test_undo_and_redo_notify_other_meeting_views(quick_window):
+    _app, _window, service, controller, _messages = quick_window
+    sid = seed_meeting(controller)
+    service.edit_meeting_segments(sid, {0: "modificato"})
+    events = []
+    service.subscribe("meeting_review_changed", events.append)
+    service.undo_meeting_review(sid)
+    service.undo_meeting_review(sid, redo=True)
+    assert events == [sid, sid]
+    assert service.get_meeting(sid)["meeting"]["review_segments"][0]["text"] == "modificato"

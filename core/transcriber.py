@@ -8,6 +8,7 @@ import struct
 import threading
 import time
 import wave
+from pathlib import Path
 from queue import Empty
 from typing import Any, Callable, Optional
 
@@ -214,31 +215,33 @@ class TranscriberThread(threading.Thread):
         self._emit("transcriber_queue_wait", float(wait_ms))
 
     def _persist_recovery_audio(self, audio: np.ndarray | None = None) -> None:
+        temporary: Path | None = None
         try:
             AppMeta.CACHE_DIR.mkdir(parents=True, exist_ok=True)
             session_part = self._safe_session_component(self._session_id)
             suffix = f"-{session_part}" if session_part else ""
             path = AppMeta.CACHE_DIR / f"recovery-live{suffix}-{time.time_ns()}.wav"
             temporary = path.with_suffix(".wav.tmp")
-            parts = (
-                [audio]
-                if audio is not None
-                else [self._overlap_buffer, *self._current_segment]
-            )
-            written = 0
+            # The overlap was already transcribed: keep it as context, but only
+            # persist a recovery file when there is untranscribed audio too.
+            context = None if audio is not None else self._overlap_buffer
+            parts = [audio] if audio is not None else list(self._current_segment)
+            fresh = 0
             with wave.open(str(temporary), "wb") as output:
                 output.setnchannels(1)
                 output.setsampwidth(2)
                 output.setframerate(self._settings.sample_rate)
 
-                def append(part):
-                    nonlocal written
+                def append(part, *, untranscribed=True):
+                    nonlocal fresh
                     if part is not None and part.size:
                         output.writeframesraw(
                             (np.clip(part, -1, 1) * 32767).astype("<i2").tobytes()
                         )
-                        written += part.size
+                        if untranscribed:
+                            fresh += part.size
 
+                append(context, untranscribed=False)
                 for part in parts:
                     append(part)
                 if audio is None:
@@ -247,7 +250,7 @@ class TranscriberThread(threading.Thread):
                             append(self._buffer.get_nowait())
                         except Empty:
                             break
-            if not written:
+            if not fresh:
                 temporary.unlink(missing_ok=True)
                 return
             with temporary.open("rb") as persisted:
@@ -256,6 +259,8 @@ class TranscriberThread(threading.Thread):
             logger.warning("Audio non trascritto salvato per recupero: %s", path)
             self._emit("recovery_audio_saved", str(path))
         except OSError:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
             logger.exception("Impossibile salvare recovery audio")
             self._emit(
                 "transcriber_error",

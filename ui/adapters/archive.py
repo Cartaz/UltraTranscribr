@@ -2,7 +2,7 @@
 
 from PySide6.QtCore import Property, QTimer, QUrl, Signal, Slot
 
-from ui.adapters.base import Adapter, export_session
+from ui.adapters.base import Adapter, export_session, renamed_title
 from ui.models import RecordModel
 
 
@@ -138,20 +138,19 @@ class ArchiveAdapter(Adapter):
     def rename(self, name):
         session_id = self._selected.get("id", "")
 
+        def rename():
+            cleaned = self.application.rename_history_session(session_id, name)
+            return cleaned, renamed_title(self.application, session_id, None)
+
         def receive(value):
+            cleaned, title = value
             if self._selected.get("id") == session_id:
-                self._selected["name"] = value
-                self._selected["display_name"] = value or self._selected.get(
-                    "display_name", "Trascrizione"
-                )
+                self._selected["name"] = cleaned
+                self._selected["display_name"] = title
                 self.changed.emit()
             self.refresh()
 
-        self.background(
-            "qml-rename",
-            lambda: self.application.rename_history_session(session_id, name),
-            receive,
-        )
+        self.background("qml-rename", rename, receive)
 
     @Slot(str)
     def setProfile(self, profile):

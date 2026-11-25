@@ -706,6 +706,14 @@ class MeetingManager:
         self._emit("meeting_review_changed", session_id)
         return meeting
 
+    def undo_review(self, session_id: str, *, redo: bool = False) -> dict[str, Any]:
+        self.store.undo_review(session_id, redo=redo)
+        meeting = self.store.get(session_id)
+        if meeting is None:
+            raise KeyError("riunione non trovata")
+        self._emit("meeting_review_changed", session_id)
+        return meeting
+
     def edit_segment(self, session_id: str, index: int, text: str) -> dict[str, Any]:
         return self.edit_segments(session_id, {int(index): text})
 

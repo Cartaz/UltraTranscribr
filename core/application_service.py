@@ -571,8 +571,7 @@ class ApplicationService:
         return self.meeting.edit_segments(session_id, edits)
 
     def undo_meeting_review(self, session_id: str, *, redo: bool = False) -> dict:
-        self.meeting.store.undo_review(session_id, redo=redo)
-        return self.meeting.get(session_id)
+        return self.meeting.undo_review(session_id, redo=redo)
 
     def edit_meeting_segment(
         self, session_id: str, index: int, text: str

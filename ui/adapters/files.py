@@ -2,7 +2,7 @@
 
 from PySide6.QtCore import Property, QUrl, Signal, Slot
 
-from ui.adapters.base import Adapter, choose_files
+from ui.adapters.base import Adapter, choose_files, renamed_title
 from ui.models import RecordModel
 
 
@@ -88,7 +88,7 @@ class FileAdapter(Adapter):
 
         self.background(
             "qml-file-rename",
-            lambda: self.application.rename_history_session(session_id, name),
+            lambda: renamed_title(self.application, session_id, name),
             receive,
         )
 

@@ -141,6 +141,9 @@ class MicrophoneRecorder:
         try:
             if samples <= 0 or not self.part_path.is_file():
                 self.part_path.unlink(missing_ok=True)
+                self.part_path.with_name(
+                    self.part_path.name + ".format.json"
+                ).unlink(missing_ok=True)
                 return None
             return self._finalize_partial(
                 self.part_path, final_path=self.final_path, sample_rate=self.sample_rate

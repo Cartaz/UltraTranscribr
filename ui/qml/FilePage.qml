@@ -177,7 +177,7 @@ ScrollView {
                 placeholderText: 'Titolo della trascrizione'
                 Accessible.name: 'Titolo della trascrizione'
                 maximumLength: 120
-                onEditingFinished: files.rename(text)
+                onEditingFinished: if (text !== files.title) files.rename(text)
             }
             Transcript {
                 Layout.fillWidth: true

@@ -171,6 +171,7 @@ ScrollView {
                                 text: 'Rinomina'
                                 compact: true
                                 enabled: !!archive.selected.id
+                                         && sessionName.text !== (archive.selected.display_name || archive.selected.name || '')
                                 onClicked: archive.rename(sessionName.text)
                             }
                             NeuButton {

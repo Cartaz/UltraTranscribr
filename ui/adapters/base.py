@@ -116,3 +116,16 @@ def export_session(adapter, session_id, fmt, profile="raw"):
             ),
             lambda _: adapter.feedback.show(f"Esportato: {target}"),
         )
+
+
+def renamed_title(application, session_id, name):
+    """Rename a history session (when ``name`` is given) and return its shown title.
+
+    Clearing a custom name restores the computed title, so callers must not
+    reuse the previous display value.
+    """
+    cleaned = ""
+    if name is not None:
+        cleaned = application.rename_history_session(session_id, name)
+    session = application.get_history_session(session_id) or {}
+    return session.get("display_name") or cleaned

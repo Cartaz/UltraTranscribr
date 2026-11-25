@@ -150,6 +150,24 @@ def test_new_edit_invalidates_redo_and_rerun_conflict_is_explicit(tmp_path):
         diarization_segments=[],
         review_segments=[{"start": 12, "end": 15, "text": "altra voce"}],
     )
+    # Rerun replaces the anchored rows: stale history is dropped instead of
+    # leaving an Undo that fails forever.
+    meeting = store.get(sid)["meeting"]
+    assert meeting["review_undo"] == [] and meeting["review_redo"] == []
+    before = store._path(sid).read_bytes()
+    store.undo_review(sid)
+    assert store._path(sid).read_bytes() == before
+    store.edit_review_segment(sid, 0, "dopo il ricalcolo")
+    store.undo_review(sid)
+    assert store.get(sid)["meeting"]["review_segments"][0]["text"] == "altra voce"
+
+
+def test_stale_undo_anchor_is_still_rejected_without_changing_document(tmp_path):
+    _, store, sid = _meeting(tmp_path)
+    store.edit_review_segment(sid, 0, "prima")
+    data = store._require(sid)
+    data["review_segments"] = [{"start": 12, "end": 15, "text": "altra voce"}]
+    store._write(sid, data)
     before = store._path(sid).read_bytes()
     with pytest.raises(ValueError, match="non compatibile"):
         store.undo_review(sid)

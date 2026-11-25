@@ -7,9 +7,13 @@ import uuid
 from PySide6.QtCore import Property, QTimer, QUrl, Signal, Slot
 
 from core.meeting_alignment import speaker_label
+from core.meeting_engine import ALIGNMENT_LANGUAGES
 from core.review_timeline import ReviewTimeline
 from ui.adapters.base import Adapter, choose_files, export_session
 from ui.models import RecordModel
+
+# First entry of Theme.meetingLanguages, used when the global default is unsupported.
+MEETING_FALLBACK_LANGUAGE = "it"
 
 _QUALITY_NOTES = {
     "word_text_mismatch": "Tempi incompleti: il testo completo è stato conservato",
@@ -112,11 +116,15 @@ class MeetingAdapter(Adapter):
 
     @Property(str, notify=changed)
     def language(self):
-        return (
+        value = (
             self._default_language
             if self._language_override is None
             else self._language_override
         )
+        # Meetings support fewer languages than Whisper ("auto" is not one):
+        # show and send the same supported code instead of a hidden default.
+        code = str(value or "").strip().lower().split("-")[0]
+        return code if code in ALIGNMENT_LANGUAGES else MEETING_FALLBACK_LANGUAGE
 
     @Slot(str)
     def editLanguage(self, value):
@@ -615,9 +623,9 @@ class MeetingAdapter(Adapter):
     def editSpeakerName(self, index, name):
         self.speakers.update(index, draft_name=name)
 
-    def _write(self, operation, edits=None, speaker=None):
+    def _write(self, operation, edits=None, speaker=None, history=False):
         if self._writing:
-            self._write_queue.append((operation, edits, speaker))
+            self._write_queue.append((operation, edits, speaker, history))
             self.draftChanged.emit()
             return
         session_id = self._review["id"]
@@ -640,6 +648,14 @@ class MeetingAdapter(Adapter):
 
         def failed():
             self._save_error = "write failed"
+            # Undo/redo queued behind this write would revert an older change
+            # while the user's latest text is still unsaved: drop them.
+            self._write_queue = [item for item in self._write_queue if not item[3]]
+            if self._pending_selection:
+                self._pending_selection = None
+                self.feedback.show(
+                    "Cambio riunione annullato: salvataggio non riuscito, modifiche conservate"
+                )
             finish()
 
         def receive(value):
@@ -713,7 +729,10 @@ class MeetingAdapter(Adapter):
             self._write(
                 lambda: self.application.edit_meeting_segments(session_id, edits), edits
             )
-        self._write(lambda: self.application.undo_meeting_review(session_id, redo=redo))
+        self._write(
+            lambda: self.application.undo_meeting_review(session_id, redo=redo),
+            history=True,
+        )
 
     @Slot()
     def discardEdits(self):
@@ -821,7 +840,7 @@ class MeetingAdapter(Adapter):
             def finish_pending():
                 if not previous.wait(30):
                     raise RuntimeError("Salvataggio precedente ancora in corso")
-                for operation, _edits, _speaker in pending:
+                for operation, *_details in pending:
                     operation()
                 if closing_edits and session_id:
                     self.application.edit_meeting_segments(session_id, closing_edits)
