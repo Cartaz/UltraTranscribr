@@ -599,10 +599,12 @@ class ApplicationService:
             )
 
     def list_models(self) -> list[dict[str, object]]:
+        # Only Large v3 is offered, but models downloaded by earlier versions
+        # stay listed while installed so their disk space can be reclaimed.
         return [
             row
             for row in self.controller.list_models()
-            if row.get("model") == "large-v3"
+            if row.get("model") == "large-v3" or row.get("installed")
         ]
 
     def download_model(self, model_size: str) -> None:

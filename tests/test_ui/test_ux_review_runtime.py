@@ -392,3 +392,62 @@ def test_undo_and_redo_notify_other_meeting_views(quick_window):
     service.undo_meeting_review(sid, redo=True)
     assert events == [sid, sid]
     assert service.get_meeting(sid)["meeting"]["review_segments"][0]["text"] == "modificato"
+
+
+def test_close_right_after_undo_does_not_replay_the_undone_text(
+    quick_window, monkeypatch
+):
+    _app, window, service, controller, _messages = quick_window
+    sid = seed_meeting(controller)
+    meeting = window.runtime.meeting
+    meeting.select(sid)
+    wait_until(lambda: meeting.segments.count == 2)
+    release = threading.Event()
+    original = service.edit_meeting_segments
+
+    def slow(*args):
+        assert release.wait(5)
+        return original(*args)
+
+    monkeypatch.setattr(service, "edit_meeting_segments", slow)
+    meeting.editText(1, "abc")
+    meeting.undo()
+    assert meeting.saving
+    meeting.close()
+    release.set()
+    wait_until(
+        lambda: len(service.get_meeting(sid)["meeting"].get("review_redo") or []) == 1
+    )
+    stored = service.get_meeting(sid)["meeting"]["review_segments"]
+    assert stored[1]["text"] == "segmento 1"
+
+
+def test_rejected_undo_is_not_a_save_error_and_errors_reset_on_switch(
+    quick_window, monkeypatch
+):
+    _app, window, service, controller, _messages = quick_window
+    other = seed_meeting(controller)
+    sid = seed_meeting(controller)
+    meeting = window.runtime.meeting
+    meeting.select(sid)
+    wait_until(lambda: meeting.segments.count == 2)
+
+    def reject(*_args, **_kwargs):
+        raise ValueError("Interventi cambiati dopo il ricalcolo")
+
+    monkeypatch.setattr(service, "undo_meeting_review", reject)
+    meeting.undo()
+    wait_until(lambda: not meeting.saving)
+    assert "Errore di salvataggio" not in meeting.draftStatus
+
+    def fail(*_args):
+        raise OSError("Disk full")
+
+    monkeypatch.setattr(service, "edit_meeting_segments", fail)
+    meeting.editText(0, "non salvato")
+    meeting.saveAll()
+    wait_until(lambda: bool(meeting._save_error) and not meeting.saving)
+    meeting.discardEdits()
+    meeting.select(other)
+    wait_until(lambda: meeting._review.get("id") == other)
+    assert "Errore di salvataggio" not in meeting.draftStatus

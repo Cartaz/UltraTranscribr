@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -26,6 +27,7 @@ class MeetingStore:
         self.history = history
         self.root = Path(root or (AppMeta.DATA_DIR / "meetings"))
         self._lock = threading.RLock()
+        self._verified_originals: dict[tuple, str] = {}
 
     def create(
         self,
@@ -189,16 +191,27 @@ class MeetingStore:
         target = root / f"{session_id}-original{source.suffix.lower()}"
         temporary = target.with_suffix(target.suffix + ".tmp")
         digest = hashlib.sha256()
+        # Capture already writes the original in managed storage: register it
+        # in place instead of copying a possibly huge file onto itself.
+        in_place = source.resolve() == target.resolve()
         try:
-            with source.open("rb") as incoming, temporary.open("wb") as output:
-                while block := incoming.read(1024 * 1024):
-                    if stop_event is not None and stop_event.is_set():
-                        raise RuntimeError("Conservazione originale annullata")
-                    digest.update(block)
-                    output.write(block)
-                output.flush()
-                os.fsync(output.fileno())
-            os.replace(temporary, target)
+            with source.open("rb") as incoming:
+                output = None if in_place else temporary.open("wb")
+                try:
+                    while block := incoming.read(1024 * 1024):
+                        if stop_event is not None and stop_event.is_set():
+                            raise RuntimeError("Conservazione originale annullata")
+                        digest.update(block)
+                        if output is not None:
+                            output.write(block)
+                    if output is not None:
+                        output.flush()
+                        os.fsync(output.fileno())
+                finally:
+                    if output is not None:
+                        output.close()
+            if not in_place:
+                os.replace(temporary, target)
             with self._lock:
                 data = self._require(session_id)
                 data["original_recording"] = {
@@ -212,6 +225,21 @@ class MeetingStore:
         return target
 
     def playback_path(self, session_id: str) -> Optional[Path]:
+        """Return the verified original, or the canonical FLAC for older meetings.
+
+        Meetings created before originals were retained have no original
+        metadata: their canonical recording is the only audio. A recorded but
+        missing or altered original is never silently replaced.
+        """
+        with self._lock:
+            has_original = bool(
+                (self._require(session_id).get("original_recording") or {}).get("path")
+            )
+        if has_original:
+            return self.original_path(session_id)
+        return self.recording_path(session_id)
+
+    def original_path(self, session_id: str) -> Optional[Path]:
         with self._lock:
             data = self._require(session_id)
             original = data.get("original_recording") or {}
@@ -219,13 +247,24 @@ class MeetingStore:
             return None
         try:
             path = self._resolve_original_path(original["path"])
-            if not path.is_file() or path.stat().st_size != original.get("size_bytes"):
+            stat = path.stat()
+            if not path.is_file() or stat.st_size != original.get("size_bytes"):
                 return None
-            digest = hashlib.sha256()
-            with path.open("rb") as handle:
-                while block := handle.read(1024 * 1024):
-                    digest.update(block)
-            return path if digest.hexdigest() == original.get("sha256") else None
+            # Reviews reload often and originals can be GB-sized imports: hash a
+            # given file version once, keyed by identity and modification time.
+            key = (str(path), stat.st_size, stat.st_mtime_ns, stat.st_ino)
+            verified = self._verified_originals.get(key)
+            if verified is None:
+                digest = hashlib.sha256()
+                with path.open("rb") as handle:
+                    while block := handle.read(1024 * 1024):
+                        digest.update(block)
+                verified = digest.hexdigest()
+                # Like git's racy-clean rule: a file modified within the
+                # timestamp granularity could change without a new mtime.
+                if time.time_ns() - stat.st_mtime_ns > 2_000_000_000:
+                    self._verified_originals[key] = verified
+            return path if verified == original.get("sha256") else None
         except (OSError, ValueError, TypeError):
             # An unavailable original must not prevent opening the transcript.
             return None

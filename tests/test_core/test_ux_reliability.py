@@ -4,6 +4,7 @@ import json
 import shutil
 import subprocess
 import threading
+from pathlib import Path
 from queue import Empty
 from unittest.mock import Mock
 
@@ -334,3 +335,59 @@ def test_catchup_does_not_extend_the_target_without_queued_audio(monkeypatch):
     assert not worker._loop()
     assert worker._active_segment_target == worker._segment_samples
     buffer.close()
+
+
+def test_meeting_without_retained_original_plays_canonical_recording(tmp_path, monkeypatch):
+    monkeypatch.setattr(AppMeta, "RECORDINGS_DIR", tmp_path / "recordings")
+    _, store, sid = _meeting(tmp_path)
+    canonical = AppMeta.RECORDINGS_DIR / f"{sid}.flac"
+    canonical.parent.mkdir(parents=True)
+    sf.write(canonical, np.zeros(1600, dtype=np.float32), 16000)
+    store.set_recording(sid, {"path": str(canonical), "sample_rate": 16000})
+    assert store.playback_path(sid) == canonical
+
+
+def test_captured_original_is_registered_in_place_without_copy(tmp_path, monkeypatch):
+    monkeypatch.setattr(AppMeta, "RECORDINGS_DIR", tmp_path / "recordings")
+    _, store, sid = _meeting(tmp_path)
+    AppMeta.RECORDINGS_DIR.mkdir(parents=True)
+    captured = AppMeta.RECORDINGS_DIR / f"{sid}-original.flac"
+    sf.write(captured, np.ones(4800, dtype=np.float32) * 0.1, 48000)
+    before = captured.read_bytes()
+    inode = captured.stat().st_ino
+    opened = []
+    real_open = Path.open
+
+    def tracking_open(self, mode="r", *args, **kwargs):
+        opened.append((self.name, mode))
+        return real_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", tracking_open)
+    assert store.retain_original(sid, captured) == captured
+    monkeypatch.setattr(Path, "open", real_open)
+    assert not any("w" in mode for _name, mode in opened)
+    assert captured.stat().st_ino == inode and captured.read_bytes() == before
+    assert store.playback_path(sid) == captured
+
+
+def test_original_hash_is_reused_for_unchanged_old_files(tmp_path, monkeypatch):
+    import hashlib
+    import os
+
+    _, store, sid = _meeting(tmp_path)
+    source = tmp_path / "source.wav"
+    source.write_bytes(b"original audio")
+    path = store.retain_original(sid, source)
+    old = path.stat().st_mtime_ns - 10_000_000_000
+    os.utime(path, ns=(old, old))
+    calls = []
+    real = hashlib.sha256
+
+    def counting():
+        calls.append(1)
+        return real()
+
+    monkeypatch.setattr(hashlib, "sha256", counting)
+    assert store.playback_path(sid) == path
+    assert store.playback_path(sid) == path
+    assert len(calls) == 1

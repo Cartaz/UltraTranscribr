@@ -215,17 +215,37 @@ class AudioCaptureThread(threading.Thread):
         )
 
     def _open_stream_microphone(self) -> None:
+        def open_at(rate: int) -> sd.InputStream:
+            return sd.InputStream(
+                device=self.device_name,
+                samplerate=rate,
+                channels=self._settings.channels,
+                dtype=self._settings.dtype,
+                blocksize=0,
+                latency="low",
+            )
+
         self._native_sr = self._recording_sample_rate or query_device_sample_rate(
             self.device_name
         )
-        self._stream = sd.InputStream(
-            device=self.device_name,
-            samplerate=self._native_sr,
-            channels=self._settings.channels,
-            dtype=self._settings.dtype,
-            blocksize=0,
-            latency="low",
-        )
+        try:
+            self._stream = open_at(self._native_sr)
+        except sd.PortAudioError:
+            if not self._recording_sample_rate:
+                raise
+            # Raw hw: devices may not offer the 48 kHz recording rate: capture
+            # at their native rate and resample the retained track instead.
+            native = query_device_sample_rate(self.device_name)
+            if native == self._native_sr:
+                raise
+            logger.info(
+                "Microfono %s non supporta %d Hz: cattura a %d Hz con conversione",
+                self.device_name,
+                self._native_sr,
+                native,
+            )
+            self._native_sr = native
+            self._stream = open_at(native)
         self._stream.start()
         with self._lock:
             self._error = None
@@ -265,4 +285,5 @@ class AudioCaptureThread(threading.Thread):
                 needs_resample=self._native_sr != WHISPER_SAMPLE_RATE,
                 sample_sink=self._sample_sink,
                 preserve_native=bool(self._recording_sample_rate),
+                sink_sample_rate=self._recording_sample_rate,
             )

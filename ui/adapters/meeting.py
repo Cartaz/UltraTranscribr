@@ -87,6 +87,10 @@ class MeetingAdapter(Adapter):
         self._write_queue = []
         self._write_done = threading.Event()
         self._write_done.set()
+        # Edits carried by the write in flight, and whether it failed; read by
+        # close() so shutdown neither replays nor loses those edits.
+        self._inflight_edits = {}
+        self._inflight_state = {"failed": False}
         self._save_error = ""
         self._pending_selection = None
         self._generation = 0
@@ -481,6 +485,8 @@ class MeetingAdapter(Adapter):
     def _load_review(self, value, preserve_edits=False, recover_drafts=False):
         same = value.get("id") == self._review.get("id")
         edits = dict(self._edits) if same and preserve_edits else {}
+        if not same:
+            self._save_error = ""
         self._review = value
         metadata = value.get("meeting") or {}
         if recover_drafts:
@@ -647,6 +653,11 @@ class MeetingAdapter(Adapter):
                 self.select(selected)
 
         def failed():
+            if history:
+                # A rejected undo/redo saved nothing: the feedback message
+                # explains it, and pending saves/switches must continue.
+                finish()
+                return
             self._save_error = "write failed"
             # Undo/redo queued behind this write would revert an older change
             # while the user's latest text is still unsaved: drop them.
@@ -680,10 +691,16 @@ class MeetingAdapter(Adapter):
 
         done = threading.Event()
         self._write_done = done
+        state = {"failed": False}
+        self._inflight_edits = dict(edits or {})
+        self._inflight_state = state
 
         def persist():
             try:
                 return operation()
+            except Exception:
+                state["failed"] = True
+                raise
             finally:
                 done.set()
 
@@ -832,18 +849,34 @@ class MeetingAdapter(Adapter):
             self._flush_drafts()
         pending = list(self._write_queue)
         self._write_queue.clear()
-        closing_edits = dict(self._edits)
+        inflight = dict(self._inflight_edits) if self._writing else {}
+        inflight_state = self._inflight_state
+        save_failed = bool(self._save_error)
+        # Text already carried by a queued or in-flight write must not be
+        # written again after a queued undo, which would cancel the undo.
+        carried = [inflight] + [dict(item[1] or {}) for item in pending]
+        closing_edits = {
+            index: text
+            for index, text in self._edits.items()
+            if not any(edits.get(index) == text for edits in carried)
+        }
         session_id = self._review.get("id")
-        if pending or closing_edits:
+        if pending or closing_edits or inflight:
             previous = self._write_done
 
             def finish_pending():
                 if not previous.wait(30):
                     raise RuntimeError("Salvataggio precedente ancora in corso")
-                for operation, *_details in pending:
+                operations = pending
+                edits = dict(closing_edits)
+                if save_failed or inflight_state["failed"]:
+                    # Same rule as failed(): never undo past unsaved text.
+                    operations = [item for item in pending if not item[3]]
+                    edits = {**inflight, **edits}
+                for operation, *_details in operations:
                     operation()
-                if closing_edits and session_id:
-                    self.application.edit_meeting_segments(session_id, closing_edits)
+                if edits and session_id:
+                    self.application.edit_meeting_segments(session_id, edits)
 
             self.application.submit(
                 "meeting-close-writes", finish_pending, "history_error"

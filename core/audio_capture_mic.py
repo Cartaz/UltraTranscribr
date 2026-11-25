@@ -27,11 +27,19 @@ def microphone_capture_loop(
     needs_resample: bool,
     sample_sink: Optional[SampleSink] = None,
     preserve_native: bool = False,
+    sink_sample_rate: Optional[int] = None,
 ) -> None:
     overflow = np.array([], dtype=np.float32)
     converter = (
         StreamingLinearResampler(native_sr, WHISPER_SAMPLE_RATE)
         if needs_resample
+        else None
+    )
+    # The retained track keeps its declared rate even when the device had to
+    # be opened at a different native rate.
+    sink_converter = (
+        StreamingLinearResampler(native_sr, sink_sample_rate)
+        if preserve_native and sink_sample_rate and sink_sample_rate != native_sr
         else None
     )
 
@@ -50,7 +58,9 @@ def microphone_capture_loop(
         else:
             data = np.asarray(data, dtype=np.float32).reshape(-1)
         if preserve_native and data.size and sample_sink is not None:
-            sample_sink(data.copy())
+            retained = sink_converter.process(data) if sink_converter else data.copy()
+            if retained.size:
+                sample_sink(retained)
         if converter is not None:
             data = converter.process(data)
         if data.size and sample_sink is not None and not preserve_native:
@@ -67,6 +77,10 @@ def microphone_capture_loop(
         if data.size:
             overflow = data.copy()
 
+    if sink_converter is not None and sample_sink is not None:
+        tail = sink_converter.flush()
+        if tail.size:
+            sample_sink(tail)
     if converter is not None:
         tail = converter.flush()
         if tail.size:
