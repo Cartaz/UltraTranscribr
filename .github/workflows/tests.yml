@@ -7,7 +7,8 @@ on:
   pull_request:
 jobs:
   pytest:
-    runs-on: ubuntu-latest
+    # ubuntu-26.04 PortAudio fails Pa_Initialize without a sound server.
+    runs-on: ubuntu-24.04
     env:
       QT_QPA_PLATFORM: offscreen
       QT_QUICK_BACKEND: software
