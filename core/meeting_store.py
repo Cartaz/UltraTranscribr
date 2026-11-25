@@ -411,11 +411,36 @@ class MeetingStore:
                 ],
             )
 
+    # Autosave runs after every short typing pause: consecutive edits of one
+    # segment within this window form a single undo step instead of hundreds.
+    _UNDO_MERGE_WINDOW_S = 10.0
+
     def _commit_review(self, session_id, data, changes):
         changes = [c for c in changes if c["before"] != c["after"]]
         if not changes:
             return
-        data["review_undo"] = [*(data.get("review_undo") or []), changes][-500:]
+        now = time.time()
+        undo = list(data.get("review_undo") or [])
+        top = undo[-1] if undo else None
+        identity = ("scope", "index", "key", "field")
+        if (
+            top is not None
+            and not data.get("review_redo")
+            and len(changes) == 1
+            and len(top) == 1
+            and changes[0]["scope"] == "segment"
+            and changes[0]["field"] == "text"
+            and all(top[0].get(name) == changes[0].get(name) for name in identity)
+            and now - float(top[0].get("at", 0.0)) <= self._UNDO_MERGE_WINDOW_S
+        ):
+            merged = {**top[0], "after": changes[0]["after"], "at": now}
+            if merged["before"] == merged["after"]:
+                undo.pop()
+            else:
+                undo[-1] = [merged]
+        else:
+            undo.append([{**change, "at": now} for change in changes])
+        data["review_undo"] = undo[-500:]
         data["review_redo"] = []
         data["review_revision"] = int(data.get("review_revision", 0)) + 1
         self._write(session_id, data)

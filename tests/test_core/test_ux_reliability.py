@@ -391,3 +391,34 @@ def test_original_hash_is_reused_for_unchanged_old_files(tmp_path, monkeypatch):
     assert store.playback_path(sid) == path
     assert store.playback_path(sid) == path
     assert len(calls) == 1
+
+
+def test_trailing_whitespace_typed_in_review_never_reaches_exports(tmp_path):
+    _, store, sid = _meeting(tmp_path)
+    store.edit_review_segments(sid, {0: "testo corretto  \n"})
+    srt = store.export(sid, tmp_path / "out.srt", "srt").read_text(encoding="utf-8")
+    txt = store.export(sid, tmp_path / "out.txt", "txt").read_text(encoding="utf-8")
+    assert "testo corretto\n\n" in srt and "testo corretto  " not in srt
+    assert "testo corretto  " not in txt and not txt.endswith("\n\n")
+
+
+def test_autosaves_of_one_segment_form_a_single_undo_step(tmp_path, monkeypatch):
+    import core.meeting_store as store_module
+
+    _, store, sid = _meeting(tmp_path)
+    clock = [1000.0]
+    monkeypatch.setattr(store_module.time, "time", lambda: clock[0])
+    original = store.get(sid)["meeting"]["review_segments"][0]["text"]
+    for text in ("c", "co", "cor", "corretto"):
+        clock[0] += 0.4
+        store.edit_review_segments(sid, {0: text})
+    assert len(store.get(sid)["meeting"]["review_undo"]) == 1
+    clock[0] += 60  # a later editing session is a separate step
+    store.edit_review_segments(sid, {0: "corretto due"})
+    store.edit_review_segments(sid, {1: "altro"})
+    assert len(store.get(sid)["meeting"]["review_undo"]) == 3
+    store.undo_review(sid)
+    store.undo_review(sid)
+    assert store.get(sid)["meeting"]["review_segments"][0]["text"] == "corretto"
+    store.undo_review(sid)
+    assert store.get(sid)["meeting"]["review_segments"][0]["text"] == original

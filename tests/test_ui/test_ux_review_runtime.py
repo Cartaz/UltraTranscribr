@@ -451,3 +451,31 @@ def test_rejected_undo_is_not_a_save_error_and_errors_reset_on_switch(
     meeting.select(other)
     wait_until(lambda: meeting._review.get("id") == other)
     assert "Errore di salvataggio" not in meeting.draftStatus
+
+
+def test_title_typing_survives_model_updates_until_editing_finishes(quick_window):
+    app, window, _service, controller, messages = quick_window
+    root = window._window
+    sid = controller.history.create_session(
+        kind="file", model="large-v3", language="it", source_path="lezione.mp3"
+    )
+    computed = controller.history.get_session(sid)["display_name"]
+    root.setProperty("view", "file")
+    files = window.runtime.files
+    files.handle_event("file_session_started", {"id": sid, "name": computed})
+    wait_until(lambda: visual_child(root.contentItem(), "fileTitle") is not None)
+    field = visual_child(root.contentItem(), "fileTitle")
+    wait_until(lambda: field.isVisible())
+    field.forceActiveFocus()
+    QTest.keyClick(root, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+    for index, char in enumerate("budget nuovo"):
+        QTest.keyClick(
+            root, Qt.Key(ord(char.upper())) if char != " " else Qt.Key.Key_Space
+        )
+        files.handle_event("file_transcriber_progress", float(index))
+        files.handle_event("file_transcriber_new_text", f"frammento {index}")
+        app.processEvents()
+    assert field.property("text") == "budget nuovo"
+    QTest.keyClick(root, Qt.Key.Key_Return)
+    wait_until(lambda: controller.history.get_session(sid)["name"] == "budget nuovo")
+    assert not any("TypeError" in m or "ReferenceError" in m for m in messages)

@@ -73,7 +73,8 @@ class MicrophoneRecorder:
             self.root.mkdir(parents=True, exist_ok=True)
             journal_lock = self._lock_journal(self.part_path)
             try:
-                self._handle = open(self.part_path, "ab", buffering=0)
+                # The rate marker must exist before any journal byte: a crash in
+                # between would otherwise recover 48 kHz audio as 16 kHz.
                 if self.sample_rate != ProcessDefaults.SAMPLE_RATE:
                     meta = self.part_path.with_name(
                         self.part_path.name + ".format.json"
@@ -82,6 +83,7 @@ class MicrophoneRecorder:
                         json.dump({"sample_rate": self.sample_rate}, handle)
                         handle.flush()
                         os.fsync(handle.fileno())
+                self._handle = open(self.part_path, "ab", buffering=0)
             except Exception:
                 if self._handle is not None:
                     self._handle.close()

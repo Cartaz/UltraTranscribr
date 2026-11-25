@@ -16,15 +16,12 @@ Item {
         spacing: 8
         RowLayout {
             Layout.fillWidth: true
-            NeuField {
+            TitleField {
                 objectName: 'liveTitle' + card.record.id
                 Layout.fillWidth: true
-                readonly property string shownTitle: card.record.name || Theme.sourceName(card.record.source)
-                text: shownTitle
-                maximumLength: 120
+                committed: card.record.name || Theme.sourceName(card.record.source)
                 Accessible.name: 'Titolo trascrizione'
-                // Leaving the field unchanged must not pin the computed title.
-                onEditingFinished: if (text !== shownTitle) live.rename(card.record.id, text)
+                onCommit: value => live.rename(card.record.id, value)
             }
             Help {
                 text: card.record.terminal ? Theme.statusName(card.record.status) : ''

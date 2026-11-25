@@ -56,6 +56,11 @@ class BufferManager:
         self.metrics_sink = None
         self._last_metrics_at = 0.0
         self._input_closed = False
+        # put() can run inside the real-time PortAudio callback: it only sets
+        # this event, and a helper thread delivers the (rate-limited) metrics.
+        self._metrics_due = threading.Event()
+        self._metrics_stop = threading.Event()
+        self._metrics_thread: Optional[threading.Thread] = None
 
     def put(self, chunk: np.ndarray) -> None:
         arr = np.asarray(chunk, dtype=np.float32).reshape(-1)
@@ -70,7 +75,31 @@ class BufferManager:
             self._pending_samples += arr.size
             self._total_put += 1
             self._condition.notify()
-        self._notify_metrics()
+        self._schedule_metrics()
+
+    def _schedule_metrics(self) -> None:
+        if self.metrics_sink is None or self._metrics_stop.is_set():
+            return
+        self._metrics_due.set()
+        if self._metrics_thread is None:
+            with self._condition:
+                if self._metrics_thread is None:
+                    self._metrics_thread = threading.Thread(
+                        target=self._metrics_loop,
+                        name="BufferMetrics",
+                        daemon=True,
+                    )
+                    self._metrics_thread.start()
+
+    def _metrics_loop(self) -> None:
+        while not self._metrics_stop.is_set():
+            if not self._metrics_due.wait(1.0):
+                continue
+            self._metrics_due.clear()
+            delay = 0.5 - (time.monotonic() - self._last_metrics_at)
+            if delay > 0 and self._metrics_stop.wait(delay):
+                return
+            self._notify_metrics()
 
     def _write_spooled(self, arr: np.ndarray) -> None:
         self._spool.seek(0, os.SEEK_END)
@@ -225,6 +254,8 @@ class BufferManager:
         return None
 
     def close(self) -> None:
+        self._metrics_stop.set()
+        self._metrics_due.set()
         try:
             self._spool.close()
         except OSError:

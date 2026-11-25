@@ -170,14 +170,14 @@ ScrollView {
                     onClicked: files.clearText()
                 }
             }
-            NeuField {
+            TitleField {
+                objectName: 'fileTitle'
                 Layout.fillWidth: true
                 visible: files.hasSession
-                text: files.title
+                committed: files.title
                 placeholderText: 'Titolo della trascrizione'
                 Accessible.name: 'Titolo della trascrizione'
-                maximumLength: 120
-                onEditingFinished: if (text !== files.title) files.rename(text)
+                onCommit: value => files.rename(value)
             }
             Transcript {
                 Layout.fillWidth: true

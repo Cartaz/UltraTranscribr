@@ -149,3 +149,43 @@ def test_meeting_mic_without_48k_support_opens_native_rate_and_keeps_track_rate(
     retained = np.concatenate(recorded)
     assert abs(retained.size - 4800) <= 1  # still 100 ms, now at 48 kHz
     assert np.allclose(retained, 0.25)
+
+
+def test_meeting_monitor_without_48k_support_falls_back_and_resamples_track(
+    monkeypatch,
+) -> None:
+    import sounddevice as sd
+
+    import core.audio_capture as capture_module
+
+    opened = []
+
+    class _FakeInput:
+        def __init__(self, *, samplerate, **_kwargs):
+            if samplerate == 48000:
+                raise sd.PortAudioError("Invalid sample rate")
+            opened.append(samplerate)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(capture_module.sd, "InputStream", _FakeInput)
+    monkeypatch.setattr(capture_module, "query_device_sample_rate", lambda _d: 44100)
+    monkeypatch.setattr(
+        capture_module, "resolve_monitor_device", lambda name: (name, None)
+    )
+    recorded = []
+    capture = AudioCaptureThread(
+        _Buffer(),
+        Settings(),
+        "alsa_output.monitor",
+        AudioSource.SYSTEM.value,
+        sample_sink=lambda samples: recorded.append(samples.copy()),
+        recording_sample_rate=48000,
+    )
+    capture._open_stream_monitor()
+    assert opened == [44100] and capture._native_sr == 44100
+    capture._monitor_cb_wrapper(np.full((4410, 1), 0.25, np.float32), 4410, None, 0)
+    retained = np.concatenate(recorded)
+    assert abs(retained.size - 4800) <= 2
+    assert np.allclose(retained, 0.25)
