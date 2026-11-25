@@ -94,7 +94,14 @@ def run_stage(
                 "sample_rate": 16000,
                 "versions": versions,
                 "models": hashes,
-                "ASR": {"language": language, "chunk_s": 30, "overlap_s": 0, "VAD": False},
+                "ASR": {
+                    "language": language, "chunk_s": 30, "overlap_s": 0,
+                    "VAD": False, "max_new_tokens": 512,
+                    "token_limit_recovery": {
+                        "policy": "bounded_low_energy_split",
+                        "max_depth": 3, "min_window_s": 3,
+                    },
+                },
                 "alignment": ({"device": "cpu", "CTC_threshold": 0.2} if language == "en"
                               else {"device": "cpu", "method": "qwen", "language": language}),
             },
@@ -102,21 +109,30 @@ def run_stage(
     elif stage == "asr":
         from config.constants import ProcessDefaults
         from config.settings import Settings
-        from core.english_asr import EnglishASRBackend
+        from core.english_asr import EnglishASRBackend, verify_decode_coverage
         from core.file_transcriber import FileTranscriberThread
 
         ProcessDefaults.FILE_SEGMENT_LENGTH_S = 30
         ProcessDefaults.FILE_OVERLAP_DURATION_S = 0
         backend = EnglishASRBackend(models.path("qwen-asr"), Event())
-        rows, quality, chunks, requests = [], [], [], []
+        rows, quality, chunks, requests, errors = [], [], [], [], []
         original_request = backend.transcribe_audio
 
         def transcribe(audio_data, **kwargs):
             response = original_request(audio_data, **kwargs)
             with wave.open(io.BytesIO(audio_data), "rb") as stream:
                 pcm = stream.readframes(stream.getnframes())
+            attempts = response.get("decoder_attempts")
+            verify_decode_coverage(pcm, attempts)
             requests.append(
-                {"pcm_sha256": hashlib.sha256(pcm).hexdigest(), "frames": len(pcm) // 2}
+                {
+                    "pcm_sha256": hashlib.sha256(pcm).hexdigest(),
+                    "frames": len(pcm) // 2,
+                    "decoder_attempts": attempts,
+                    "recovered_from_token_limit": bool(
+                        response.get("recovered_from_token_limit")
+                    ),
+                }
             )
             return response
 
@@ -131,7 +147,12 @@ def run_stage(
                     "completed": False,
                 }
                 chunks.append(entry)
-                response = super()._request_checked_chunk(pcm16, prompt, offset_s)
+                try:
+                    response = super()._request_checked_chunk(pcm16, prompt, offset_s)
+                except RuntimeError as exc:
+                    raise RuntimeError(
+                        f"Blocco riunione {entry['start_s']:.2f}–{entry['end_s']:.2f} s: {exc}"
+                    ) from exc
                 entry["completed"] = True
                 return response
 
@@ -142,6 +163,8 @@ def run_stage(
                 quality.extend(payload)
             elif name == "file_transcriber_progress":
                 progress(int(payload))
+            elif name == "file_transcriber_error":
+                errors.append(str(payload))
 
         try:
             backend.start()
@@ -154,7 +177,10 @@ def run_stage(
             )
             worker.run()
             if worker._terminal_state != "completed":
-                raise RuntimeError("La trascrizione della riunione non è stata completata.")
+                raise RuntimeError(
+                    errors[-1] if errors
+                    else "La trascrizione della riunione non è stata completata."
+                )
             provenance = load(work / "provenance.json")
             if not chunks or not all(chunk["completed"] for chunk in chunks):
                 raise RuntimeError("La trascrizione della riunione ha perso un blocco audio.")
@@ -183,6 +209,19 @@ def run_stage(
                     "complete_audio_coverage": True,
                     "chunks": len(chunks),
                     "requests": len(requests),
+                    "recovered_requests": sum(
+                        bool(call["recovered_from_token_limit"]) for call in requests
+                    ),
+                    "token_limit_attempts": sum(
+                        attempt["status"] == "token_limit"
+                        for call in requests
+                        for attempt in call["decoder_attempts"]
+                    ),
+                    "completed_decode_windows": sum(
+                        attempt["status"] == "completed"
+                        for call in requests
+                        for attempt in call["decoder_attempts"]
+                    ),
                     "chunk_spans": chunks,
                     "request_pcm_hashes": requests,
                 },
