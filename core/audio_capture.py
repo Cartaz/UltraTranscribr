@@ -1,4 +1,5 @@
 """Thread producer unificato per monitor PipeWire/PulseAudio e microfono."""
+
 from __future__ import annotations
 
 import logging
@@ -13,7 +14,11 @@ from config.constants import ProcessDefaults
 from config.settings import AudioSource, Settings
 from core.audio_capture_mic import microphone_capture_loop
 from core.audio_capture_monitor import monitor_callback, monitor_capture_loop
-from core.audio_resampler import WHISPER_SAMPLE_RATE, query_device_sample_rate
+from core.audio_resampler import (
+    WHISPER_SAMPLE_RATE,
+    StreamingLinearResampler,
+    query_device_sample_rate,
+)
 from core.buffer_manager import BufferManager
 from core.event_bus import EventBus
 from core.microphone_recording import MicrophoneRecorder
@@ -35,8 +40,11 @@ class AudioCaptureThread(threading.Thread):
         session_id: Optional[str] = None,
         event_sink: Optional[EventSink] = None,
         sample_sink: Optional[SampleSink] = None,
+        recording_sample_rate: Optional[int] = None,
     ) -> None:
-        name = f"AudioCaptureThread-{session_id}" if session_id else "AudioCaptureThread"
+        name = (
+            f"AudioCaptureThread-{session_id}" if session_id else "AudioCaptureThread"
+        )
         super().__init__(daemon=True, name=name)
         self._buffer = buffer
         self._settings = settings
@@ -51,11 +59,13 @@ class AudioCaptureThread(threading.Thread):
         self._reconnect_delay = ProcessDefaults.RECONNECT_DELAY
         self._max_reconnect_attempts = ProcessDefaults.MAX_RECONNECT_ATTEMPTS
         self._native_sr = WHISPER_SAMPLE_RATE
+        self._monitor_sink_converter: Optional[StreamingLinearResampler] = None
         self._is_monitor = False
         self._cb_accumulator = [np.array([], dtype=np.float32)]
         self._cb_lock = threading.Lock()
         self._recording: Optional[MicrophoneRecorder] = None
         self._sample_sink = sample_sink
+        self._recording_sample_rate = recording_sample_rate
         if (
             sample_sink is None
             and self._audio_source == AudioSource.MICROPHONE.value
@@ -143,7 +153,9 @@ class AudioCaptureThread(threading.Thread):
                     "Cattura audio terminata dopo "
                     f"{self._max_reconnect_attempts} tentativi: {fatal_error}",
                 )
-            logger.info("AudioCaptureThread fermato — session=%s", self._session_id or "legacy")
+            logger.info(
+                "AudioCaptureThread fermato — session=%s", self._session_id or "legacy"
+            )
 
     def stop(self) -> None:
         """Richiede l'arresto senza chiamare PortAudio dal thread chiamante."""
@@ -151,10 +163,14 @@ class AudioCaptureThread(threading.Thread):
 
     def _determine_is_monitor(self) -> bool:
         name = self.device_name or ""
-        return self._audio_source in {
-            AudioSource.SYSTEM.value,
-            AudioSource.APPLICATION.value,
-        } or ".monitor" in name
+        return (
+            self._audio_source
+            in {
+                AudioSource.SYSTEM.value,
+                AudioSource.APPLICATION.value,
+            }
+            or ".monitor" in name
+        )
 
     def _open_stream(self) -> None:
         self._is_monitor = self._determine_is_monitor()
@@ -166,11 +182,13 @@ class AudioCaptureThread(threading.Thread):
     def _open_stream_monitor(self) -> None:
         device, pulse_source = resolve_monitor_device(self.device_name or "")
         self._cb_accumulator = [np.array([], dtype=np.float32)]
+        self._monitor_sink_converter = None
+        requested = self._recording_sample_rate or WHISPER_SAMPLE_RATE
 
-        def open_stream() -> None:
+        def open_at(rate: int) -> None:
             self._stream = sd.InputStream(
                 device=device,
-                samplerate=WHISPER_SAMPLE_RATE,
+                samplerate=rate,
                 channels=self._settings.channels,
                 dtype=self._settings.dtype,
                 blocksize=0,
@@ -179,13 +197,35 @@ class AudioCaptureThread(threading.Thread):
             )
             self._stream.start()
 
+        def open_stream() -> int:
+            try:
+                open_at(requested)
+                return requested
+            except sd.PortAudioError:
+                if not self._recording_sample_rate:
+                    raise
+                # Same rule as the microphone: capture at the device rate and
+                # resample the retained track to its declared rate.
+                native = query_device_sample_rate(device)
+                if native == requested:
+                    raise
+                self._monitor_sink_converter = StreamingLinearResampler(
+                    native, requested
+                )
+                logger.info(
+                    "Sorgente %s non supporta %d Hz: cattura a %d Hz con conversione",
+                    device,
+                    requested,
+                    native,
+                )
+                open_at(native)
+                return native
+
         if pulse_source:
             with temporary_pulse_source(pulse_source):
-                open_stream()
+                self._native_sr = open_stream()
         else:
-            open_stream()
-
-        self._native_sr = WHISPER_SAMPLE_RATE
+            self._native_sr = open_stream()
         with self._lock:
             self._error = None
 
@@ -200,19 +240,54 @@ class AudioCaptureThread(threading.Thread):
             cb_accumulator=self._cb_accumulator,
             buffer=self._buffer,
             chunk_samples=self._settings.chunk_samples,
-            sample_sink=self._sample_sink,
+            sample_sink=self._monitor_sample_sink(),
         )
 
+    def _monitor_sample_sink(self):
+        converter = self._monitor_sink_converter
+        sink = self._sample_sink
+        if converter is None or sink is None:
+            return sink
+
+        def resampled(samples: np.ndarray) -> None:
+            converted = converter.process(samples)
+            if converted.size:
+                sink(converted)
+
+        return resampled
+
     def _open_stream_microphone(self) -> None:
-        self._native_sr = query_device_sample_rate(self.device_name)
-        self._stream = sd.InputStream(
-            device=self.device_name,
-            samplerate=self._native_sr,
-            channels=self._settings.channels,
-            dtype=self._settings.dtype,
-            blocksize=0,
-            latency="low",
+        def open_at(rate: int) -> sd.InputStream:
+            return sd.InputStream(
+                device=self.device_name,
+                samplerate=rate,
+                channels=self._settings.channels,
+                dtype=self._settings.dtype,
+                blocksize=0,
+                latency="low",
+            )
+
+        self._native_sr = self._recording_sample_rate or query_device_sample_rate(
+            self.device_name
         )
+        try:
+            self._stream = open_at(self._native_sr)
+        except sd.PortAudioError:
+            if not self._recording_sample_rate:
+                raise
+            # Raw hw: devices may not offer the 48 kHz recording rate: capture
+            # at their native rate and resample the retained track instead.
+            native = query_device_sample_rate(self.device_name)
+            if native == self._native_sr:
+                raise
+            logger.info(
+                "Microfono %s non supporta %d Hz: cattura a %d Hz con conversione",
+                self.device_name,
+                self._native_sr,
+                native,
+            )
+            self._native_sr = native
+            self._stream = open_at(native)
         self._stream.start()
         with self._lock:
             self._error = None
@@ -251,4 +326,6 @@ class AudioCaptureThread(threading.Thread):
                 native_sr=self._native_sr,
                 needs_resample=self._native_sr != WHISPER_SAMPLE_RATE,
                 sample_sink=self._sample_sink,
+                preserve_native=bool(self._recording_sample_rate),
+                sink_sample_rate=self._recording_sample_rate,
             )

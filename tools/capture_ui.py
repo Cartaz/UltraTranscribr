@@ -16,6 +16,12 @@ parser.add_argument(
 )
 parser.add_argument("--output", type=Path, required=True)
 parser.add_argument("--populated", action="store_true")
+parser.add_argument("--width", type=int, default=1200)
+parser.add_argument("--height", type=int, default=800)
+parser.add_argument(
+    "--review-mode", choices=["compact", "columns", "document"], default="compact"
+)
+parser.add_argument("--speakers", type=int, default=2)
 args = parser.parse_args()
 sys.path.insert(0, str(args.source_root.resolve()))
 isolated = Path(tempfile.mkdtemp(prefix="ut-capture-"))
@@ -71,7 +77,7 @@ if args.populated:
         source="file",
         source_path="riunione.wav",
         acquisition_mode="file",
-        num_speakers=2,
+        num_speakers=args.speakers,
     )
     controller.history.set_name(meeting_id, "Riunione di prova")
     controller.history.append_text(
@@ -85,18 +91,18 @@ if args.populated:
             {
                 "start": i * 2.0,
                 "end": i * 2.0 + 1.8,
-                "speaker_id": f"SPEAKER_0{i % 2}",
+                "speaker_id": f"SPEAKER_{i % args.speakers:02d}",
                 "text": f"Segmento {i + 1}: verifica della trascrizione e della revisione.",
             }
             for i in range(150)
         ],
-        num_speakers=2,
+        num_speakers=args.speakers,
     )
     store.set_speaker_name(meeting_id, "SPEAKER_00", "Francesco")
     store.set_speaker_name(meeting_id, "SPEAKER_01", "Maria")
     store.set_status(meeting_id, "completed", terminal=True)
 window = MainWindow(service)
-window.resize(1200, 800)
+window.resize(args.width, args.height)
 window.show()
 
 
@@ -136,8 +142,12 @@ if args.populated:
         window.runtime.archive.select(history_id)
         window.runtime.meeting.select(meeting_id)
     wait(800)
+if args.frontend == "qml":
+    window._window.findChild(QObject, "reviewEditorModes").setProperty(
+        "mode", args.review_mode
+    )
 args.output.mkdir(parents=True, exist_ok=True)
-suffix = "1200x800" + (
+suffix = f"{args.width}x{args.height}" + (
     "-dpr2" if float(os.environ.get("QT_SCALE_FACTOR", "1")) == 2 else ""
 )
 try:

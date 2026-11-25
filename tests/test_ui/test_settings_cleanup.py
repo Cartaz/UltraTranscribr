@@ -1,4 +1,5 @@
 """Contracts for settings grouping, resets and window geometry."""
+
 from pathlib import Path
 
 
@@ -18,14 +19,30 @@ def test_settings_are_split_into_normal_and_advanced_panes() -> None:
     assert 'data-settings-pane="normal"' in html
     assert 'data-settings-pane="advanced"' in html
 
-    normal = _between(html, 'data-settings-pane="normal"', 'data-settings-pane="advanced"')
+    normal = _between(
+        html, 'data-settings-pane="normal"', 'data-settings-pane="advanced"'
+    )
     for field in ("model_size", "language", "audio_source", "vad_filter"):
         assert f'name="{field}"' in normal
-    for field in ("beam_size", "chunk_ms", "sink_name", "server_port", "gpu_layers", "compute_type"):
+    for field in (
+        "beam_size",
+        "chunk_ms",
+        "sink_name",
+        "server_port",
+        "gpu_layers",
+        "compute_type",
+    ):
         assert f'name="{field}"' not in normal
 
     advanced = html.split('data-settings-pane="advanced"', 1)[1]
-    for field in ("beam_size", "chunk_ms", "sink_name", "server_port", "gpu_layers", "compute_type"):
+    for field in (
+        "beam_size",
+        "chunk_ms",
+        "sink_name",
+        "server_port",
+        "gpu_layers",
+        "compute_type",
+    ):
         assert f'name="{field}"' in advanced
 
 
@@ -63,10 +80,12 @@ def test_model_selection_is_immediate_and_file_queue_has_no_turbo_fallback() -> 
     application = (ROOT / "core" / "application_service.py").read_text(encoding="utf-8")
 
     assert '$("s-model").onchange = settingsSelectModel' in settings_script
-    assert 'JSON.stringify({model_size: model})' in settings_script
-    assert '"modelChoices": ModelSize.choices()' in application
+    assert "JSON.stringify({model_size: model})" in settings_script
+    assert '"modelChoices": ["large-v3"]' in application
     assert 'settings.model_size || "large-v3-turbo"' not in file_script
-    assert 'const selectedModel = String(settings.model_size || "").trim()' in file_script
+    assert (
+        'const selectedModel = String(settings.model_size || "").trim()' in file_script
+    )
 
 
 def test_window_geometry_is_persisted_automatically_with_debounce() -> None:
@@ -83,7 +102,10 @@ def test_window_geometry_is_persisted_automatically_with_debounce() -> None:
     assert "rect.y()" in main_window
     assert "UIConstraints.MIN_WINDOW_WIDTH" in main_window
     assert "UIConstraints.MIN_WINDOW_HEIGHT" in main_window
-    assert "def persist_window_geometry(self, x: int, y: int, width: int, height: int)" in application
+    assert (
+        "def persist_window_geometry(self, x: int, y: int, width: int, height: int)"
+        in application
+    )
     for key in ("window_x", "window_y", "window_width", "window_height"):
         assert f'"{key}"' in application
 
@@ -91,7 +113,9 @@ def test_window_geometry_is_persisted_automatically_with_debounce() -> None:
 def test_settings_cleanup_assets_preserve_dark_neumorphism_and_are_checked() -> None:
     html = (WEB / "index.html").read_text(encoding="utf-8")
     css = (WEB / "settings.css").read_text(encoding="utf-8").lower()
-    workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text(
+        encoding="utf-8"
+    )
 
     assert 'href="settings.css"' in html
     assert 'src="settings_cleanup.js"' in html

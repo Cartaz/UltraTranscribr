@@ -4,77 +4,43 @@ import QtQuick.Layouts
 
 ColumnLayout {
     id: page
-    spacing: 18
-    RowLayout {
-        id: inputRow
+    spacing: 12
+    Card {
+        objectName: 'liveInputCard'
         Layout.fillWidth: true
-        Layout.alignment: Qt.AlignTop
-        spacing: 18
-        Card {
-            objectName: 'liveInputCard'
+        Layout.preferredHeight: Math.max(224, implicitHeight)
+        CardHead {
+            title: 'Sorgente audio'
+            NeuButton {
+                text: 'Aggiorna sorgenti'
+                compact: true
+                onClicked: sources.refresh()
+            }
+        }
+        RowLayout {
             Layout.fillWidth: true
-            Layout.preferredWidth: (inputRow.width - 18) * .54
-            Layout.preferredHeight: sources.source === 'microphone' ? 525 : 445.59375
-            CardHead {
-                kicker: 'INGRESSO'
-                title: 'Sorgente audio'
-                NeuButton {
-                    text: 'Aggiorna sorgenti'
-                    onClicked: sources.refresh()
-                }
+            NeuButton {
+                text: 'Audio di sistema'
+                selected: sources.source === 'system'
+                onClicked: sources.setSource('system')
             }
+            NeuButton {
+                text: 'Applicazione'
+                selected: sources.source === 'application'
+                onClicked: sources.setSource('application')
+            }
+            NeuButton {
+                text: 'Microfono'
+                selected: sources.source === 'microphone'
+                onClicked: sources.setSource('microphone')
+            }
+        }
+        RowLayout {
+            Layout.fillWidth: true
             ColumnLayout {
                 Layout.fillWidth: true
-                spacing: 7
                 FieldLabel {
-                    text: 'Sorgente'
-                }
-                Item {
-                    Layout.fillWidth: true
-                    implicitHeight: 45
-                    InsetSurface {
-                        anchors.fill: parent
-                    }
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.margins: 5
-                        spacing: 7
-                        uniformCellSizes: true
-                        NeuButton {
-                            Layout.fillWidth: true
-                            implicitHeight: 35
-                            padding: 9
-                            flat: true
-                            text: 'Audio di sistema'
-                            selected: sources.source === 'system'
-                            onClicked: sources.setSource('system')
-                        }
-                        NeuButton {
-                            Layout.fillWidth: true
-                            implicitHeight: 35
-                            padding: 9
-                            flat: true
-                            text: 'Applicazione'
-                            selected: sources.source === 'application'
-                            onClicked: sources.setSource('application')
-                        }
-                        NeuButton {
-                            Layout.fillWidth: true
-                            implicitHeight: 35
-                            padding: 9
-                            flat: true
-                            text: 'Microfono'
-                            selected: sources.source === 'microphone'
-                            onClicked: sources.setSource('microphone')
-                        }
-                    }
-                }
-            }
-            ColumnLayout {
-                Layout.fillWidth: true
-                spacing: 7
-                FieldLabel {
-                    text: sources.source === 'application' ? 'Stream applicazione' : 'Dispositivo'
+                    text: sources.source === 'application' ? 'Applicazione' : 'Dispositivo'
                 }
                 NeuCombo {
                     objectName: 'liveDeviceCombo'
@@ -82,146 +48,55 @@ ColumnLayout {
                     model: sources.source === 'application' ? playbackStreams : audioDevices
                     selectedValue: sources.selected
                     onChosen: value => sources.select(value)
-                }
-                Help {
-                    Layout.fillWidth: true
-                    text: sources.source === 'application' ? 'Seleziona uno stream PipeWire/PulseAudio. Verrà isolato e ripristinato automaticamente al termine.' : "Automatico usa il monitor dell'uscita audio predefinita o il microfono predefinito."
+                    ToolTip.visible: hovered
+                    ToolTip.text: 'Automatico usa il dispositivo predefinito. Gli stream applicazione vengono isolati per la durata della registrazione.'
                 }
             }
             ColumnLayout {
-                Layout.fillWidth: true
-                FieldLabel { text: 'Lingua della nuova sessione' }
-                RowLayout {
+                Layout.preferredWidth: 230
+                FieldLabel {
+                    text: 'Lingua'
+                }
+                LanguageCombo {
+                    objectName: 'liveLanguageField'
                     Layout.fillWidth: true
-                    NeuField {
-                        objectName: 'liveLanguageField'
-                        Layout.fillWidth: true
-                        Layout.minimumWidth: 45
-                        text: live.language
-                        placeholderText: 'it, en, auto'
-                        onTextEdited: live.editLanguage(text)
-                    }
-                    NeuButton {
-                        text: 'Predefinita'
-                        compact: true
-                        onClicked: live.resetLanguage()
-                    }
+                    selectedValue: live.language
+                    onChosen: value => live.editLanguage(value)
                 }
             }
-            Item {
-                Layout.fillWidth: true
-                implicitHeight: 47
-                InsetSurface {
-                    anchors.fill: parent
-                }
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.margins: 11
-                    spacing: 9
-                    Rectangle {
-                        implicitWidth: 9
-                        implicitHeight: 9
-                        radius: 4.5
-                        color: sources.health.status === 'playing' || sources.health.status === 'available' ? Theme.accent : Theme.muted
-                    }
-                    Column {
-                        Layout.fillWidth: true
-                        spacing: 2
-                        Text {
-                            textFormat: Text.PlainText
-                            text: sources.health.label || 'Verifica sorgente'
-                            color: Theme.primary
-                            font.family: Theme.font
-                            font.pixelSize: 12
-                            font.bold: true
-                        }
-                        Help {
-                            width: parent.width
-                            text: sources.health.detail || ''
-                            maximumLineCount: 1
-                            elide: Text.ElideRight
-                        }
-                    }
-                }
+            NeuButton {
+                text: '↺'
+                compact: true
+                onClicked: live.resetLanguage()
+                ToolTip.text: 'Usa la lingua predefinita'
+                ToolTip.visible: hovered
             }
+        }
+        RowLayout {
+            Layout.fillWidth: true
             NeuToggle {
                 id: recordToggle
                 objectName: 'liveRecordToggle'
+                visible: sources.source === 'microphone'
+                Layout.preferredWidth: 245
                 checked: live.recordAudio
                 onToggled: live.editRecording(checked)
-                Layout.fillWidth: true
-                visible: sources.source === 'microphone'
                 text: 'Salva registrazione'
-                description: 'Solo Microfono. Default OFF; la copia FLAC viene associata alla sessione Live.'
+            }
+            Help {
+                Layout.fillWidth: true
+                visible: sources.health.available === false || ['error', 'unavailable', 'disconnected', 'missing'].indexOf(sources.health.status) >= 0
+                text: sources.health.detail || sources.health.label || ''
+                color: Theme.accent
+            }
+            Item {
+                Layout.fillWidth: true
             }
             NeuButton {
-                text: 'Aggiungi sessione'
+                text: 'Inizia registrazione'
                 selected: true
                 enabled: !settings.dirty && !settings.saving && !files.busy && !meeting.busy && (sources.source !== 'application' || !!sources.selected)
                 onClicked: live.start(recordToggle.checked)
-            }
-        }
-        Card {
-            objectName: 'liveStatusCard'
-            Layout.fillWidth: true
-            Layout.preferredWidth: (inputRow.width - 18) * .46
-            Layout.preferredHeight: sources.source === 'microphone' ? 525 : 445.59375
-            CardHead {
-                kicker: 'SESSIONE'
-                title: 'Stato live'
-                Rectangle {
-                    implicitWidth: 9
-                    implicitHeight: 9
-                    Layout.alignment: Qt.AlignTop
-                    Layout.topMargin: 4
-                    radius: 4.5
-                    color: live.activeCount ? Theme.accent : Theme.muted
-                }
-            }
-            Item {
-                Layout.fillWidth: true
-                implicitHeight: 91
-                InsetSurface {
-                    anchors.fill: parent
-                }
-                GridLayout {
-                    anchors.fill: parent
-                    anchors.margins: 13
-                    anchors.topMargin: 3
-                    anchors.bottomMargin: 3
-                    columns: 2
-                    columnSpacing: 16
-                    rowSpacing: 0
-                    uniformCellWidths: true
-                    Metric {
-                        Layout.fillWidth: true
-                        label: 'Stato'
-                        value: live.activeCount ? 'In esecuzione' : 'Idle'
-                    }
-                    Metric {
-                        Layout.fillWidth: true
-                        label: 'Sorgente'
-                        value: Theme.sourceName(sources.source)
-                    }
-                    Metric {
-                        Layout.fillWidth: true
-                        label: 'Ingresso'
-                        value: sources.selected || 'Automatico'
-                    }
-                    Metric {
-                        Layout.fillWidth: true
-                        label: 'Prossimo modello'
-                        value: Theme.modelName(settings.applied.model_size)
-                    }
-                    Metric {
-                        Layout.fillWidth: true
-                        label: 'Prossima lingua'
-                        value: live.language
-                    }
-                }
-            }
-            Item {
-                Layout.fillHeight: true
             }
         }
     }
@@ -230,8 +105,7 @@ ColumnLayout {
         Layout.fillWidth: true
         Layout.fillHeight: true
         CardHead {
-            kicker: 'SESSIONI LIVE'
-            title: 'Trascrizioni indipendenti'
+            title: 'Trascrizioni in corso'
             NeuButton {
                 text: 'Completa tutte'
                 compact: true
@@ -245,54 +119,29 @@ ColumnLayout {
                 onClicked: live.stopAll(false)
             }
         }
-        Help {
-            text: live.activeCount + ' sessioni attive'
-            Layout.topMargin: -13
-            Layout.bottomMargin: 13
-        }
         Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             EmptyState {
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.margins: 4
+                anchors.fill: parent
                 visible: liveSessions.count === 0
                 centered: true
-                text: 'Nessuna sessione Live. Scegli una sorgente e premi “Aggiungi sessione”.'
+                text: 'Scegli una sorgente e premi “Inizia registrazione”.'
             }
-            ListView {
+            GridView {
                 id: sessions
                 anchors.fill: parent
-                anchors.margins: 4
                 visible: liveSessions.count > 0
-                model: liveGroups
-                spacing: 16
+                model: liveSessions
                 clip: true
-                reuseItems: true
-                cacheBuffer: 0
-                ScrollBar.vertical: ScrollBar {}
-                delegate: RowLayout {
-                    id: pair
-                    required property var record
-                    width: sessions.width - 10
-                    height: 335
-                    spacing: 16
-                    LiveSessionCard {
-                        Layout.preferredWidth: (pair.width - 16) / 2
-                        Layout.fillHeight: true
-                        record: pair.record.left
-                    }
-                    Item {
-                        Layout.preferredWidth: (pair.width - 16) / 2
-                        Layout.fillHeight: true
-                        LiveSessionCard {
-                            anchors.fill: parent
-                            record: pair.record.right
-                            visible: !!record.id
-                        }
-                    }
+                cellWidth: width > 1050 ? width / 2 : width
+                cellHeight: Math.max(320, height)
+                ScrollBar.vertical: ScrollBar {
+                    policy: ScrollBar.AsNeeded
+                }
+                delegate: LiveSessionCard {
+                    width: sessions.cellWidth - 12
+                    height: sessions.cellHeight - 8
                 }
             }
         }

@@ -38,7 +38,11 @@ class LiveAdapter(Adapter):
 
     @Property(str, notify=changed)
     def language(self):
-        return self._default_language if self._language_override is None else self._language_override
+        return (
+            self._default_language
+            if self._language_override is None
+            else self._language_override
+        )
 
     @Slot(str)
     def editLanguage(self, value):
@@ -56,7 +60,11 @@ class LiveAdapter(Adapter):
 
     @Property(bool, notify=changed)
     def recordAudio(self):
-        return self._default_recording if self._recording_override is None else self._recording_override
+        return (
+            self._default_recording
+            if self._recording_override is None
+            else self._recording_override
+        )
 
     @Slot(bool)
     def editRecording(self, value):
@@ -97,6 +105,20 @@ class LiveAdapter(Adapter):
     def remove(self, session_id):
         self.attempt(lambda: self.application.remove_live(session_id))
 
+    @Slot(str, str)
+    def rename(self, session_id, name):
+        def receive(value):
+            for index, row in enumerate(self.sessions.rows()):
+                if row.get("id") == session_id:
+                    self.sessions.update(index, name=value)
+                    self.changed.emit()
+
+        self.background(
+            "qml-live-rename",
+            lambda: self.application.rename_history_session(session_id, name),
+            receive,
+        )
+
     @Slot(str)
     def copy(self, session_id):
         for row in self.sessions.rows():
@@ -126,7 +148,12 @@ class LiveAdapter(Adapter):
                         ).strip(),
                     )
                 elif name == "live_session_buffer_level":
-                    self.sessions.update(i, buffer_level=value.get("level", 0))
+                    self.sessions.update(
+                        i,
+                        buffer_level=value.get("level", 0),
+                        pending_audio_s=value.get("pending_audio_s", 0),
+                        spooled_chunks=value.get("spooled_chunks", 0),
+                    )
                 elif name == "live_session_queue_wait":
                     self.sessions.update(
                         i,

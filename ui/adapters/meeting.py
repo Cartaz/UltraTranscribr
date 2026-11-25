@@ -1,12 +1,19 @@
 """Meeting input drafts and review, retaining edits through delegate recycling."""
 
+import threading
 import time
 import uuid
 
 from PySide6.QtCore import Property, QTimer, QUrl, Signal, Slot
 
+from core.meeting_alignment import speaker_label
+from core.meeting_engine import ALIGNMENT_LANGUAGES
+from core.review_timeline import ReviewTimeline
 from ui.adapters.base import Adapter, choose_files, export_session
 from ui.models import RecordModel
+
+# First entry of Theme.meetingLanguages, used when the global default is unsupported.
+MEETING_FALLBACK_LANGUAGE = "it"
 
 _QUALITY_NOTES = {
     "word_text_mismatch": "Tempi incompleti: il testo completo è stato conservato",
@@ -30,6 +37,8 @@ class MeetingAdapter(Adapter):
     dirtyChanged = Signal(bool)
     englishChanged = Signal()
     pipelineChanged = Signal()
+    playbackChanged = Signal()
+    reviewOpened = Signal()
 
     def __init__(self, application, feedback, parent=None):
         super().__init__(application, feedback, parent)
@@ -48,12 +57,21 @@ class MeetingAdapter(Adapter):
             self,
         )
         self.drafts = RecordModel(parent=self)
-        self.pipelines = RecordModel([
-            {"value": "qwen_meeting", "name": "Qwen · Riunioni"},
-        ], self)
+        self.pipelines = RecordModel(
+            [
+                {"value": "qwen_meeting", "name": "Qwen · Riunioni"},
+            ],
+            self,
+        )
         self._pipeline = "qwen_meeting"
-        self._english_status = {"ready": False, "busy": False, "progress": 0,
-                                "dependencies_ready": False, "error": "", "download_gb": 0}
+        self._english_status = {
+            "ready": False,
+            "busy": False,
+            "progress": 0,
+            "dependencies_ready": False,
+            "error": "",
+            "download_gb": 0,
+        }
         self.queue = RecordModel(parent=self)
         self.segments = RecordModel(parent=self)
         self.speakers = RecordModel(parent=self)
@@ -63,7 +81,18 @@ class MeetingAdapter(Adapter):
         self._review_summary = {}
         self._edits = {}
         self._audio = ""
+        self._timeline = ReviewTimeline()
+        self._active_indices = []
         self._writing = False
+        self._write_queue = []
+        self._write_done = threading.Event()
+        self._write_done.set()
+        # Edits carried by the write in flight, and whether it failed; read by
+        # close() so shutdown neither replays nor loses those edits.
+        self._inflight_edits = {}
+        self._inflight_state = {"failed": False}
+        self._save_error = ""
+        self._pending_selection = None
         self._generation = 0
         self._runtime_clock = time.monotonic()
         self._model_progress = {}
@@ -78,6 +107,10 @@ class MeetingAdapter(Adapter):
         self._draft_timer.setSingleShot(True)
         self._draft_timer.setInterval(250)
         self._draft_timer.timeout.connect(self._checkpoint_drafts)
+        self._autosave = QTimer(self)
+        self._autosave.setSingleShot(True)
+        self._autosave.setInterval(350)
+        self._autosave.timeout.connect(self.saveAll)
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self.changed)
@@ -87,7 +120,15 @@ class MeetingAdapter(Adapter):
 
     @Property(str, notify=changed)
     def language(self):
-        return self._default_language if self._language_override is None else self._language_override
+        value = (
+            self._default_language
+            if self._language_override is None
+            else self._language_override
+        )
+        # Meetings support fewer languages than Whisper ("auto" is not one):
+        # show and send the same supported code instead of a hidden default.
+        code = str(value or "").strip().lower().split("-")[0]
+        return code if code in ALIGNMENT_LANGUAGES else MEETING_FALLBACK_LANGUAGE
 
     @Slot(str)
     def editLanguage(self, value):
@@ -115,7 +156,12 @@ class MeetingAdapter(Adapter):
         if isinstance(value, dict):
             was_busy = bool(self._english_status.get("busy"))
             self._english_status = dict(value)
-            self.pipelines.update(0, name="Qwen · Riunioni" if value.get("ready") else "Qwen · Riunioni (prepara modelli)")
+            self.pipelines.update(
+                0,
+                name="Qwen · Riunioni"
+                if value.get("ready")
+                else "Qwen · Riunioni (prepara modelli)",
+            )
             self.englishChanged.emit()
             if was_busy != bool(value.get("busy")):
                 self.changed.emit()
@@ -123,23 +169,38 @@ class MeetingAdapter(Adapter):
     @Slot()
     def refreshEnglish(self):
         if hasattr(self.application, "english_pipeline_status"):
-            self.background("qml-english-status", self.application.english_pipeline_status,
-                            self._english_status_received)
+            self.background(
+                "qml-english-status",
+                self.application.english_pipeline_status,
+                self._english_status_received,
+            )
 
     @Slot()
     def prepareEnglish(self):
-        self._english_status = self._english_status | {"busy": True, "error": "", "progress": 0}
+        self._english_status = self._english_status | {
+            "busy": True,
+            "error": "",
+            "progress": 0,
+        }
         self.englishChanged.emit()
         self.changed.emit()
-        self.background("qml-english-models", self.application.prepare_english_models,
-                        self._english_status_received, failed=self.refreshEnglish)
+        self.background(
+            "qml-english-models",
+            self.application.prepare_english_models,
+            self._english_status_received,
+            failed=self.refreshEnglish,
+        )
 
     @Slot()
     def cancelEnglish(self):
         self._english_status = self._english_status | {"cancelling": True}
         self.englishChanged.emit()
-        self.background("qml-english-cancel", self.application.cancel_english_preparation,
-                        self._english_status_received, failed=self.refreshEnglish)
+        self.background(
+            "qml-english-cancel",
+            self.application.cancel_english_preparation,
+            self._english_status_received,
+            failed=self.refreshEnglish,
+        )
 
     @Slot(str, result=bool)
     def selectPipeline(self, value):
@@ -168,12 +229,17 @@ class MeetingAdapter(Adapter):
 
     @Property(bool, notify=changed)
     def busy(self):
-        return bool(self._english_status.get("busy")) or bool(self._runtime) and self._runtime.get("status") not in {
-            "completed",
-            "error",
-            "cancelled",
-            "interrupted",
-        }
+        return (
+            bool(self._english_status.get("busy"))
+            or bool(self._runtime)
+            and self._runtime.get("status")
+            not in {
+                "completed",
+                "error",
+                "cancelled",
+                "interrupted",
+            }
+        )
 
     @Property(bool, notify=changed)
     def dirty(self):
@@ -185,21 +251,43 @@ class MeetingAdapter(Adapter):
 
     @Property(str, notify=draftChanged)
     def draftStatus(self):
+        if self._save_error:
+            return "Errore di salvataggio · modifiche conservate, riprova"
         if self._draft_error:
-            return "Bozza non protetta: usa Salva tutto"
+            return "Errore protezione bozza · riprova il salvataggio"
         if self._draft_conflicts:
-            return "Ci sono bozze recuperate da verificare"
-        if self._draft_pending or self._draft_writing:
-            return "Protezione della bozza in corso…"
+            return "Bozze recuperate da verificare"
+        if self.dirty or self._writing or self._write_queue:
+            return "Salvataggio in corso…"
+        return "Tutte le modifiche salvate"
+
+    @Property(bool, notify=reviewChanged)
+    def canUndo(self):
         return (
-            "Bozza protetta · conferma con Salva tutto"
-            if self.dirty
-            else "Tutte le modifiche salvate"
+            bool((self._review.get("meeting") or {}).get("review_undo")) or self.dirty
         )
+
+    @Property(bool, notify=reviewChanged)
+    def canRedo(self):
+        return bool((self._review.get("meeting") or {}).get("review_redo"))
 
     @Property(str, notify=draftChanged)
     def recoveredDraftsText(self):
         return self._recovered_drafts_text
+
+    @Property("QVariantList", notify=playbackChanged)
+    def activeIndices(self):
+        return self._active_indices
+
+    @Slot(float)
+    def setPlaybackPosition(self, seconds):
+        active = self._timeline.at(seconds)
+        if active != self._active_indices:
+            for index in set(self._active_indices) | set(active):
+                if index < self.segments.count:
+                    self.segments.update(index, active=index in active)
+            self._active_indices = active
+            self.playbackChanged.emit()
 
     @Property(str, notify=changed)
     def audioUrl(self):
@@ -260,8 +348,16 @@ class MeetingAdapter(Adapter):
         if values:
             self.drafts.replace(
                 [
-                    {"path": p, "language": language, "num_speakers": speakers,
-                     **({"pipeline": self._pipeline} if self._pipeline != "whisper" else {})}
+                    {
+                        "path": p,
+                        "language": language,
+                        "num_speakers": speakers,
+                        **(
+                            {"pipeline": self._pipeline}
+                            if self._pipeline != "whisper"
+                            else {}
+                        ),
+                    }
                     for p in values
                 ]
             )
@@ -278,7 +374,11 @@ class MeetingAdapter(Adapter):
     def editDraft(self, index, key, value):
         if key not in {"language", "num_speakers", "pipeline"}:
             return False
-        if key == "pipeline" and value == "qwen_meeting" and not self._english_status.get("ready"):
+        if (
+            key == "pipeline"
+            and value == "qwen_meeting"
+            and not self._english_status.get("ready")
+        ):
             self.feedback.show("Prepara i modelli delle riunioni prima di avviare")
             return False
         if key == "pipeline" and value not in {"qwen_meeting"}:
@@ -300,7 +400,9 @@ class MeetingAdapter(Adapter):
         if not self.start_guard():
             return
         if self.dirty or self._writing:
-            self.feedback.show("Salva le correzioni prima di avviare una riunione")
+            self.feedback.show(
+                "Salvataggio in corso: attendi prima di avviare una riunione"
+            )
             return
         if from_file:
             rows = self.attempt(
@@ -314,7 +416,11 @@ class MeetingAdapter(Adapter):
                     self.sources.rows(),
                     language=language or None,
                     num_speakers=speakers,
-                    **({"pipeline": self._pipeline} if self._pipeline != "whisper" else {}),
+                    **(
+                        {"pipeline": self._pipeline}
+                        if self._pipeline != "whisper"
+                        else {}
+                    ),
                 )
             )
             if value:
@@ -355,9 +461,8 @@ class MeetingAdapter(Adapter):
     @Slot(str)
     def select(self, session_id):
         if self.dirty or self._writing:
-            self.feedback.show(
-                "Salva tutto o annulla le correzioni prima di cambiare riunione"
-            )
+            self._pending_selection = session_id
+            self.saveAll()
             return
         if (self._draft_pending or self._draft_writing) and not self._flush_drafts():
             return
@@ -373,12 +478,15 @@ class MeetingAdapter(Adapter):
             if generation == self._generation and not self.dirty and not self._writing:
                 self._audio = value[1]
                 self._load_review(value[0] or {}, recover_drafts=True)
+                self.reviewOpened.emit()
 
         self.background("qml-meeting-select", read, receive)
 
     def _load_review(self, value, preserve_edits=False, recover_drafts=False):
         same = value.get("id") == self._review.get("id")
         edits = dict(self._edits) if same and preserve_edits else {}
+        if not same:
+            self._save_error = ""
         self._review = value
         metadata = value.get("meeting") or {}
         if recover_drafts:
@@ -411,6 +519,7 @@ class MeetingAdapter(Adapter):
         self._review_summary = {
             "id": value.get("id", ""),
             "started_at": value.get("started_at", ""),
+            "name": value.get("display_name", value.get("name", "")),
             "text": value.get("text", ""),
             "full_text": value.get("full_text", ""),
             "meeting": {"num_speakers": metadata.get("num_speakers", 0)},
@@ -428,7 +537,9 @@ class MeetingAdapter(Adapter):
         rows = []
         review_keys = metadata.get("review_keys") or []
         for index, item in enumerate(metadata.get("review_segments") or []):
-            speaker = item.get("speaker_override") or item.get("speaker_id") or "UNKNOWN"
+            speaker = (
+                item.get("speaker_override") or item.get("speaker_id") or "UNKNOWN"
+            )
             if speaker.startswith("SPEAKER_"):
                 ids.add(speaker)
             reasons = list(item.get("alignment_warnings") or [])
@@ -437,17 +548,22 @@ class MeetingAdapter(Adapter):
             )
             quality_note = "; ".join(
                 dict.fromkeys(
-                    _QUALITY_NOTES[reason] for reason in reasons if reason in _QUALITY_NOTES
+                    _QUALITY_NOTES[reason]
+                    for reason in reasons
+                    if reason in _QUALITY_NOTES
                 )
             )
             rows.append(
                 {
                     **item,
                     "index": index,
-                    "review_key": review_keys[index] if index < len(review_keys) else "",
+                    "active": index in self._active_indices if same else False,
+                    "review_key": review_keys[index]
+                    if index < len(review_keys)
+                    else "",
                     "speaker": speaker,
-                    "speaker_name": names.get(
-                        speaker, "Speaker ?" if speaker == "UNKNOWN" else speaker
+                    "speaker_name": speaker_label(
+                        None if speaker == "UNKNOWN" else speaker, names
                     ),
                     "speaker_choice": item.get("speaker_override") or "",
                     "overlap": len(item.get("overlap_speakers") or []) > 1,
@@ -456,11 +572,13 @@ class MeetingAdapter(Adapter):
                     "quality_note": quality_note,
                 }
             )
-        options = [{"value": s, "label": names.get(s, s)} for s in sorted(ids)]
+        self._timeline = ReviewTimeline(rows)
+        if not same:
+            self._active_indices = []
+            self.playbackChanged.emit()
+        options = [{"value": s, "label": speaker_label(s, names)} for s in sorted(ids)]
         for row in rows:
-            automatic = names.get(
-                row.get("speaker_id"), row.get("speaker_id") or "Speaker ?"
-            )
+            automatic = speaker_label(row.get("speaker_id"), names)
             row["speaker_options"] = [
                 {"value": "", "label": f"Automatico · {automatic}"},
                 *options,
@@ -475,12 +593,18 @@ class MeetingAdapter(Adapter):
         )
         self.speakers.replace(
             [
-                {"id": s, "name": names.get(s, s), "draft_name": previous.get(s)}
+                {
+                    "id": s,
+                    "name": speaker_label(s, names),
+                    "draft_name": previous.get(s),
+                }
                 for s in sorted(ids)
             ]
         )
         self.tracks.replace((metadata.get("acquisition") or {}).get("sources") or [])
         self._edits = edits
+        if recover_drafts and edits:
+            self._autosave.start()
         self.reviewChanged.emit()
         self.draftChanged.emit()
         self.dirtyChanged.emit(self.dirty)
@@ -497,6 +621,7 @@ class MeetingAdapter(Adapter):
             self._edits[index] = text
         self.segments.update(index, draft_text=text, dirty=index in self._edits)
         self._queue_draft_checkpoint()
+        self._autosave.start()
         self.dirtyChanged.emit(self.dirty)
         self.changed.emit()
 
@@ -504,8 +629,10 @@ class MeetingAdapter(Adapter):
     def editSpeakerName(self, index, name):
         self.speakers.update(index, draft_name=name)
 
-    def _write(self, operation, edits=None, speaker=None):
+    def _write(self, operation, edits=None, speaker=None, history=False):
         if self._writing:
+            self._write_queue.append((operation, edits, speaker, history))
+            self.draftChanged.emit()
             return
         session_id = self._review["id"]
         self._writing = True
@@ -514,6 +641,33 @@ class MeetingAdapter(Adapter):
         def finish():
             self._writing = False
             self.changed.emit()
+            self.draftChanged.emit()
+            if self._write_queue:
+                pending = self._write_queue.pop(0)
+                self._write(*pending)
+            elif self.dirty and not self._save_error:
+                self._autosave.start()
+            elif self._pending_selection and not self._save_error:
+                selected = self._pending_selection
+                self._pending_selection = None
+                self.select(selected)
+
+        def failed():
+            if history:
+                # A rejected undo/redo saved nothing: the feedback message
+                # explains it, and pending saves/switches must continue.
+                finish()
+                return
+            self._save_error = "write failed"
+            # Undo/redo queued behind this write would revert an older change
+            # while the user's latest text is still unsaved: drop them.
+            self._write_queue = [item for item in self._write_queue if not item[3]]
+            if self._pending_selection:
+                self._pending_selection = None
+                self.feedback.show(
+                    "Cambio riunione annullato: salvataggio non riuscito, modifiche conservate"
+                )
+            finish()
 
         def receive(value):
             try:
@@ -524,14 +678,33 @@ class MeetingAdapter(Adapter):
                         self._edits.pop(index, None)
                 if speaker:
                     for index, row in enumerate(self.speakers.rows()):
-                        if row["id"] == speaker[0] and row.get("draft_name") == speaker[1]:
+                        if (
+                            row["id"] == speaker[0]
+                            and row.get("draft_name") == speaker[1]
+                        ):
                             self.speakers.update(index, draft_name=None)
+                self._save_error = ""
                 self._load_review(value, preserve_edits=True)
                 self._queue_draft_checkpoint()
             finally:
                 finish()
 
-        self.background("qml-meeting-write", operation, receive, finish)
+        done = threading.Event()
+        self._write_done = done
+        state = {"failed": False}
+        self._inflight_edits = dict(edits or {})
+        self._inflight_state = state
+
+        def persist():
+            try:
+                return operation()
+            except Exception:
+                state["failed"] = True
+                raise
+            finally:
+                done.set()
+
+        self.background("qml-meeting-write", persist, receive, failed)
 
     @Slot(int)
     def saveSegment(self, index):
@@ -544,12 +717,39 @@ class MeetingAdapter(Adapter):
 
     @Slot()
     def saveAll(self):
+        self._autosave.stop()
+        if self._writing:
+            return
         if self._edits:
             edits = dict(self._edits)
             session_id = self._review["id"]
             self._write(
                 lambda: self.application.edit_meeting_segments(session_id, edits), edits
             )
+
+    @Slot()
+    def undo(self):
+        self._undo_redo(False)
+
+    @Slot()
+    def redo(self):
+        self._undo_redo(True)
+
+    def _undo_redo(self, redo):
+        self._autosave.stop()
+        session_id = self._review.get("id")
+        if not session_id:
+            return
+        # Queue after pending persistence, including text still inside debounce.
+        edits = dict(self._edits)
+        if edits:
+            self._write(
+                lambda: self.application.edit_meeting_segments(session_id, edits), edits
+            )
+        self._write(
+            lambda: self.application.undo_meeting_review(session_id, redo=redo),
+            history=True,
+        )
 
     @Slot()
     def discardEdits(self):
@@ -595,7 +795,10 @@ class MeetingAdapter(Adapter):
 
         def failed():
             self._draft_writing = False
-            if self._review.get("id") == session_id and revision == self._draft_revision:
+            if (
+                self._review.get("id") == session_id
+                and revision == self._draft_revision
+            ):
                 self._draft_pending = True
                 self._draft_error = "checkpoint failed"
             elif self._draft_pending:
@@ -639,10 +842,45 @@ class MeetingAdapter(Adapter):
     def close(self):
         if self._closed:
             return
+        self._autosave.stop()
         self._draft_timer.stop()
         self._timer.stop()
         if self._review.get("id") and (self._draft_pending or self._draft_writing):
             self._flush_drafts()
+        pending = list(self._write_queue)
+        self._write_queue.clear()
+        inflight = dict(self._inflight_edits) if self._writing else {}
+        inflight_state = self._inflight_state
+        save_failed = bool(self._save_error)
+        # Text already carried by a queued or in-flight write must not be
+        # written again after a queued undo, which would cancel the undo.
+        carried = [inflight] + [dict(item[1] or {}) for item in pending]
+        closing_edits = {
+            index: text
+            for index, text in self._edits.items()
+            if not any(edits.get(index) == text for edits in carried)
+        }
+        session_id = self._review.get("id")
+        if pending or closing_edits or inflight:
+            previous = self._write_done
+
+            def finish_pending():
+                if not previous.wait(30):
+                    raise RuntimeError("Salvataggio precedente ancora in corso")
+                operations = pending
+                edits = dict(closing_edits)
+                if save_failed or inflight_state["failed"]:
+                    # Same rule as failed(): never undo past unsaved text.
+                    operations = [item for item in pending if not item[3]]
+                    edits = {**inflight, **edits}
+                for operation, *_details in operations:
+                    operation()
+                if edits and session_id:
+                    self.application.edit_meeting_segments(session_id, edits)
+
+            self.application.submit(
+                "meeting-close-writes", finish_pending, "history_error"
+            )
         super().close()
 
     @Slot(int, str)
@@ -667,7 +905,7 @@ class MeetingAdapter(Adapter):
     @Slot(int)
     def rerun(self, speakers):
         if self.dirty or self._writing:
-            self.feedback.show("Salva le correzioni prima del ricalcolo")
+            self.feedback.show("Salvataggio in corso: attendi prima del ricalcolo")
             return
         self.attempt(
             lambda: self.application.rerun_meeting_diarization(
@@ -678,7 +916,7 @@ class MeetingAdapter(Adapter):
     @Slot(str)
     def export(self, fmt):
         if self.dirty or self._writing:
-            self.feedback.show("Salva tutto prima di esportare")
+            self.feedback.show("Salvataggio in corso: attendi prima di esportare")
             return
         self.attempt(lambda: export_session(self, self._review["id"], fmt))
 

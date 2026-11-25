@@ -55,3 +55,34 @@ class TestBufferManager:
         assert buf.total_put == 2
         buf.get_nowait()
         assert buf.total_get == 1
+
+
+def test_put_never_calls_metrics_sink_on_the_producer_thread() -> None:
+    import threading
+    import time
+
+    from core.buffer_manager import BufferManager
+
+    buffer = BufferManager()
+    callers = []
+    delivered = threading.Event()
+
+    def sink(value):
+        callers.append(threading.current_thread())
+        delivered.set()
+
+    buffer.metrics_sink = sink
+    try:
+        buffer.put(np.zeros(160, dtype=np.float32))
+        assert delivered.wait(2)
+        assert threading.current_thread() not in callers
+        # Backlog growth is still reported while nobody consumes the buffer.
+        delivered.clear()
+        time.sleep(0.55)
+        buffer.put(np.zeros(160, dtype=np.float32))
+        assert delivered.wait(2)
+    finally:
+        buffer.close()
+    thread = buffer._metrics_thread
+    thread.join(2)
+    assert not thread.is_alive()

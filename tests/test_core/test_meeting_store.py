@@ -33,8 +33,24 @@ def _meeting(tmp_path: Path) -> tuple[TranscriptHistoryStore, MeetingStore, str]
             {"start": 1.0, "end": 2.0, "speaker_id": "SPEAKER_01"},
         ],
         review_segments=[
-            {"start": 0.0, "end": 1.0, "raw_text": "Testo raw", "text": "Testo raw", "speaker_id": "SPEAKER_00", "uncertain": False, "speaker_candidates": ["SPEAKER_00"]},
-            {"start": 1.0, "end": 2.0, "raw_text": "originale", "text": "originale", "speaker_id": "SPEAKER_01", "uncertain": False, "speaker_candidates": ["SPEAKER_01"]},
+            {
+                "start": 0.0,
+                "end": 1.0,
+                "raw_text": "Testo raw",
+                "text": "Testo raw",
+                "speaker_id": "SPEAKER_00",
+                "uncertain": False,
+                "speaker_candidates": ["SPEAKER_00"],
+            },
+            {
+                "start": 1.0,
+                "end": 2.0,
+                "raw_text": "originale",
+                "text": "originale",
+                "speaker_id": "SPEAKER_01",
+                "uncertain": False,
+                "speaker_candidates": ["SPEAKER_01"],
+            },
         ],
     )
     return history, store, session_id
@@ -68,7 +84,9 @@ def test_meeting_history_kind_and_sidecar_are_combined(tmp_path: Path) -> None:
     assert history.get_session(session_id)["segments"][0]["text"] == "Testo raw"
 
 
-def test_manual_review_edit_and_speaker_name_never_overwrite_raw(tmp_path: Path) -> None:
+def test_manual_review_edit_and_speaker_name_never_overwrite_raw(
+    tmp_path: Path,
+) -> None:
     history, store, session_id = _meeting(tmp_path)
 
     store.set_speaker_name(session_id, "SPEAKER_00", "Marco")
@@ -77,13 +95,18 @@ def test_manual_review_edit_and_speaker_name_never_overwrite_raw(tmp_path: Path)
     combined = store.get(session_id)
     assert combined is not None
     assert combined["meeting"]["speaker_names"]["SPEAKER_00"] == "Marco"
-    assert combined["meeting"]["review_segments"][0]["text"] == "Testo corretto manualmente"
+    assert (
+        combined["meeting"]["review_segments"][0]["text"]
+        == "Testo corretto manualmente"
+    )
     assert combined["meeting"]["review_segments"][0]["raw_text"] == "Testo raw"
     assert history.get_session(session_id)["text"] == "Testo raw originale"
     assert history.get_session(session_id)["segments"][0]["text"] == "Testo raw"
 
 
-def test_batch_review_edits_use_one_atomic_sidecar_write(tmp_path: Path, monkeypatch) -> None:
+def test_batch_review_edits_use_one_atomic_sidecar_write(
+    tmp_path: Path, monkeypatch
+) -> None:
     history, store, session_id = _meeting(tmp_path)
     writes = []
     original_write = store._write
@@ -108,7 +131,9 @@ def test_batch_review_edits_use_one_atomic_sidecar_write(tmp_path: Path, monkeyp
     assert history.get_session(session_id)["text"] == "Testo raw originale"
 
 
-def test_batch_review_edits_validate_every_index_before_writing(tmp_path: Path, monkeypatch) -> None:
+def test_batch_review_edits_validate_every_index_before_writing(
+    tmp_path: Path, monkeypatch
+) -> None:
     _, store, session_id = _meeting(tmp_path)
     before = store.get(session_id)["meeting"]["review_segments"]
     writes = []
@@ -120,22 +145,24 @@ def test_batch_review_edits_validate_every_index_before_writing(tmp_path: Path, 
 
     monkeypatch.setattr(store, "_write", counted_write)
     with pytest.raises(IndexError, match="segmento riunione non valido"):
-        store.edit_review_segments(session_id, {0: "Non deve passare", 99: "Indice invalido"})
+        store.edit_review_segments(
+            session_id, {0: "Non deve passare", 99: "Indice invalido"}
+        )
 
     after = store.get(session_id)["meeting"]["review_segments"]
     assert writes == []
     assert after == before
 
 
-def test_diarization_update_can_change_count_without_clearing_speaker_names(tmp_path: Path) -> None:
+def test_diarization_update_can_change_count_without_clearing_speaker_names(
+    tmp_path: Path,
+) -> None:
     _, store, session_id = _meeting(tmp_path)
     store.set_speaker_name(session_id, "SPEAKER_00", "Marco")
 
     store.set_diarization(
         session_id,
-        diarization_segments=[
-            {"start": 0.0, "end": 2.0, "speaker_id": "SPEAKER_00"}
-        ],
+        diarization_segments=[{"start": 0.0, "end": 2.0, "speaker_id": "SPEAKER_00"}],
         review_segments=[
             {
                 "start": 0.0,
@@ -163,15 +190,17 @@ def test_meeting_exports_use_manual_names_and_reviewed_text(tmp_path: Path) -> N
 
     txt = store.export(session_id, tmp_path / "meeting", "txt")
     srt = store.export(session_id, tmp_path / "meeting-subtitles", "srt")
-    vtt = store.export(session_id, tmp_path / "meeting-captions", "vtt")
+    with pytest.raises(ValueError, match="non supportato"):
+        store.export(session_id, tmp_path / "meeting-captions", "vtt")
 
     assert "Marco: Correzione" in txt.read_text(encoding="utf-8")
     assert "Speaker 2: originale" in txt.read_text(encoding="utf-8")
     assert "Marco: Correzione" in srt.read_text(encoding="utf-8")
-    assert vtt.read_text(encoding="utf-8").startswith("WEBVTT")
 
 
-def test_meeting_txt_export_merges_consecutive_effective_speaker_blocks(tmp_path: Path) -> None:
+def test_meeting_txt_export_merges_consecutive_effective_speaker_blocks(
+    tmp_path: Path,
+) -> None:
     _, store, session_id = _meeting(tmp_path)
     store.set_diarization(
         session_id,
@@ -182,19 +211,26 @@ def test_meeting_txt_export_merges_consecutive_effective_speaker_blocks(tmp_path
         review_segments=[
             {"start": 0.0, "end": 1.0, "text": "ciao", "speaker_id": "SPEAKER_00"},
             {"start": 1.0, "end": 2.0, "text": "come", "speaker_id": "SPEAKER_00"},
-            {"start": 2.0, "end": 3.0, "text": "stai?", "speaker_id": "SPEAKER_01", "speaker_override": "SPEAKER_00"},
+            {
+                "start": 2.0,
+                "end": 3.0,
+                "text": "stai?",
+                "speaker_id": "SPEAKER_01",
+                "speaker_override": "SPEAKER_00",
+            },
             {"start": 3.0, "end": 4.0, "text": "bene", "speaker_id": "SPEAKER_01"},
             {"start": 4.0, "end": 5.0, "text": "tu?", "speaker_id": "SPEAKER_01"},
         ],
     )
 
     assert store.rendered_text(session_id) == (
-        "Speaker 1: ciao come stai?\n\n"
-        "Speaker 2: bene tu?"
+        "Speaker 1: ciao come stai?\n\nSpeaker 2: bene tu?"
     )
 
 
-def test_meeting_txt_export_keeps_unknown_speaker_blocks_separate(tmp_path: Path) -> None:
+def test_meeting_txt_export_keeps_unknown_speaker_blocks_separate(
+    tmp_path: Path,
+) -> None:
     _, store, session_id = _meeting(tmp_path)
     store.set_diarization(
         session_id,
@@ -206,33 +242,40 @@ def test_meeting_txt_export_keeps_unknown_speaker_blocks_separate(tmp_path: Path
     )
 
     assert store.rendered_text(session_id) == (
-        "Speaker ?: forse uno\n\n"
-        "Speaker ?: forse due"
+        "Speaker ?: forse uno\n\nSpeaker ?: forse due"
     )
 
 
-def test_recording_path_returns_only_existing_canonical_audio(tmp_path: Path, monkeypatch) -> None:
+def test_recording_path_returns_only_existing_canonical_audio(
+    tmp_path: Path, monkeypatch
+) -> None:
     _, store, session_id = _meeting(tmp_path)
     recordings = tmp_path / "recordings"
     recordings.mkdir()
     monkeypatch.setattr(AppMeta, "RECORDINGS_DIR", recordings)
     audio = recordings / f"{session_id}.flac"
     audio.write_bytes(b"fake")
-    store.set_recording(session_id, {"path": str(audio), "duration_s": 1.0, "size_bytes": 4})
+    store.set_recording(
+        session_id, {"path": str(audio), "duration_s": 1.0, "size_bytes": 4}
+    )
 
     assert store.recording_path(session_id) == audio.resolve()
     audio.unlink()
     assert store.recording_path(session_id) is None
 
 
-def test_meeting_audio_can_be_deleted_without_history(tmp_path: Path, monkeypatch) -> None:
+def test_meeting_audio_can_be_deleted_without_history(
+    tmp_path: Path, monkeypatch
+) -> None:
     history, store, session_id = _meeting(tmp_path)
     recordings = tmp_path / "recordings"
     recordings.mkdir()
     audio = recordings / f"{session_id}.flac"
     audio.write_bytes(b"fake")
     monkeypatch.setattr(AppMeta, "RECORDINGS_DIR", recordings)
-    store.set_recording(session_id, {"path": str(audio), "duration_s": 1.0, "size_bytes": 4})
+    store.set_recording(
+        session_id, {"path": str(audio), "duration_s": 1.0, "size_bytes": 4}
+    )
 
     assert store.delete_audio(session_id) is True
     assert not audio.exists()
@@ -241,7 +284,9 @@ def test_meeting_audio_can_be_deleted_without_history(tmp_path: Path, monkeypatc
     assert store.recording_path(session_id) is None
 
 
-def test_delete_audio_removes_canonical_and_all_source_tracks(tmp_path: Path, monkeypatch) -> None:
+def test_delete_audio_removes_canonical_and_all_source_tracks(
+    tmp_path: Path, monkeypatch
+) -> None:
     history, store, session_id = _meeting(tmp_path)
     recordings = tmp_path / "recordings"
     recordings.mkdir()
@@ -251,12 +296,22 @@ def test_delete_audio_removes_canonical_and_all_source_tracks(tmp_path: Path, mo
     remote = recordings / f"{session_id}-source-2.flac"
     for path in (canonical, local, remote):
         path.write_bytes(b"fake")
-    store.set_recording(session_id, {"path": str(canonical), "duration_s": 1.0, "size_bytes": 4})
+    store.set_recording(
+        session_id, {"path": str(canonical), "duration_s": 1.0, "size_bytes": 4}
+    )
     store.set_source_recordings(
         session_id,
         [
-            {"id": "source-1", "source": "microphone", "recording": {"path": str(local)}},
-            {"id": "source-2", "source": "application", "recording": {"path": str(remote)}},
+            {
+                "id": "source-1",
+                "source": "microphone",
+                "recording": {"path": str(local)},
+            },
+            {
+                "id": "source-2",
+                "source": "application",
+                "recording": {"path": str(remote)},
+            },
         ],
     )
 
@@ -267,11 +322,15 @@ def test_delete_audio_removes_canonical_and_all_source_tracks(tmp_path: Path, mo
     combined = store.get(session_id)
     assert combined is not None
     assert combined["meeting"]["recording"] == {}
-    assert all(not item["recording"] for item in combined["meeting"]["acquisition"]["sources"])
+    assert all(
+        not item["recording"] for item in combined["meeting"]["acquisition"]["sources"]
+    )
     assert history.get_session(session_id)["text"] == "Testo raw originale"
 
 
-def test_audio_retention_never_deletes_path_outside_recordings(tmp_path: Path, monkeypatch) -> None:
+def test_audio_retention_never_deletes_path_outside_recordings(
+    tmp_path: Path, monkeypatch
+) -> None:
     _, store, session_id = _meeting(tmp_path)
     recordings = tmp_path / "recordings"
     recordings.mkdir()

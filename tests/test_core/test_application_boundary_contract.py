@@ -3,6 +3,7 @@
 The presentation/composition layers may call ApplicationService workflows, but must
 not use it as a service locator to reach AppController or owned core managers.
 """
+
 from pathlib import Path
 
 
@@ -103,7 +104,7 @@ def test_webchannel_bridge_contains_transport_not_application_policy() -> None:
     assert "AudioSource.APPLICATION.value" in application
     assert "stream_id = int(selection)" in application
     assert "record_audio and source == AudioSource.MICROPHONE.value" in application
-    assert "ModelSize.choices()" in application
+    assert '"modelChoices": ["large-v3"]' in application
 
 
 def test_application_service_remains_the_only_presentation_workflow_boundary() -> None:

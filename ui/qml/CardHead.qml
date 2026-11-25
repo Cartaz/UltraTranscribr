@@ -7,7 +7,7 @@ RowLayout {
     property string title: ''
     default property alias actions: toolbar.data
     Layout.fillWidth: true
-    implicitHeight: Math.max(39, titleColumn.implicitHeight)
+    implicitHeight: Math.max(30, titleColumn.implicitHeight)
     spacing: 14
     Column {
         id: titleColumn

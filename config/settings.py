@@ -1,4 +1,5 @@
 """Impostazioni persistenti e validate per UltraTranscribr."""
+
 from __future__ import annotations
 
 import json
@@ -76,22 +77,38 @@ class DictationInsertionMode(str, Enum):
 _LANG_RE = re.compile(r"^(?:auto|[a-z]{2,3}(?:-[a-z0-9]{2,8})?)$")
 
 
-
 INTEGER_FIELDS = {
-    "sample_rate", "channels", "chunk_ms", "beam_size", "vad_min_silence_ms",
-    "buffer_warn_threshold", "history_retention_days", "meeting_audio_retention_days",
-    "gpu_layers", "server_port", "backend_instances", "window_width", "window_height",
+    "sample_rate",
+    "channels",
+    "chunk_ms",
+    "beam_size",
+    "vad_min_silence_ms",
+    "buffer_warn_threshold",
+    "history_retention_days",
+    "meeting_audio_retention_days",
+    "gpu_layers",
+    "server_port",
+    "backend_instances",
+    "window_width",
+    "window_height",
 }
 BOOLEAN_FIELDS = {"vad_filter", "live_microphone_recording", "preload_model"}
-SUPPORTED_LANGUAGES = frozenset("en zh de es ru ko fr ja pt tr pl ca nl ar sv it id hi fi vi he uk el ms cs ro da hu ta no th ur hr bg lt la mi ml cy sk te fa lv bn sr az sl kn et mk br eu is hy ne mn bs kk sq sw gl mr pa si km sn yo so af oc ka be tg sd gu am yi lo uz fo ht ps tk nn mt sa lb my bo tl mg as tt haw ln ha ba jw su yue auto".split())
+SUPPORTED_LANGUAGES = frozenset(
+    "en zh de es ru ko fr ja pt tr pl ca nl ar sv it id hi fi vi he uk el ms cs ro da hu ta no th ur hr bg lt la mi ml cy sk te fa lv bn sr az sl kn et mk br eu is hy ne mn bs kk sq sw gl mr pa si km sn yo so af oc ka be tg sd gu am yi lo uz fo ht ps tk nn mt sa lb my bo tl mg as tt haw ln ha ba jw su yue auto".split()
+)
 
 
 def normalize_language(value: str) -> str:
     if not isinstance(value, str):
         raise ValueError("Lingua non valida: usa it, en oppure auto")
     normalized = value.strip().lower()
-    if not _LANG_RE.fullmatch(normalized) or normalized.split("-")[0] not in SUPPORTED_LANGUAGES:
-        raise ValueError("Lingua non valida: usa it, en oppure auto (o un codice supportato)")
+    if (
+        not _LANG_RE.fullmatch(normalized)
+        or normalized.split("-")[0] not in SUPPORTED_LANGUAGES
+    ):
+        raise ValueError(
+            "Lingua non valida: usa it, en oppure auto (o un codice supportato)"
+        )
     return normalized.split("-")[0]
 
 
@@ -144,29 +161,45 @@ class Settings:
                 continue
             if not isinstance(value, str):
                 raise ValueError(f"{key} deve essere testo")
-            object.__setattr__(self, key, value.strip() or (None if key == "sink_name" else ""))
+            object.__setattr__(
+                self, key, value.strip() or (None if key == "sink_name" else "")
+            )
         errors: list[str] = []
-        fixed = {"sample_rate": ProcessDefaults.SAMPLE_RATE, "device": "sycl",
-                 "dtype": "float32", "gpu_layers": SYCLDefaults.GPU_LAYERS,
-                 "compute_type": ProcessDefaults.COMPUTE_TYPE}
+        fixed = {
+            "sample_rate": ProcessDefaults.SAMPLE_RATE,
+            "device": "sycl",
+            "dtype": "float32",
+            "gpu_layers": SYCLDefaults.GPU_LAYERS,
+            "compute_type": ProcessDefaults.COMPUTE_TYPE,
+        }
         for key, expected in fixed.items():
             if getattr(self, key) != expected:
                 errors.append(f"{key} fisso per il motore disponibile: {expected}")
         limits = {
-            "channels": (1, 2), "chunk_ms": (100, 10000), "beam_size": (1, 64),
-            "vad_min_silence_ms": (0, 10000), "buffer_warn_threshold": (1, None),
-            "history_retention_days": (0, 3650), "meeting_audio_retention_days": (0, 3650),
-            "server_port": (1, 65535), "backend_instances": (1, 4),
+            "channels": (1, 2),
+            "chunk_ms": (100, 10000),
+            "beam_size": (1, 64),
+            "vad_min_silence_ms": (0, 10000),
+            "buffer_warn_threshold": (1, None),
+            "history_retention_days": (0, 3650),
+            "meeting_audio_retention_days": (0, 3650),
+            "server_port": (1, 65535),
+            "backend_instances": (1, 4),
             "window_width": (UIConstraints.MIN_WINDOW_WIDTH, None),
             "window_height": (UIConstraints.MIN_WINDOW_HEIGHT, None),
         }
         for key, (low, high) in limits.items():
             value = getattr(self, key)
             if value < low or high is not None and value > high:
-                errors.append(f"{key} fuori intervallo ({low}–{high if high is not None else 'massimo libero'})")
-        choices = {"model_size": ModelSize.choices(), "audio_source": AudioSource.choices(),
-                   "dictation_activation_mode": DictationActivationMode.choices(),
-                   "dictation_insertion_mode": DictationInsertionMode.choices()}
+                errors.append(
+                    f"{key} fuori intervallo ({low}–{high if high is not None else 'massimo libero'})"
+                )
+        choices = {
+            "model_size": ModelSize.choices(),
+            "audio_source": AudioSource.choices(),
+            "dictation_activation_mode": DictationActivationMode.choices(),
+            "dictation_insertion_mode": DictationInsertionMode.choices(),
+        }
         for key, allowed in choices.items():
             if getattr(self, key) not in allowed:
                 errors.append(f"{key} non valido: {getattr(self, key)}")
@@ -198,7 +231,9 @@ class Settings:
     def save(self) -> None:
         AppMeta.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         data = asdict(self)
-        fd, tmp_name = tempfile.mkstemp(prefix="settings.", suffix=".tmp", dir=AppMeta.CONFIG_DIR)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix="settings.", suffix=".tmp", dir=AppMeta.CONFIG_DIR
+        )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False, allow_nan=False)
@@ -237,7 +272,7 @@ class Settings:
             selected_model = str(
                 filtered.get("model_size", ProcessDefaults.MODEL_SIZE) or ""
             )
-            if selected_model not in ModelSize.choices():
+            if selected_model != ModelSize.LARGE_V3.value:
                 filtered["model_size"] = ProcessDefaults.MODEL_SIZE
                 logger.info(
                     "Modello legacy/non gestito '%s': migrazione a %s",
@@ -258,12 +293,17 @@ class Settings:
                     filtered[coordinate_name] = parsed
                 except (TypeError, ValueError, OverflowError):
                     filtered[coordinate_name] = None
-                    logger.info("Coordinata finestra %s non valida: ripristino automatico", coordinate_name)
+                    logger.info(
+                        "Coordinata finestra %s non valida: ripristino automatico",
+                        coordinate_name,
+                    )
 
             old_width = filtered.get("window_width", UIConstraints.WINDOW_WIDTH)
             old_height = filtered.get("window_height", UIConstraints.WINDOW_HEIGHT)
-            for key, value, minimum in (("window_width", old_width, UIConstraints.MIN_WINDOW_WIDTH),
-                                        ("window_height", old_height, UIConstraints.MIN_WINDOW_HEIGHT)):
+            for key, value, minimum in (
+                ("window_width", old_width, UIConstraints.MIN_WINDOW_WIDTH),
+                ("window_height", old_height, UIConstraints.MIN_WINDOW_HEIGHT),
+            ):
                 try:
                     parsed = int(value)
                     if isinstance(value, bool) or float(value) != parsed:
@@ -271,10 +311,14 @@ class Settings:
                     filtered[key] = max(parsed, minimum)
                 except (ValueError, TypeError, OverflowError):
                     filtered[key] = getattr(cls(), key)
-            if filtered["window_width"] != old_width or filtered["window_height"] != old_height:
+            if (
+                filtered["window_width"] != old_width
+                or filtered["window_height"] != old_height
+            ):
                 logger.info(
                     "Dimensioni finestra migrate al minimo supportato: %dx%d",
-                    filtered["window_width"], filtered["window_height"],
+                    filtered["window_width"],
+                    filtered["window_height"],
                 )
 
             try:
@@ -289,8 +333,16 @@ class Settings:
                         repaired[key] = getattr(cls(**{key: value}), key)
                     except (TypeError, ValueError):
                         repaired[key] = getattr(defaults, key)
-                        logger.warning("Impostazione %s non valida: ripristinato solo questo campo", key)
-                if repaired.get("server_port", defaults.server_port) + repaired.get("backend_instances", 1) - 1 > 65535:
+                        logger.warning(
+                            "Impostazione %s non valida: ripristinato solo questo campo",
+                            key,
+                        )
+                if (
+                    repaired.get("server_port", defaults.server_port)
+                    + repaired.get("backend_instances", 1)
+                    - 1
+                    > 65535
+                ):
                     repaired["backend_instances"] = 1
                 return cls(**repaired)
         except (OSError, json.JSONDecodeError, TypeError, KeyError, ValueError) as exc:

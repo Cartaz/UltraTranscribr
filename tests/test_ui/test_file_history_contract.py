@@ -1,4 +1,5 @@
 """Contracts for the domain-oriented File/History presentation module."""
+
 from pathlib import Path
 
 
@@ -10,7 +11,9 @@ def test_file_history_module_exists_registers_and_is_checked() -> None:
     source = (WEB / "file_history.js").read_text(encoding="utf-8")
     html = (WEB / "index.html").read_text(encoding="utf-8")
     settings = (WEB / "settings_cleanup.js").read_text(encoding="utf-8")
-    workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text(
+        encoding="utf-8"
+    )
     assert "UltraUI.register(fileHistoryModule)" in source
     assert 'src="file_history.js"' in html
     assert 'href="file_history.css"' in html
@@ -27,7 +30,6 @@ def test_file_history_module_exposes_batch_search_exports_and_postprocess() -> N
         "file_drop_received",
         "searchHistory",
         'fileHistoryExport("srt")',
-        'fileHistoryExport("vtt")',
         "generatePostprocess",
         "renameHistorySession",
         "fileHistoryRenderHistory",
@@ -68,8 +70,8 @@ def test_history_and_recovery_are_not_implemented_in_frontend_root() -> None:
     assert 'name === "history_changed"' in source
     assert 'name === "recovery_audio_saved"' in source
     assert 'name === "meeting_completed"' in source
-    assert "UltraUI.notify(\"historySession\", session)" in source
-    assert "UltraUI.notify(\"historyClear\")" in source
+    assert 'UltraUI.notify("historySession", session)' in source
+    assert 'UltraUI.notify("historyClear")' in source
     assert "refreshHistory()" not in meeting
     assert "historyIsVisible()" not in meeting
 

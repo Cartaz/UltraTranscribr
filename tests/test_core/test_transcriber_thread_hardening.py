@@ -1,4 +1,5 @@
 """Dedicated retry, drain and recovery coverage for TranscriberThread."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -51,11 +52,15 @@ def test_live_request_persists_recovery_after_three_failures(monkeypatch) -> Non
 
     audio = np.full(32000, 0.1, dtype=np.float32)
     try:
-        with pytest.raises(RuntimeError, match="dopo 3 tentativi"):
+        worker._current_segment = [audio]
+
+        def fail_loop():
             worker._transcribe_with_retry(audio)
+
+        monkeypatch.setattr(worker, "_loop", fail_loop)
+        worker.run()
         assert backend.transcribe_audio.call_count == 3
-        persist.assert_called_once()
-        np.testing.assert_array_equal(persist.call_args.args[0], audio)
+        persist.assert_called_once_with()
     finally:
         buffer.close()
 
@@ -107,3 +112,73 @@ def test_recovery_filename_sanitizes_session_id() -> None:
         TranscriberThread._safe_session_component("../session: one/../../two")
         == "sessiononetwo"
     )
+
+
+def _recovery_files(cache_dir):
+    return sorted(path.name for path in cache_dir.glob("recovery-live*"))
+
+
+def test_stop_after_transcribed_audio_does_not_save_overlap_only_recovery(
+    tmp_path, monkeypatch
+) -> None:
+    from config.constants import AppMeta
+
+    monkeypatch.setattr(AppMeta, "CACHE_DIR", tmp_path)
+    events = []
+    worker, buffer = _worker(event_sink=lambda event, payload: events.append(event))
+    worker._overlap_buffer = np.full(32000, 0.1, dtype=np.float32)
+    try:
+        worker.stop()
+        worker.run()
+    finally:
+        buffer.close()
+
+    assert _recovery_files(tmp_path) == []
+    assert "recovery_audio_saved" not in events
+
+
+def test_stop_with_untranscribed_audio_keeps_overlap_as_context(
+    tmp_path, monkeypatch
+) -> None:
+    import wave
+
+    from config.constants import AppMeta
+
+    monkeypatch.setattr(AppMeta, "CACHE_DIR", tmp_path)
+    worker, buffer = _worker()
+    worker._overlap_buffer = np.full(320, 0.1, dtype=np.float32)
+    worker._current_segment = [np.full(1600, 0.1, dtype=np.float32)]
+    try:
+        worker.stop()
+        worker.run()
+    finally:
+        buffer.close()
+
+    files = list(tmp_path.glob("recovery-live*.wav"))
+    assert len(files) == 1
+    with wave.open(str(files[0])) as saved:
+        assert saved.getnframes() == 1920
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_failed_recovery_write_removes_partial_temporary(tmp_path, monkeypatch) -> None:
+    import os
+
+    from config.constants import AppMeta
+
+    monkeypatch.setattr(AppMeta, "CACHE_DIR", tmp_path)
+    events = []
+    worker, buffer = _worker(event_sink=lambda event, payload: events.append(event))
+    worker._current_segment = [np.full(1600, 0.1, dtype=np.float32)]
+
+    def disk_full(*_args, **_kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(os, "fsync", disk_full)
+    try:
+        worker._persist_recovery_audio()
+    finally:
+        buffer.close()
+
+    assert list(tmp_path.iterdir()) == []
+    assert "transcriber_error" in events

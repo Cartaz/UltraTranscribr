@@ -7,11 +7,16 @@ La configurazione di riferimento è CachyOS/Arch Linux con GPU Intel e due runti
 - `whisper.cpp` compilato con **GGML SYCL / Level Zero** per Whisper;
 - **PyTorch XPU** per diarizzazione pyannote e separazione vocale Demucs.
 
+La revisione offre **Lista compatta**, **Due colonne** e **Documento continuo**,
+con autosalvataggio, Undo/Redo persistenti e sincronizzazione con l'audio.
+Le nuove Riunioni conservano l'originale per l'ascolto separato dal derivato per i modelli.
+Dettagli e limiti verificati: [rapporto UX](docs/UX_IMPLEMENTATION_2026-10-29.md).
+
 ## Funzioni principali
 
 - Live da microfono, audio di sistema o singolo stream/applicazione.
 - Dettatura globale su KDE/Wayland tramite XDG Desktop Portal.
-- Trascrizione File singola o batch con timestamp ed export `.txt`, `.srt`, `.vtt`.
+- Trascrizione File singola o batch con timestamp ed export `.txt`, `.srt`.
 - Modalità Musica con isolamento vocale Demucs/HTDemucs su Intel XPU.
 - Riunioni realtime multi-sorgente oppure da registrazione audio/video esistente.
 - Batch Riunioni sequenziale per elaborare più registrazioni senza inferenze GPU concorrenti, con lingua e numero interlocutori configurabili per ogni file.
@@ -123,8 +128,6 @@ Il frontend QML usa Qt Multimedia: il sistema deve fornire `libpulse.so.0`, oltr
 La UI gestisce:
 
 - Large v3 — `large-v3` (**predefinito**)
-- Large v3 Turbo — `large-v3-turbo`
-- Medium — `medium`
 
 I modelli sono mantenuti nella cache XDG di UltraTranscribr e possono essere gestiti dalla UI.
 
@@ -140,7 +143,7 @@ microfono / sistema / applicazioni        file audio/video
               +---------- FLAC mono 16 kHz ------+
                                  |
                                  v
-                    Whisper large-v3 / SYCL
+                    Qwen ASR + allineatori locali
                  segmenti + timestamp parole
                                  |
                                  v
@@ -176,7 +179,7 @@ La timeline Community-1 regolare viene conservata separatamente e viene usata so
 
 Ogni intervento della review dispone inoltre di una scelta speaker manuale. L'override è persistito separatamente da `speaker_id`, quindi non cancella l'assegnazione automatica ed è possibile tornare a **Automatico**. Lo stesso meccanismo permette di risolvere manualmente i segmenti `Speaker ?`.
 
-L'export TXT usa lo speaker effettivo dopo eventuali override e unisce i frammenti consecutivi attribuiti allo stesso interlocutore in un unico blocco leggibile. I segmenti senza speaker certo restano separati. Gli export SRT/VTT mantengono invece i segmenti temporali originali per non creare sottotitoli eccessivamente lunghi.
+L'export TXT usa lo speaker effettivo dopo eventuali override e unisce i frammenti consecutivi attribuiti allo stesso interlocutore in un unico blocco leggibile. I segmenti senza speaker certo restano separati. Gli export SRT mantengono invece i segmenti temporali originali per non creare sottotitoli eccessivamente lunghi.
 
 Le riunioni create prima dell'introduzione dei timestamp parola-per-parola continuano a funzionare con l'allineamento segment-level storico. Un semplice ricalcolo della diarizzazione non può inventare word timestamps che non erano stati salvati, ma la correzione manuale dello speaker resta disponibile.
 

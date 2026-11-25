@@ -1,4 +1,5 @@
 """Buffer audio thread-safe con spill su disco per limitare la RAM."""
+
 from __future__ import annotations
 
 import logging
@@ -27,8 +28,12 @@ class BufferManager:
     preservando rigorosamente l'ordine FIFO.
     """
 
-    def __init__(self, warn_threshold: int = 20, level_window_seconds: float = 5.0,
-                 max_memory_chunks: int = ProcessDefaults.BUFFER_MAX_MEMORY_CHUNKS) -> None:
+    def __init__(
+        self,
+        warn_threshold: int = 20,
+        level_window_seconds: float = 5.0,
+        max_memory_chunks: int = ProcessDefaults.BUFFER_MAX_MEMORY_CHUNKS,
+    ) -> None:
         if warn_threshold <= 0:
             raise ValueError("warn_threshold deve essere > 0")
         if max_memory_chunks <= 0:
@@ -37,15 +42,25 @@ class BufferManager:
         self._max_memory_chunks = int(max_memory_chunks)
         self._condition = threading.Condition(threading.RLock())
         self._memory: deque[np.ndarray] = deque()
-        self._spool = tempfile.TemporaryFile(prefix="ultratranscribr_buffer_", suffix=".bin")
+        self._spool = tempfile.TemporaryFile(
+            prefix="ultratranscribr_buffer_", suffix=".bin"
+        )
         self._spool_read_pos = 0
         self._spooled_count = 0
         self._spool_active = False
+        self._pending_samples = 0
         self._total_put = 0
         self._total_get = 0
         self._start_time = time.monotonic()
         self._window = float(level_window_seconds)
+        self.metrics_sink = None
+        self._last_metrics_at = 0.0
         self._input_closed = False
+        # put() can run inside the real-time PortAudio callback: it only sets
+        # this event, and a helper thread delivers the (rate-limited) metrics.
+        self._metrics_due = threading.Event()
+        self._metrics_stop = threading.Event()
+        self._metrics_thread: Optional[threading.Thread] = None
 
     def put(self, chunk: np.ndarray) -> None:
         arr = np.asarray(chunk, dtype=np.float32).reshape(-1)
@@ -57,8 +72,34 @@ class BufferManager:
                 self._spool_active = True
             else:
                 self._memory.append(arr.copy())
+            self._pending_samples += arr.size
             self._total_put += 1
             self._condition.notify()
+        self._schedule_metrics()
+
+    def _schedule_metrics(self) -> None:
+        if self.metrics_sink is None or self._metrics_stop.is_set():
+            return
+        self._metrics_due.set()
+        if self._metrics_thread is None:
+            with self._condition:
+                if self._metrics_thread is None:
+                    self._metrics_thread = threading.Thread(
+                        target=self._metrics_loop,
+                        name="BufferMetrics",
+                        daemon=True,
+                    )
+                    self._metrics_thread.start()
+
+    def _metrics_loop(self) -> None:
+        while not self._metrics_stop.is_set():
+            if not self._metrics_due.wait(1.0):
+                continue
+            self._metrics_due.clear()
+            delay = 0.5 - (time.monotonic() - self._last_metrics_at)
+            if delay > 0 and self._metrics_stop.wait(delay):
+                return
+            self._notify_metrics()
 
     def _write_spooled(self, arr: np.ndarray) -> None:
         self._spool.seek(0, os.SEEK_END)
@@ -102,8 +143,29 @@ class BufferManager:
                 chunk = self._memory.popleft()
             else:
                 chunk = self._read_spooled()
+            self._pending_samples -= chunk.size
             self._total_get += 1
-            return chunk
+        self._notify_metrics()
+        return chunk
+
+    def _notify_metrics(self) -> None:
+        sink = self.metrics_sink
+        if sink is None:
+            return
+        with self._condition:
+            now = time.monotonic()
+            if now - self._last_metrics_at < 0.5:
+                return
+            self._last_metrics_at = now
+            value = {
+                "level": int((self.qsize / self._warn_threshold) * 100),
+                "pending_audio_s": self.pending_seconds,
+                "spooled_chunks": self._spooled_count,
+            }
+        try:
+            sink(value)
+        except Exception:
+            logger.exception("Invio diagnostica buffer fallito")
 
     def get_nowait(self) -> np.ndarray:
         with self._condition:
@@ -113,8 +175,10 @@ class BufferManager:
                 chunk = self._memory.popleft()
             else:
                 chunk = self._read_spooled()
+            self._pending_samples -= chunk.size
             self._total_get += 1
-            return chunk
+        self._notify_metrics()
+        return chunk
 
     @property
     def qsize(self) -> int:
@@ -132,6 +196,16 @@ class BufferManager:
     @property
     def buffer_level(self) -> int:
         return int((self.qsize / self._warn_threshold) * 100)
+
+    @property
+    def pending_seconds(self) -> float:
+        with self._condition:
+            return self._pending_samples / ProcessDefaults.SAMPLE_RATE
+
+    @property
+    def spooled_chunks(self) -> int:
+        with self._condition:
+            return self._spooled_count
 
     @property
     def total_put(self) -> int:
@@ -162,6 +236,7 @@ class BufferManager:
         with self._condition:
             count = len(self._memory) + self._spooled_count
             self._memory.clear()
+            self._pending_samples = 0
             self._spool.seek(0)
             self._spool.truncate(0)
             self._spool_read_pos = 0
@@ -179,6 +254,8 @@ class BufferManager:
         return None
 
     def close(self) -> None:
+        self._metrics_stop.set()
+        self._metrics_due.set()
         try:
             self._spool.close()
         except OSError:

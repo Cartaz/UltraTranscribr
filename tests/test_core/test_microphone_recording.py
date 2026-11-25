@@ -82,3 +82,32 @@ def test_invalid_recording_session_id_cannot_escape_root(tmp_path: Path) -> None
         assert "session id" in str(exc)
     else:
         raise AssertionError("path traversal id must be rejected")
+
+
+def test_silent_48k_track_leaves_no_format_sidecar(tmp_path) -> None:
+    recorder = MicrophoneRecorder("silent-source", root=tmp_path, sample_rate=48000)
+    recorder.start()
+    assert recorder.finalize() is None
+    # The hidden journal lock is a deliberate stable inode; nothing else stays.
+    assert [p.name for p in tmp_path.iterdir() if not p.name.endswith(".lock")] == []
+
+
+def test_rate_marker_is_written_before_the_journal_exists(tmp_path, monkeypatch) -> None:
+    import builtins
+
+    recorder = MicrophoneRecorder("crash-window", root=tmp_path, sample_rate=48000)
+    real_open = builtins.open
+    seen = []
+
+    def tracking_open(path, mode="r", *args, **kwargs):
+        if str(path).endswith(".pcm.part"):
+            seen.append(recorder.part_path.with_name(
+                recorder.part_path.name + ".format.json"
+            ).is_file())
+        return real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", tracking_open)
+    recorder.start()
+    monkeypatch.setattr(builtins, "open", real_open)
+    recorder.abandon()
+    assert seen == [True]

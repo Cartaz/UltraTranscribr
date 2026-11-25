@@ -68,6 +68,7 @@ class Adapter(QObject):
     def background(self, name, operation, receive, failed=None):
         if self._closed:
             return
+
         def error(message):
             self.feedback.show(message)
             if failed:
@@ -99,7 +100,7 @@ def choose_files():
 
 
 def export_session(adapter, session_id, fmt, profile="raw"):
-    if fmt not in {"txt", "srt", "vtt"}:
+    if fmt not in {"txt", "srt"}:
         raise ValueError("formato export non supportato")
     target, _ = QFileDialog.getSaveFileName(
         None,
@@ -115,3 +116,16 @@ def export_session(adapter, session_id, fmt, profile="raw"):
             ),
             lambda _: adapter.feedback.show(f"Esportato: {target}"),
         )
+
+
+def renamed_title(application, session_id, name):
+    """Rename a history session (when ``name`` is given) and return its shown title.
+
+    Clearing a custom name restores the computed title, so callers must not
+    reuse the previous display value.
+    """
+    cleaned = ""
+    if name is not None:
+        cleaned = application.rename_history_session(session_id, name)
+    session = application.get_history_session(session_id) or {}
+    return session.get("display_name") or cleaned

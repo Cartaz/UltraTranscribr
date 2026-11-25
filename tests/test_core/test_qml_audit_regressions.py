@@ -18,3 +18,18 @@ def test_preload_uses_inventory_model_field(installed,preload,expected):
     assert service.submit.called == expected
     if expected:
         service.submit.assert_called_once_with('preload-model',start,'backend_preload_error')
+
+
+def test_installed_legacy_models_stay_listed_so_they_can_be_deleted():
+    service = ApplicationService.__new__(ApplicationService)
+    service.controller = SimpleNamespace(
+        list_models=lambda: [
+            {"model": "large-v3", "installed": False},
+            {"model": "large-v3-turbo", "installed": True},
+            {"model": "medium", "installed": False},
+        ]
+    )
+    assert [row["model"] for row in service.list_models()] == [
+        "large-v3",
+        "large-v3-turbo",
+    ]

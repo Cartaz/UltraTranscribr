@@ -224,11 +224,13 @@ class MainWindow(QObject):
     def _confirm_discard_unsaved_meeting_review(self):
         if not self._meeting_review_dirty:
             return True
+        if self.runtime.meeting._flush_drafts():
+            return True
         return (
             QMessageBox.warning(
                 None,
                 "Modifiche non salvate",
-                "Ci sono correzioni della riunione non ancora salvate. Usa “Salva tutto” per conservarle.\n\nUscire comunque senza salvarle?",
+                "Non è stato possibile proteggere le ultime correzioni. Verifica lo spazio su disco e riprova il salvataggio.\n\nUscire comunque senza salvarle?",
                 QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel,
             )
