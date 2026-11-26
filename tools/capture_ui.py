@@ -193,10 +193,7 @@ try:
             json.dumps(geom, indent=2)
         )
 finally:
-    window._prepare_shutdown()
-    window.close()
-    if hasattr(window, "dispose"):
-        window.dispose()
+    window.dispose()
     service.close()
     controller.shutdown()
     fixture_clock.stop()

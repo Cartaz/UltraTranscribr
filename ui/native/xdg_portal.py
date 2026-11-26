@@ -25,6 +25,9 @@ _DBUS_SERVICE = "org.freedesktop.DBus"
 _DBUS_PATH = "/org/freedesktop/DBus"
 _DBUS_INTERFACE = "org.freedesktop.DBus"
 _REQUEST_TIMEOUT_S = 60.0
+# Register is best effort: a portal still being D-Bus activated must not hold
+# up the shortcut and RemoteDesktop calls queued behind bus setup.
+_REGISTER_TIMEOUT_S = 1.0
 _MAX_EARLY_RESPONSES = 64
 
 ResponseCallback = Callable[[int, dict[str, Any]], None]
@@ -320,19 +323,24 @@ class PortalTransport(QObject):
         Registry interface; failures are harmless and only logged.
         """
         try:
-            reply = await bus.call(
-                Message(
-                    destination=PORTAL_SERVICE,
-                    path=PORTAL_PATH,
-                    interface=REGISTRY_INTERFACE,
-                    member="Register",
-                    signature="sa{sv}",
-                    body=[AppMeta.ID, {}],
-                )
+            reply = await asyncio.wait_for(
+                bus.call(
+                    Message(
+                        destination=PORTAL_SERVICE,
+                        path=PORTAL_PATH,
+                        interface=REGISTRY_INTERFACE,
+                        member="Register",
+                        signature="sa{sv}",
+                        body=[AppMeta.ID, {}],
+                    )
+                ),
+                timeout=_REGISTER_TIMEOUT_S,
             )
             self._raise_for_error(reply, "Portal Registry.Register")
         except Exception as exc:
-            logger.debug("Registrazione app id presso il portal non applicata: %s", exc)
+            # TimeoutError included. Info level: a rejected app id explains a
+            # later "An app id is required" from GlobalShortcuts.
+            logger.info("Registrazione app id presso il portal non applicata: %r", exc)
 
     async def _dbus_match(self, bus: MessageBus, member: str, rule: str) -> None:
         reply = await bus.call(

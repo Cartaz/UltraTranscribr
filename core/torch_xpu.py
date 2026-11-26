@@ -24,8 +24,6 @@ def _import_torch() -> Any:
     return torch
 
 
-
-
 def _torch_import_error(exc: Exception) -> GPUNotAvailableError:
     """Tell a missing runtime apart from an installed one that cannot load."""
     try:
@@ -48,7 +46,7 @@ def _torch_import_error(exc: Exception) -> GPUNotAvailableError:
         )
     return GPUNotAvailableError(
         "PyTorch XPU installato ma non caricabile",
-        f"{exc}.{hint}",
+        f"{str(exc).rstrip('.')}.{hint}",
     )
 
 

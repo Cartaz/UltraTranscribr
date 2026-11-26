@@ -144,6 +144,9 @@ def test_composition_root_owns_runtime_shutdown_after_application_cleanup(
         def __init__(self, _argv) -> None:
             pass
 
+        def setQuitOnLastWindowClosed(self, value: bool) -> None:
+            events.append(f"app.quit_on_last_window_closed={value}")
+
         def __getattr__(self, _name):
             return lambda *args, **kwargs: None
 
@@ -167,6 +170,8 @@ def test_composition_root_owns_runtime_shutdown_after_application_cleanup(
         main.main()
     assert exited.value.code == 0
     assert events == [
+        # Closing the window hides it to the tray; only Esci quits.
+        "app.quit_on_last_window_closed=False",
         "app.exec",
         "window.dispose",
         "dictation.close",

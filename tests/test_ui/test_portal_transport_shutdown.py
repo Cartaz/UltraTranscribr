@@ -78,6 +78,20 @@ def test_host_app_registration_sends_app_id_and_tolerates_old_portals() -> None:
     asyncio.run(transport._register_host_app(_Bus(fail=True)))  # must not raise
 
 
+def test_unanswered_registration_does_not_stall_bus_setup(monkeypatch) -> None:
+    QApplication.instance() or QApplication([])
+    transport = PortalTransport()
+    monkeypatch.setattr("ui.native.xdg_portal._REGISTER_TIMEOUT_S", 0.05)
+
+    class _SilentBus:
+        async def call(self, message):
+            await asyncio.Event().wait()  # a portal that never replies
+
+    started = time.monotonic()
+    asyncio.run(asyncio.wait_for(transport._register_host_app(_SilentBus()), 2.0))
+    assert time.monotonic() - started < 1.0
+
+
 def test_hung_portal_does_not_stall_shutdown_past_the_join_budget() -> None:
     QApplication.instance() or QApplication([])
     transport = PortalTransport()

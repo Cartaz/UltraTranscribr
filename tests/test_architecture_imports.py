@@ -20,15 +20,23 @@ APPLICATION_INTERNALS = {
 }
 
 
-def _imports(path: Path) -> set[str]:
+def _imports(path: Path, root: Path = ROOT) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    package = list(path.relative_to(root).parent.parts)
     found = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             found.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            found.add(node.module)
-            found.update(f"{node.module}.{alias.name}" for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            # Resolve "from ..core import x" against the importing package.
+            base = package[: len(package) - node.level + 1] if node.level else []
+            module = ".".join([*base, *([node.module] if node.module else [])])
+            if module:
+                found.add(module)
+            found.update(
+                f"{module}.{alias.name}" if module else alias.name
+                for alias in node.names
+            )
     return found
 
 
@@ -91,7 +99,15 @@ def test_boundary_checks_detect_forbidden_imports_and_attributes(tmp_path) -> No
         "self.application.controller.stop_all_live_sessions()\n"
         "self._application.meeting.cancel()\n"
     )
-    assert {"core.app_controller", "PySide6.QtCore"} <= _imports(probe)
+    assert {"core.app_controller", "PySide6.QtCore"} <= _imports(probe, tmp_path)
+    relative = tmp_path / "ui" / "adapters" / "probe.py"
+    relative.parent.mkdir(parents=True)
+    relative.write_text(
+        "from ...core import app_controller\nfrom ...core.meeting_manager import M\n"
+    )
+    assert {"core.app_controller", "core.meeting_manager"} <= _imports(
+        relative, tmp_path
+    )
     assert _service_internal_access(probe) == [
         "application.controller:3",
         "_application.meeting:4",

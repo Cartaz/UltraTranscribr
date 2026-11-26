@@ -405,7 +405,6 @@ ScrollView {
                 objectName: 'backendCard'
                 Layout.fillWidth: true
                 Layout.preferredWidth: 1
-                Layout.preferredHeight: 462.59
                 CardHead {
                     kicker: 'BACKEND'
                     title: 'SYCL'
