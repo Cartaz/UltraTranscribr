@@ -102,10 +102,22 @@ build_key() {
   } | sha256sum | awk '{print $1}'
 }
 
+# Every later pip step must keep the XPU wheels: otherwise a transitive
+# requirement (e.g. pytorch-metric-learning>=3.0.4 wanting torch>=2.14) makes
+# pip replace them with the CUDA build from PyPI.
+write_torch_constraints() {
+  TORCH_CONSTRAINTS="$VENV/.ultratranscribr-torch-constraints.txt"
+  printf '%s\n' \
+    "torch==$TORCH_VERSION" \
+    "torchaudio==$TORCHAUDIO_VERSION" \
+    "torchcodec==$TORCHCODEC_VERSION" > "$TORCH_CONSTRAINTS"
+}
+
 install_qwen_dependencies() {
   [[ "$INSTALL_QWEN" == "1" ]] || return 0
   log "Preparazione componenti per il motore delle riunioni..."
-  "$VENV/bin/pip" install -r "$ROOT/requirements-qwen.txt"
+  write_torch_constraints
+  "$VENV/bin/pip" install -c "$TORCH_CONSTRAINTS" -r "$ROOT/requirements-qwen.txt"
   # Check the optional stack without loading weights or starting GPU inference.
   (cd "$ROOT" && "$VENV/bin/python" - <<'PY'
 from core.qwen_models import QwenModelManager
@@ -139,7 +151,8 @@ install_python_dependencies() {
     "torchcodec==$TORCHCODEC_VERSION"
 
   log "Installazione diarizzazione Community-1 e Demucs..."
-  "$VENV/bin/pip" install -r "$ROOT/requirements-xpu.txt"
+  write_torch_constraints
+  "$VENV/bin/pip" install -c "$TORCH_CONSTRAINTS" -r "$ROOT/requirements-xpu.txt"
 
   requirements_imports_ok verbose \
     || die "Verifica dipendenze PyTorch XPU/pyannote/Demucs fallita"
