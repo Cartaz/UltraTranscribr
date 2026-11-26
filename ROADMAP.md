@@ -195,8 +195,8 @@ Only after the safety/session architecture is stable:
 - [x] Record activation/listening/first-commit/first-insert/finalization/queue-wait metrics.
 - [x] Add a read-only Dictation Doctor and deterministic validation report tooling.
 - [x] Add unit/contract coverage for activation, stability, scheduling, settings, metrics and native boundaries.
-- [ ] Validate QtDBus portal marshalling and permission lifecycle on the target CachyOS/KDE Wayland system.
-- [ ] Test focused-field insertion in Firefox/Chromium, LibreOffice, Konsole and an IDE/editor.
-- [ ] Record real end-to-end latency, clipboard/focus behavior and portal recovery using `docs/DICTATION_VALIDATION.md`.
+- [x] Validate QtDBus portal marshalling and permission lifecycle on the target CachyOS/KDE Wayland system.
+- [x] Test focused-field insertion in Firefox/Chromium, LibreOffice, Konsole and an IDE/editor.
+- [x] Record real end-to-end latency, clipboard/focus behavior and portal recovery using `docs/DICTATION_VALIDATION.md`.
 
-Strategic review: Phase 11 keeps canonical operational state in Python, confines desktop permissions/injection to `ui/native/`, shares one inference-capacity owner, does not alter normal Live segmentation, and deliberately defers only behavior that cannot be verified without a real KDE/Wayland compositor and external target applications.
+Strategic review: Phase 11 keeps canonical operational state in Python, confines desktop permissions/injection to `ui/native/`, shares one inference-capacity owner, does not alter normal Live segmentation, and has been validated on the target KDE/Wayland system: insertion goes through Klipper because KWin ignores clipboard changes from unfocused clients.

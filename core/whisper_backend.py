@@ -22,6 +22,12 @@ logger = logging.getLogger(__name__)
 # whisper-server is always started by the app without --inference-path, so the
 # endpoint is fixed: the binary exposes only /inference (plus /load).
 _INFERENCE_PATH = "/inference"
+# The first request after a server start pays about 10 s of one-off GPU setup
+# on the Meteor Lake iGPU even with the driver's kernel cache: a short noise
+# clip sent right away absorbs it while Live waits for its first segment.
+# Dictation cold starts skip it, since their first request follows at once.
+_WARMUP_AUDIO_S = 2.0
+_WARMUP_TIMEOUT_S = 120.0
 
 
 class WhisperBackend:
@@ -54,6 +60,7 @@ class WhisperBackend:
         self._aux_backends: list[WhisperBackend] = []
         self._pool_queue: Optional[queue.Queue[WhisperBackend]] = None
         self._pool_stopping = False
+        self._warm_up_on_spawn = True
 
     @property
     def server_url(self) -> str:
@@ -77,8 +84,21 @@ class WhisperBackend:
     def instance_count(self) -> int:
         return 1 + len(self._aux_backends) if self._process is not None else 0
 
-    def start(self, model_path: Path, vad_model_path: Optional[Path] = None) -> None:
+    def start(
+        self,
+        model_path: Path,
+        vad_model_path: Optional[Path] = None,
+        *,
+        warm_up: bool = True,
+    ) -> None:
+        """Start the server; ``warm_up`` sends a throwaway request once it is up.
+
+        Warming up pays off only when the first real request comes a few
+        seconds later (Live waits for a 10 s segment). Dictation sends its
+        first request at once, so it would just wait for the warmup too.
+        """
         with self._lifecycle_lock:
+            self._warm_up_on_spawn = warm_up
             self._pool_stopping = True
             self._cleanup_aux_backends()
             self._model_path = Path(model_path)
@@ -102,8 +122,17 @@ class WhisperBackend:
                 raise
             self._pool_stopping = False
 
-    def ensure_vad_mode(self, enabled: bool, vad_model_path: Optional[Path] = None) -> None:
+    def ensure_vad_mode(
+        self,
+        enabled: bool,
+        vad_model_path: Optional[Path] = None,
+        *,
+        warm_up: bool = True,
+    ) -> None:
         with self._lifecycle_lock:
+            # Each lifecycle call decides for its own respawn: a Dictation
+            # start must not leave later Live respawns cold.
+            self._warm_up_on_spawn = warm_up
             if vad_model_path is not None:
                 self._vad_model_path = Path(vad_model_path)
             wanted = bool(enabled and self._vad_model_path)
@@ -296,7 +325,7 @@ class WhisperBackend:
                 instance_label=f"-{index + 1}",
             )
             try:
-                backend.start(self._model_path, self._vad_model_path)
+                backend.start(self._model_path, self._vad_model_path, warm_up=self._warm_up_on_spawn)
             except Exception:
                 backend.stop()
                 raise
@@ -352,6 +381,70 @@ class WhisperBackend:
             self._cleanup_process()
             raise
         self._server_vad_enabled = use_vad
+        if self._warm_up_on_spawn:
+            self._start_warmup()
+
+    def _start_warmup(self) -> None:
+        threading.Thread(
+            target=self._warm_up,
+            args=(self._process, self.server_url + _INFERENCE_PATH),
+            daemon=True,
+            name=f"WhisperWarmup{self._instance_label}",
+        ).start()
+
+    def _warm_up(self, process: Optional[subprocess.Popen], url: str) -> None:
+        """Run one throwaway inference; real requests simply queue behind it."""
+        import numpy as np
+
+        samples = int(_WARMUP_AUDIO_S * 16000)
+        noise = np.random.default_rng(0).standard_normal(samples) * 0.01
+        pcm = (noise * 32767).astype("<i2").tobytes()
+        wav = (
+            b"RIFF" + (36 + len(pcm)).to_bytes(4, "little") + b"WAVEfmt "
+            + (16).to_bytes(4, "little") + (1).to_bytes(2, "little") + (1).to_bytes(2, "little")
+            + (16000).to_bytes(4, "little") + (32000).to_bytes(4, "little")
+            + (2).to_bytes(2, "little") + (16).to_bytes(2, "little")
+            + b"data" + len(pcm).to_bytes(4, "little") + pcm
+        )
+        boundary = "----UltraTranscribrWarmup"
+        fields = [
+            ("temperature", "0.0"),
+            ("temperature_inc", "0.0"),
+            ("response_format", "json"),
+            # Same decoding path as real requests; VAD off so the encoder runs.
+            ("beam_size", str(self._settings.beam_size)),
+            ("vad", "false"),
+        ]
+        body = b"".join(
+            [
+                f"--{boundary}\r\n".encode(),
+                b'Content-Disposition: form-data; name="file"; filename="warmup.wav"\r\n',
+                b"Content-Type: audio/wav\r\n\r\n",
+                wav,
+                b"\r\n",
+            ]
+            + [
+                f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode()
+                for name, value in fields
+            ]
+            + [f"--{boundary}--\r\n".encode()]
+        )
+        request = urllib.request.Request(
+            url,
+            data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+        started = time.monotonic()
+        try:
+            with urllib.request.urlopen(request, timeout=_WARMUP_TIMEOUT_S) as response:
+                response.read()
+        except Exception as exc:
+            if self._process is process:
+                logger.info("Riscaldamento whisper-server%s non riuscito: %s", self._instance_label, exc)
+            return
+        logger.info(
+            "whisper-server%s riscaldato in %.1f s", self._instance_label, time.monotonic() - started
+        )
 
     def _cleanup_process(self) -> None:
         p = self._process

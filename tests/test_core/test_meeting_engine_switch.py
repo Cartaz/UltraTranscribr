@@ -23,7 +23,7 @@ def controller_with_loaded_whisper():
     controller._backend = MagicMock()
     controller._backend.is_running = True
     controller._backend.stop.side_effect = lambda: setattr(controller._backend, "is_running", False)
-    controller._backend.start.side_effect = lambda *_: setattr(controller._backend, "is_running", True)
+    controller._backend.start.side_effect = lambda *_a, **_k: setattr(controller._backend, "is_running", True)
     controller._model_manager = MagicMock()
     controller._model_manager.get_model_info.return_value = {"installed": True}
     controller._model_manager.get_model_path.return_value = Path("ggml-large-v3.bin")
@@ -48,7 +48,7 @@ def test_switch_releases_whisper_and_loads_it_again_after_meeting(outcome):
         assert outcome != "completed"
     assert not controller._meeting_engine_active.is_set()
     controller.ensure_backend_started()
-    controller._backend.start.assert_called_once_with(Path("ggml-large-v3.bin"), None)
+    controller._backend.start.assert_called_once_with(Path("ggml-large-v3.bin"), None, warm_up=True)
     assert controller._backend_started
     assert controller._backend_model_size == "large-v3"
 

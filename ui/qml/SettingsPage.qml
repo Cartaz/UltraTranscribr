@@ -294,7 +294,7 @@ ScrollView {
                 }
                 Help {
                     Layout.fillWidth: true
-                    text: 'Scorciatoia proposta: Meta+H. Detta nell’applicazione attiva; su Wayland autorizza i portali KDE. Per cambiarla: Impostazioni di sistema → Scorciatoie → UltraTranscribr.'
+                    text: 'Scorciatoia proposta: Meta+H. In Push-to-talk il testo è inserito al rilascio; Live progressivo vale solo in Toggle. Per cambiarla: Impostazioni di sistema → Scorciatoie → UltraTranscribr.'
                 }
                 Item {
                     Layout.fillHeight: true
