@@ -56,18 +56,30 @@ class PrioritizedWhisperBackend:
     def instance_count(self) -> int:
         return self._backend.instance_count
 
-    def start(self, model_path: Path, vad_model_path: Optional[Path] = None) -> None:
+    def start(
+        self,
+        model_path: Path,
+        vad_model_path: Optional[Path] = None,
+        *,
+        warm_up: bool = True,
+    ) -> None:
         self._close_scheduler()
-        self._backend.start(model_path, vad_model_path)
+        self._backend.start(model_path, vad_model_path, warm_up=warm_up)
         self._reset_scheduler()
 
-    def ensure_vad_mode(self, enabled: bool, vad_model_path: Optional[Path] = None) -> None:
+    def ensure_vad_mode(
+        self,
+        enabled: bool,
+        vad_model_path: Optional[Path] = None,
+        *,
+        warm_up: bool = True,
+    ) -> None:
         wanted = bool(enabled and vad_model_path)
         if self.is_running and self.server_vad_enabled == wanted:
             return
         self._close_scheduler()
         try:
-            self._backend.ensure_vad_mode(enabled, vad_model_path)
+            self._backend.ensure_vad_mode(enabled, vad_model_path, warm_up=warm_up)
         finally:
             if self._backend.is_running:
                 self._reset_scheduler()

@@ -292,6 +292,7 @@ class AppController:
         vad: Optional[bool] = None,
         settings: Optional[Settings] = None,
         preserve_runtime_mode_if_running: bool = False,
+        warm_up: bool = True,
     ) -> None:
         cfg = settings or self._settings
         wanted = cfg.vad_filter if vad is None else bool(vad)
@@ -326,7 +327,7 @@ class AppController:
 
             if already:
                 self._bus.emit("backend_status_changed", "configuring_backend")
-                self._backend.ensure_vad_mode(wanted, vad_path)
+                self._backend.ensure_vad_mode(wanted, vad_path, warm_up=warm_up)
                 self._bus.emit("backend_status_changed", "ready")
                 return
 
@@ -362,8 +363,8 @@ class AppController:
                 model = self._model_manager.get_model_path(cfg.model_size)
 
             self._bus.emit("backend_status_changed", "starting_backend")
-            self._backend.start(model, vad_path)
-            self._backend.ensure_vad_mode(wanted, vad_path)
+            self._backend.start(model, vad_path, warm_up=warm_up)
+            self._backend.ensure_vad_mode(wanted, vad_path, warm_up=warm_up)
             with self._lock:
                 self._backend_started = True
                 self._backend_model_size = cfg.model_size
@@ -407,6 +408,9 @@ class AppController:
             vad=settings.vad_filter,
             settings=settings,
             preserve_runtime_mode_if_running=True,
+            # Dictation's first request follows at once: a warmup would only
+            # delay it by one more encoder pass.
+            warm_up=False,
         )
 
     def stop_backend(self) -> None:

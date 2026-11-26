@@ -87,7 +87,7 @@ def test_stop_backend_waits_for_inflight_backend_start() -> None:
     entered_start = threading.Event()
     release_start = threading.Event()
 
-    def blocking_start(model, vad):
+    def blocking_start(model, vad, **_kwargs):
         del model, vad
         entered_start.set()
         assert release_start.wait(2.0)
