@@ -248,6 +248,8 @@ class PortalTransport(QObject):
             # must still observe their task's exception.
             loop.run_until_complete(
                 asyncio.gather(*pending_tasks, return_exceptions=True)
+                if pending_tasks
+                else asyncio.sleep(0)
             )
             for task in list(self._tasks):
                 if task.done() and not task.cancelled():
@@ -302,7 +304,8 @@ class PortalTransport(QObject):
             ):
                 await self._dbus_match(bus, "AddMatch", rule)
             await self._register_host_app(bus)
-        except Exception:
+        except BaseException:
+            # Includes cancellation at shutdown: never leave the socket open.
             bus.disconnect()
             raise
         self._bus = bus
@@ -502,13 +505,20 @@ class PortalTransport(QObject):
         ]
         if in_flight:
             await asyncio.wait(in_flight, timeout=0.5)
-        for path in paths:
-            try:
-                await asyncio.wait_for(
-                    self._close_object(path, REQUEST_INTERFACE), timeout=0.25
-                )
-            except Exception:
-                logger.debug("Chiusura request portal durante shutdown fallita", exc_info=True)
+        if paths:
+            closes = [
+                asyncio.ensure_future(self._close_object(path, REQUEST_INTERFACE))
+                for path in paths
+            ]
+            _done, slow = await asyncio.wait(closes, timeout=0.25)
+            for task in slow:
+                task.cancel()
+            for task in closes:
+                if task.done() and not task.cancelled() and task.exception():
+                    logger.debug(
+                        "Chiusura request portal durante shutdown fallita: %s",
+                        task.exception(),
+                    )
         if self._bus is not None:
             try:
                 self._bus.disconnect()

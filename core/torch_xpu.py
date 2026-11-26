@@ -24,19 +24,23 @@ def _import_torch() -> Any:
     return torch
 
 
-_SHARED_LIBRARY_MARKERS = ("undefined symbol", "cannot open shared object", ".so")
 
 
 def _torch_import_error(exc: Exception) -> GPUNotAvailableError:
     """Tell a missing runtime apart from an installed one that cannot load."""
-    if isinstance(exc, ImportError) and importlib.util.find_spec("torch") is None:
+    try:
+        installed = importlib.util.find_spec("torch") is not None
+    except (ImportError, ValueError):
+        installed = True  # a broken torch module is still an installed one
+    if isinstance(exc, ImportError) and not installed:
         return GPUNotAvailableError(
             "PyTorch XPU non installato",
             "Esegui ./install.sh per installare il runtime Intel XPU richiesto.",
         )
     hint = ""
-    library_problem = any(marker in str(exc) for marker in _SHARED_LIBRARY_MARKERS)
-    if library_problem and os.environ.get("LD_LIBRARY_PATH"):
+    # oneAPI's libraries shadowing torch's own show up as unresolved symbols;
+    # a merely missing library is not fixed by clearing LD_LIBRARY_PATH.
+    if "undefined symbol" in str(exc) and os.environ.get("LD_LIBRARY_PATH"):
         hint = (
             " LD_LIBRARY_PATH è impostato (ad esempio da oneAPI setvars.sh): "
             "PyTorch XPU usa le proprie librerie Intel, quindi avvia senza "

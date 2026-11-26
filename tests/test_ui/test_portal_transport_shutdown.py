@@ -104,3 +104,79 @@ def test_hung_portal_does_not_stall_shutdown_past_the_join_budget() -> None:
     transport.close()
     assert time.monotonic() - began < 0.9
     assert not transport._thread.is_alive()
+
+
+def test_many_open_requests_close_concurrently_within_budget() -> None:
+    QApplication.instance() or QApplication([])
+    transport = PortalTransport()
+
+    class _HungBus:
+        async def call(self, message):
+            await asyncio.Event().wait()
+
+        def disconnect(self) -> None:
+            pass
+
+    transport._bus = _HungBus()
+    transport._active_request_paths = {
+        f"r{i}": f"/org/freedesktop/portal/desktop/request/1_1/r{i}" for i in range(8)
+    }
+
+    loop = asyncio.new_event_loop()
+    try:
+        loop.create_task(transport._shutdown_worker())
+        began = time.monotonic()
+        loop.run_forever()  # the worker stops its own loop when done
+        elapsed = time.monotonic() - began
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+    finally:
+        loop.close()
+    assert elapsed < 0.6
+
+
+def test_bus_is_disconnected_when_connection_setup_is_cancelled(monkeypatch) -> None:
+    import ui.native.xdg_portal as portal
+
+    QApplication.instance() or QApplication([])
+    transport = PortalTransport()
+    disconnected = []
+
+    class _Bus:
+        def add_message_handler(self, _handler) -> None:
+            pass
+
+        def disconnect(self) -> None:
+            disconnected.append(True)
+
+    class _MessageBus:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        async def connect(self):
+            return _Bus()
+
+    async def slow_match(*_args):
+        return None
+
+    async def hung_register(_bus):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(portal, "MessageBus", _MessageBus)
+    transport._dbus_match = slow_match
+    transport._register_host_app = hung_register
+
+    async def cancel_during_setup():
+        task = asyncio.ensure_future(transport._connect_bus())
+        await asyncio.sleep(0.01)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(cancel_during_setup())
+    assert disconnected == [True]

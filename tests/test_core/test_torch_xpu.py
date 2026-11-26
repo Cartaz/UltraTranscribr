@@ -117,3 +117,30 @@ def test_missing_python_dependency_is_not_blamed_on_ld_library_path(monkeypatch)
         tx.TorchXpuRuntime().require_device()
     assert "sympy" in raised.value.detail
     assert "LD_LIBRARY_PATH" not in raised.value.detail
+
+
+def test_missing_shared_library_is_not_blamed_on_ld_library_path(monkeypatch) -> None:
+    def missing_library():
+        raise OSError("libgomp.so.1: cannot open shared object file")
+
+    monkeypatch.setattr(tx, "_import_torch", missing_library)
+    monkeypatch.setattr(tx.importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/home/u/lib")
+    with pytest.raises(GPUNotAvailableError) as raised:
+        tx.TorchXpuRuntime().require_device()
+    assert "libgomp" in raised.value.detail
+    assert "LD_LIBRARY_PATH" not in raised.value.detail
+
+
+def test_find_spec_failure_still_reports_an_actionable_gpu_error(monkeypatch) -> None:
+    def broken():
+        raise ImportError("partially initialized module 'torch'")
+
+    def spec_error(name):
+        raise ValueError("torch.__spec__ is None")
+
+    monkeypatch.setattr(tx, "_import_torch", broken)
+    monkeypatch.setattr(tx.importlib.util, "find_spec", spec_error)
+    with pytest.raises(GPUNotAvailableError) as raised:
+        tx.TorchXpuRuntime().require_device()
+    assert raised.value.message == "PyTorch XPU installato ma non caricabile"
