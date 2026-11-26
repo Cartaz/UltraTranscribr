@@ -24,15 +24,19 @@ def _import_torch() -> Any:
     return torch
 
 
-def _torch_import_error(exc: ImportError) -> GPUNotAvailableError:
+_SHARED_LIBRARY_MARKERS = ("undefined symbol", "cannot open shared object", ".so")
+
+
+def _torch_import_error(exc: Exception) -> GPUNotAvailableError:
     """Tell a missing runtime apart from an installed one that cannot load."""
-    if importlib.util.find_spec("torch") is None:
+    if isinstance(exc, ImportError) and importlib.util.find_spec("torch") is None:
         return GPUNotAvailableError(
             "PyTorch XPU non installato",
             "Esegui ./install.sh per installare il runtime Intel XPU richiesto.",
         )
     hint = ""
-    if os.environ.get("LD_LIBRARY_PATH"):
+    library_problem = any(marker in str(exc) for marker in _SHARED_LIBRARY_MARKERS)
+    if library_problem and os.environ.get("LD_LIBRARY_PATH"):
         hint = (
             " LD_LIBRARY_PATH è impostato (ad esempio da oneAPI setvars.sh): "
             "PyTorch XPU usa le proprie librerie Intel, quindi avvia senza "
@@ -69,7 +73,9 @@ class TorchXpuRuntime:
             )
             try:
                 torch = _import_torch()
-            except ImportError as exc:
+            except (ImportError, OSError) as exc:
+                # torch preloads its Intel runtime with ctypes: a library
+                # conflict can surface as OSError instead of ImportError.
                 raise _torch_import_error(exc) from exc
 
             xpu = getattr(torch, "xpu", None)

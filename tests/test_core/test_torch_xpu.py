@@ -91,3 +91,29 @@ def test_missing_torch_still_points_to_installer(monkeypatch) -> None:
     with pytest.raises(GPUNotAvailableError) as raised:
         tx.TorchXpuRuntime().require_device()
     assert raised.value.message == "PyTorch XPU non installato"
+
+
+def test_library_preload_oserror_gets_the_same_actionable_message(monkeypatch) -> None:
+    def preload_failure():
+        raise OSError("libtorch_global_deps.so: undefined symbol: urAdapterGet")
+
+    monkeypatch.setattr(tx, "_import_torch", preload_failure)
+    monkeypatch.setattr(tx.importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/intel/oneapi/lib")
+    with pytest.raises(GPUNotAvailableError) as raised:
+        tx.TorchXpuRuntime().require_device()
+    assert raised.value.message == "PyTorch XPU installato ma non caricabile"
+    assert "LD_LIBRARY_PATH" in raised.value.detail
+
+
+def test_missing_python_dependency_is_not_blamed_on_ld_library_path(monkeypatch) -> None:
+    def missing_dependency():
+        raise ModuleNotFoundError("No module named 'sympy'")
+
+    monkeypatch.setattr(tx, "_import_torch", missing_dependency)
+    monkeypatch.setattr(tx.importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/unrelated/lib")
+    with pytest.raises(GPUNotAvailableError) as raised:
+        tx.TorchXpuRuntime().require_device()
+    assert "sympy" in raised.value.detail
+    assert "LD_LIBRARY_PATH" not in raised.value.detail

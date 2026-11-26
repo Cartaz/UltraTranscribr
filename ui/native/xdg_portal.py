@@ -484,20 +484,29 @@ class PortalTransport(QObject):
         self._raise_for_error(reply, f"Portal Close {path}")
 
     async def _shutdown_worker(self) -> None:
-        # Let in-flight calls (typically a session Close) reach the portal
-        # before the bus is disconnected underneath them.
-        in_flight = [task for task in self._tasks if not task.done()]
-        if in_flight:
-            await asyncio.wait(in_flight, timeout=1.0)
         paths = list(self._active_request_paths.values())
         self._active_request_paths.clear()
+        # Requests waiting for a user answer (consent dialogs) end now, so the
+        # bounded wait below only covers calls already on the wire.
         for _path, (_request_id, future) in list(self._request_waiters.items()):
             if not future.done():
                 future.cancel()
         self._request_waiters.clear()
+        # Let in-flight calls (typically a session Close) reach the portal
+        # before the bus is disconnected underneath them, within the GUI's
+        # join budget even when the portal is slow.
+        in_flight = [
+            task
+            for task in self._tasks
+            if not task.done() and task is not asyncio.current_task()
+        ]
+        if in_flight:
+            await asyncio.wait(in_flight, timeout=0.5)
         for path in paths:
             try:
-                await self._close_object(path, REQUEST_INTERFACE)
+                await asyncio.wait_for(
+                    self._close_object(path, REQUEST_INTERFACE), timeout=0.25
+                )
             except Exception:
                 logger.debug("Chiusura request portal durante shutdown fallita", exc_info=True)
         if self._bus is not None:

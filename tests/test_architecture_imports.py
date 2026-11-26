@@ -57,7 +57,42 @@ def test_ui_reaches_the_application_only_through_application_service() -> None:
     assert {path: names for path, names in offenders.items() if names} == {}
 
 
-def test_boundary_check_detects_a_forbidden_import(tmp_path) -> None:
+# ApplicationService keeps these as plain attributes for core-internal wiring;
+# reaching them from the UI would bypass its busy and exclusivity checks.
+SERVICE_INTERNALS = {"controller", "meeting", "file_batch", "meeting_batch", "settings"}
+
+
+def _service_internal_access(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Attribute) or node.attr not in SERVICE_INTERNALS:
+            continue
+        owner = node.value
+        name = owner.attr if isinstance(owner, ast.Attribute) else getattr(owner, "id", "")
+        if name in {"application", "_application"}:
+            found.append(f"{name}.{node.attr}:{node.lineno}")
+    return found
+
+
+def test_ui_does_not_reach_service_internals_through_attributes() -> None:
+    offenders = {
+        str(path.relative_to(ROOT)): _service_internal_access(path)
+        for path in _modules("ui")
+    }
+    assert {path: names for path, names in offenders.items() if names} == {}
+
+
+def test_boundary_checks_detect_forbidden_imports_and_attributes(tmp_path) -> None:
     probe = tmp_path / "probe.py"
-    probe.write_text("from core.app_controller import AppController\nimport PySide6.QtCore\n")
+    probe.write_text(
+        "from core.app_controller import AppController\n"
+        "import PySide6.QtCore\n"
+        "self.application.controller.stop_all_live_sessions()\n"
+        "self._application.meeting.cancel()\n"
+    )
     assert {"core.app_controller", "PySide6.QtCore"} <= _imports(probe)
+    assert _service_internal_access(probe) == [
+        "application.controller:3",
+        "_application.meeting:4",
+    ]

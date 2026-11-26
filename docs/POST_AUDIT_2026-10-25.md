@@ -63,7 +63,7 @@ python tools/validate_meeting_review.py \
   --audio /percorso/registrazione.flac \
   --output /percorso/prova-qml --cycles 64 --skip-playback
 # Per verificare anche la riproduzione, omettere --skip-playback.
-# Per il riferimento Chromium, usare --frontend web --source-root /percorso/baseline.
+# Riferimento Chromium: usare gli strumenti di un checkout precedente alla rimozione della UI web (--frontend web non esiste più).
 ```
 
 `--checkpoint-only` conferma su disco la bozza prima di attendere l'arresto; `--reopen` verifica il recupero in un nuovo processo. Usare una directory nuova per ogni prova di arresto. La protezione di memoria interrompe il test a 1,8 miliardi di byte PSS.

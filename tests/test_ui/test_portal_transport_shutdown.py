@@ -76,3 +76,31 @@ def test_host_app_registration_sends_app_id_and_tolerates_old_portals() -> None:
     assert message.member == "Register" and message.signature == "sa{sv}"
     assert message.body == ["com.ultratranscribr.app", {}]
     asyncio.run(transport._register_host_app(_Bus(fail=True)))  # must not raise
+
+
+def test_hung_portal_does_not_stall_shutdown_past_the_join_budget() -> None:
+    QApplication.instance() or QApplication([])
+    transport = PortalTransport()
+    started = threading.Event()
+
+    class _HungBus:
+        async def call(self, message):
+            started.set()
+            await asyncio.Event().wait()  # the portal never answers
+
+        def disconnect(self) -> None:
+            pass
+
+    bus = _HungBus()
+
+    async def fake_bus():
+        transport._bus = bus
+        return bus
+
+    transport._ensure_bus = fake_bus
+    transport.close_session("/org/freedesktop/portal/desktop/session/1_1/hung")
+    assert started.wait(2)
+    began = time.monotonic()
+    transport.close()
+    assert time.monotonic() - began < 0.9
+    assert not transport._thread.is_alive()
