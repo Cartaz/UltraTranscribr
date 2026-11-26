@@ -17,6 +17,10 @@ from ui.native.xdg_portal import (
 logger = logging.getLogger(__name__)
 INTERFACE = "org.freedesktop.portal.GlobalShortcuts"
 SHORTCUT_ID = "dictation"
+# Without a preferred trigger KDE registers the action with no key, so
+# Dictation could not be started at all. Meta+H is free in a default Plasma
+# session; the desktop still owns the binding and the user can change it.
+PREFERRED_TRIGGER = "LOGO+h"
 
 
 class GlobalShortcutsPortal(PortalClient):
@@ -71,7 +75,10 @@ class GlobalShortcutsPortal(PortalClient):
         handle = token("ut_gs_bind")
         shortcuts = [[
             SHORTCUT_ID,
-            {"description": string_variant("Avvia o termina la dettatura globale")},
+            {
+                "description": string_variant("Avvia o termina la dettatura globale"),
+                "preferred_trigger": string_variant(PREFERRED_TRIGGER),
+            },
         ]]
         self.call_request(
             INTERFACE,

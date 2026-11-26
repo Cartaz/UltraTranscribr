@@ -294,7 +294,7 @@ ScrollView {
                 }
                 Help {
                     Layout.fillWidth: true
-                    text: 'Usa la scorciatoia globale per dettare nell’applicazione attiva. Su Wayland autorizza i portali di KDE per scorciatoie e inserimento del testo.'
+                    text: 'Scorciatoia proposta: Meta+H. Detta nell’applicazione attiva; su Wayland autorizza i portali KDE. Per cambiarla: Impostazioni di sistema → Scorciatoie → UltraTranscribr.'
                 }
                 Item {
                     Layout.fillHeight: true

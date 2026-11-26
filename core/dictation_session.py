@@ -27,7 +27,7 @@ class DictationBackend(Protocol):
 
 
 class DictationTranscriberThread(threading.Thread):
-    """Run rolling-window Whisper requests and emit only stable text deltas."""
+    """Run growing-window Whisper requests and emit only stable text deltas."""
 
     def __init__(
         self,
@@ -49,6 +49,8 @@ class DictationTranscriberThread(threading.Thread):
         self._max_samples = int(settings.sample_rate * DictationDefaults.WINDOW_MS / 1000)
         self._step_samples = int(settings.sample_rate * DictationDefaults.STEP_MS / 1000)
         self._min_samples = int(settings.sample_rate * DictationDefaults.MIN_AUDIO_MS / 1000)
+        self._hard_cap_samples = int(settings.sample_rate * DictationDefaults.WINDOW_HARD_CAP_MS / 1000)
+        self._frame_samples = max(1, int(settings.sample_rate * 0.1))
         self._committer = StablePrefixCommitter()
         self._had_new_audio = False
 
@@ -63,16 +65,7 @@ class DictationTranscriberThread(threading.Thread):
                 self._infer(force=True)
             if drained and not self._stop_event.is_set():
                 final = self._committer.finalize()
-                if final.committed_delta:
-                    self._emit("dictation_text_committed", final.committed_delta)
-                self._emit(
-                    "dictation_preview_changed",
-                    {
-                        "committed": final.committed_text,
-                        "pending": "",
-                        "hypothesis": final.hypothesis,
-                    },
-                )
+                self._publish(final, pending="")
                 self._emit("dictation_final_text", final.committed_text)
                 self._emit("dictation_transcriber_drained", None)
         except Exception as exc:
@@ -88,71 +81,140 @@ class DictationTranscriberThread(threading.Thread):
                 if self._buffer.input_closed and self._buffer.is_empty:
                     return True
                 continue
-            arr = np.asarray(chunk, dtype=np.float32).reshape(-1)
-            if not arr.size:
-                continue
-            self._window.append(arr)
-            self._window_samples += arr.size
-            self._since_inference += arr.size
-            self._had_new_audio = True
-            self._trim_window()
+            self._append(chunk)
+            # Catch up: one request must cover all audio captured while the
+            # previous request was running. A request costs seconds on an
+            # iGPU, so taking one chunk per request made the queue grow for
+            # as long as the user kept speaking.
+            while not self._stop_event.is_set():
+                try:
+                    self._append(self._buffer.get_nowait())
+                except Empty:
+                    break
+            if self._stop_event.is_set():
+                break
             if self._window_samples >= self._min_samples and self._since_inference >= self._step_samples:
                 self._infer(force=False)
         return False
 
-    def _trim_window(self) -> None:
-        excess = self._window_samples - self._max_samples
-        while excess > 0 and self._window:
-            first = self._window[0]
-            if first.size <= excess:
-                self._window.popleft()
-                self._window_samples -= first.size
-                excess -= first.size
-            else:
-                self._window[0] = first[excess:].copy()
-                self._window_samples -= excess
-                excess = 0
+    def _append(self, chunk: np.ndarray) -> None:
+        arr = np.asarray(chunk, dtype=np.float32).reshape(-1)
+        if not arr.size:
+            return
+        self._window.append(arr)
+        self._window_samples += arr.size
+        self._since_inference += arr.size
+        self._had_new_audio = True
 
     def _infer(self, *, force: bool) -> None:
         if not self._window:
             return
         audio = np.concatenate(tuple(self._window))
-        if not force and self._is_silent(audio):
-            self._since_inference = 0
-            self._had_new_audio = False
+        # Only new speech is worth a request: the window still holds earlier
+        # speech, and re-sending it during a pause keeps the GPU busy and
+        # invites Whisper's trailing-silence hallucinations.
+        new_audio = audio if force else audio[-self._since_inference:]
+        if not self._is_voiced(new_audio):
+            if not force:
+                self._since_inference = 0
+                self._had_new_audio = False
+                if self._committer.segment_is_empty:
+                    self._trim_leading_silence(audio)
             return
-        if force and self._is_silent(audio):
+        text, segments = self._request(audio)
+        update = self._committer.update(text)
+        self._publish(update, pending=update.pending_text)
+        self._since_inference = 0
+        self._had_new_audio = False
+        if not force and audio.size >= self._max_samples:
+            self._close_segment(audio, text, segments)
+
+    def _close_segment(self, audio: np.ndarray, text: str, segments: list[dict]) -> None:
+        """Commit the window up to a Whisper segment boundary; keep the rest.
+
+        Hypotheses always restart from the window's first word. Sliding the
+        window instead cut words at its start and made the text overlap
+        ambiguous, which duplicated phrases in long dictations. Whisper's own
+        segment boundaries fall between words and tell exactly which words
+        precede the cut.
+        """
+        rate = self._settings.sample_rate
+        timed: list[tuple[int, str]] = []
+        for segment in segments:
+            try:
+                timed.append((int(float(segment.get("end", 0)) * rate), str(segment.get("text", "")).strip()))
+            except (TypeError, ValueError):
+                return  # untimed hypothesis: no safe cut
+        boundary = 0
+        for end, _text in timed[:-1]:  # the last segment may still be growing
+            if self._min_samples <= end < audio.size:
+                boundary = end
+        if boundary:
+            head = " ".join(text for end, text in timed if end <= boundary)
+        elif audio.size >= self._hard_cap_samples:
+            boundary, head = audio.size, text  # no pause in ~30 s: close it all
+        else:
             return
+        self._publish(self._committer.close_segment(head), pending="")
+        tail = audio[boundary:]
+        self._window = deque([tail]) if tail.size else deque()
+        self._window_samples = int(tail.size)
+        self._since_inference = int(tail.size)
+        self._had_new_audio = bool(tail.size)
+
+    def _frame_rms(self, audio: np.ndarray) -> np.ndarray:
+        frame = self._frame_samples
+        frames = audio.size // frame
+        if not frames:
+            return np.zeros(0)
+        return np.sqrt(np.square(audio[: frames * frame], dtype=np.float64).reshape(frames, frame).mean(axis=1))
+
+    def _is_voiced(self, audio: np.ndarray) -> bool:
+        """At least two 100 ms frames above the silence threshold.
+
+        A whole-window average turns a short phrase inside a long pause into
+        "silence"; a single loud frame is more likely a click than speech.
+        """
+        return int((self._frame_rms(audio) >= ProcessDefaults.SILENCE_RMS_THRESHOLD).sum()) >= 2
+
+    def _trim_leading_silence(self, audio: np.ndarray) -> None:
+        """Start an empty segment's window shortly before its first speech."""
+        voiced = np.flatnonzero(self._frame_rms(audio) >= ProcessDefaults.SILENCE_RMS_THRESHOLD)
+        margin = int(self._settings.sample_rate * 0.3)
+        keep_from = max(0, int(voiced[0]) * self._frame_samples - margin) if voiced.size else max(0, audio.size - margin)
+        if keep_from:
+            rest = audio[keep_from:]
+            self._window = deque([rest]) if rest.size else deque()
+            self._window_samples = int(rest.size)
+
+    def _request(self, audio: np.ndarray) -> tuple[str, list[dict]]:
         result = self._backend.transcribe_audio(
             self._numpy_to_wav(audio, self._settings.sample_rate),
             language=self._settings.language,
-            prompt=self._committer.committed_text[-DictationDefaults.PROMPT_CHARS:] or None,
-            verbose=False,
+            prompt=self._committer.context_text[-DictationDefaults.PROMPT_CHARS:] or None,
+            verbose=True,
             timeout=DictationDefaults.REQUEST_TIMEOUT_S,
             vad=False,
             on_queue_wait=lambda ms: self._emit("dictation_queue_wait", float(ms)),
         )
-        text = result if isinstance(result, str) else str(result.get("text", ""))
-        update = self._committer.update(text)
+        if isinstance(result, str):
+            return result, []
+        segments = result.get("segments")
+        return str(result.get("text", "")), [s for s in segments if isinstance(s, dict)] if isinstance(segments, list) else []
+
+    def _publish(self, update, *, pending: str) -> None:
+        if self._stop_event.is_set():
+            return
         if update.committed_delta:
             self._emit("dictation_text_committed", update.committed_delta)
         self._emit(
             "dictation_preview_changed",
             {
                 "committed": update.committed_text,
-                "pending": update.pending_text,
+                "pending": pending,
                 "hypothesis": update.hypothesis,
             },
         )
-        self._since_inference = 0
-        self._had_new_audio = False
-
-    @staticmethod
-    def _is_silent(audio: np.ndarray) -> bool:
-        if audio.size == 0:
-            return True
-        rms = float(np.sqrt(np.mean(np.square(audio, dtype=np.float64))))
-        return rms < ProcessDefaults.SILENCE_RMS_THRESHOLD
 
     @staticmethod
     def _numpy_to_wav(audio: np.ndarray, sample_rate: int) -> bytes:

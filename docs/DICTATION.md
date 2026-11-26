@@ -26,7 +26,7 @@ Python owns activation state, capture, inference, stability, settings and lifecy
 - `push_to_talk` (default): press and hold the registered global shortcut; release to finalize.
 - `toggle`: first activation starts Dictation and the next activation stops it.
 
-The actual shortcut binding is owned by the desktop through `org.freedesktop.portal.GlobalShortcuts`; UltraTranscribr does not use `xdotool`, `pynput` or X11-only global hooks.
+UltraTranscribr proposes `Meta+H` (`LOGO+h`) as the preferred trigger. The actual shortcut binding is owned by the desktop through `org.freedesktop.portal.GlobalShortcuts`; UltraTranscribr does not use `xdotool`, `pynput` or X11-only global hooks.
 
 ## Insertion modes
 
@@ -38,11 +38,12 @@ The actual shortcut binding is owned by the desktop through `org.freedesktop.por
 Initial defaults are deliberately isolated from normal Live:
 
 - microphone capture chunk: 250 ms;
-- inference step: 750 ms;
-- rolling Whisper window: 5 s;
+- inference step: at least 750 ms of new audio; each request takes every chunk queued while the previous one ran, so the queue never grows while speaking;
+- growing Whisper window: from the first word; from 25 s it is committed up to the last Whisper segment boundary (from the request's own timestamps) and restarted with the rest, or closed whole at 29 s if Whisper found no boundary;
+- requests run only when the audio added since the previous one contains speech (two 100 ms frames above the silence threshold);
 - minimum audio before inference: 1 s;
 - request timeout: 60 s;
-- prompt tail: 500 characters.
+- prompt: the last 500 characters of earlier segments only (Whisper skips speech it already finds in the prompt, and the current segment is re-transcribed each time).
 
 These values are benchmark starting points, not universal optimums. Use the validation tools before changing them globally.
 

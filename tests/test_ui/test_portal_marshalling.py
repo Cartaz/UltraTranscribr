@@ -90,6 +90,8 @@ def test_global_shortcuts_bind_uses_typed_array_of_structs():
     shortcut = request["body"][1][0]
     assert shortcut[0] == "dictation"
     assert shortcut[1]["description"].signature == "s"
+    assert shortcut[1]["preferred_trigger"].signature == "s"
+    assert shortcut[1]["preferred_trigger"].value == "LOGO+h"
     assert len(transport.subscriptions) == 2
 
 

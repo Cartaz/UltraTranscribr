@@ -69,7 +69,14 @@ class DictationDefaults:
 
     CAPTURE_CHUNK_MS = 250
     STEP_MS = 750
-    WINDOW_MS = 5000
+    # Whisper always encodes 30 s, so a long window costs no more encoder time;
+    # decoding grows with its words (Meteor Lake iGPU, beam 1: ~4 s per
+    # request at 5 s of speech, 5-7 s at 20-25 s). The window grows from the
+    # first word; from this length it is committed up to the last Whisper
+    # segment boundary and restarted from there. With no boundary it keeps
+    # growing and is closed whole at WINDOW_HARD_CAP_MS, under Whisper's 30 s.
+    WINDOW_MS = 25000
+    WINDOW_HARD_CAP_MS = 29000
     MIN_AUDIO_MS = 1000
     REQUEST_TIMEOUT_S = 60.0
     PROMPT_CHARS = 500
