@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from config.constants import AppMeta
@@ -16,7 +17,12 @@ class _Controller:
     def __init__(self, history: TranscriptHistoryStore) -> None:
         self.settings = Settings(language="it", model_size="medium")
         self.history = history
-        self.backend = object()
+        self.engine_sessions = 0
+
+    @contextmanager
+    def meeting_engine_session(self):
+        self.engine_sessions += 1
+        yield
 
     def active_live_count(self) -> int:
         return 0
@@ -24,9 +30,6 @@ class _Controller:
     def is_file_busy(self) -> bool:
         return False
 
-    def ensure_backend_started(self, **kwargs) -> None:
-        del kwargs
-        raise AssertionError("Whisper must not start during diarization-only rerun")
 
 
 class _ReadyModels:
@@ -39,9 +42,17 @@ class _ReadyModels:
 
 
 class _FailingDiarizer:
-    def run(self, path, *, num_speakers, progress=None):
-        del path, num_speakers, progress
+    def __init__(self) -> None:
+        self.runs = 0
+        self.releases = 0
+
+    def run(self, path, *, num_speakers, progress=None, cancelled=None):
+        del path, num_speakers, progress, cancelled
+        self.runs += 1
         raise RuntimeError("forced Community-1 failure")
+
+    def release(self) -> None:
+        self.releases += 1
 
 
 def _wait_until(predicate, timeout: float = 2.0) -> None:
@@ -126,6 +137,10 @@ def test_failed_rediarization_keeps_last_good_persisted_review(monkeypatch, tmp_
     started = manager.rerun_diarization(session_id, num_speakers=4)
     assert started["operation"] == "rediarization"
     _wait_until(lambda: manager.snapshot()["status"] == "error")
+    # The failure must come from Community-1 itself, not from the test harness.
+    assert "forced Community-1 failure" in manager.snapshot()["error"]
+    assert manager.diarizer.runs == 1 and manager.diarizer.releases == 1
+    assert controller.engine_sessions == 1
 
     persisted = manager.get(session_id)
     assert persisted is not None

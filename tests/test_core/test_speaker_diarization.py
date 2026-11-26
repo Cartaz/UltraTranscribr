@@ -252,3 +252,13 @@ def test_diarizer_stops_between_batches_when_cancelled(monkeypatch, tmp_path) ->
     with pytest.raises(sd.DiarizationCancelled):
         diarizer.run("meeting.flac", cancelled=lambda: len(batches) >= 3)
     assert len(batches) == 3
+
+
+def test_diarizer_does_not_load_the_model_once_cancelled(monkeypatch, tmp_path) -> None:
+    diarizer = sd.SpeakerDiarizer(sd.DiarizationModelManager(tmp_path))
+    loads = []
+    monkeypatch.setattr(diarizer, "_get_pipeline", lambda: loads.append(True))
+
+    with pytest.raises(sd.DiarizationCancelled):
+        diarizer.run("meeting.flac", cancelled=lambda: True)
+    assert loads == []

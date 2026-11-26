@@ -211,7 +211,14 @@ class SpeakerDiarizer:
         progress: Optional[Callable[[int], None]] = None,
         cancelled: Optional[Callable[[], bool]] = None,
     ) -> DiarizationResult:
+        def check_cancelled() -> None:
+            if cancelled is not None and cancelled():
+                raise DiarizationCancelled("Diarizzazione annullata")
+
+        # Loading and preprocessing make no pyannote hook calls: check around them.
+        check_cancelled()
         pipeline = self._get_pipeline()
+        check_cancelled()
         device = get_torch_xpu_device()
         del device
 
@@ -238,9 +245,9 @@ class SpeakerDiarizer:
             # pyannote calls this for every segmentation and embedding batch:
             # raising here is the only way to stop an in-process run early.
             del step_name, step_artifact, file, total, completed
-            if cancelled is not None and cancelled():
-                raise DiarizationCancelled("Diarizzazione annullata")
+            check_cancelled()
 
+        check_cancelled()
         if progress:
             progress(5)
         try:
