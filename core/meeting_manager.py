@@ -29,6 +29,7 @@ from core.meeting_capture import (
 from core.meeting_engine import (
     DEFAULT_MEETING_PIPELINE,
     LEGACY_WHISPER_PIPELINE,
+    QWEN_ASR_MODEL,
     QWEN_PIPELINES,
     MeetingEngineStillRunning,
     meeting_language,
@@ -241,7 +242,7 @@ class MeetingManager:
         source_name = selections[0].source if len(selections) == 1 else "multisource"
         source_path = "; ".join(self._selection_label(item) for item in selections)
         session_id = self.store.create(
-            model="Qwen3-ASR-1.7B",
+            model=QWEN_ASR_MODEL,
             language=settings.language,
             source=source_name,
             source_path=source_path,
@@ -310,7 +311,7 @@ class MeetingManager:
         )
         pipeline = self._validate_pipeline(pipeline, settings.language)
         session_id = self.store.create(
-            model="Qwen3-ASR-1.7B",
+            model=QWEN_ASR_MODEL,
             language=settings.language,
             source="file",
             source_path=str(source),
@@ -360,7 +361,7 @@ class MeetingManager:
         *,
         num_speakers: int = 0,
     ) -> dict[str, Any]:
-        """Recompute only speaker diarization from persisted audio + Whisper segments."""
+        """Recompute only speaker diarization from persisted audio + saved segments."""
         self._require_start_available()
         session_key = str(session_id or "").strip()
         meeting = self.store.get(session_key)
@@ -369,7 +370,7 @@ class MeetingManager:
         raw_segments = list(meeting.get("segments") or [])
         if not raw_segments:
             raise RuntimeError(
-                "La riunione non contiene segmenti Whisper timestampati da riutilizzare"
+                "La riunione non contiene segmenti timestampati da riutilizzare"
             )
         audio_path = self.store.recording_path(session_key)
         if audio_path is None:
@@ -984,11 +985,21 @@ class MeetingManager:
             provenance["last_diarization"] = worker.provenance
             self.store.set_processing_pipeline(runtime.id, runtime.pipeline, provenance)
         else:
-            result = self.diarizer.run(
-                audio_path,
-                num_speakers=runtime.num_speakers if runtime.num_speakers > 0 else -1,
-                progress=lambda percent: self._diarization_progress(runtime, percent),
-            )
+            # Pre-Qwen meeting: the in-process diarizer needs the GPU to itself,
+            # like the Qwen workers, and must not keep its weights afterwards.
+            with self._controller.meeting_engine_session():
+                try:
+                    result = self.diarizer.run(
+                        audio_path,
+                        num_speakers=(
+                            runtime.num_speakers if runtime.num_speakers > 0 else -1
+                        ),
+                        progress=lambda percent: self._diarization_progress(
+                            runtime, percent
+                        ),
+                    )
+                finally:
+                    self.diarizer.release()
             diarization = list(result.exclusive_segments)
             speaker_diarization = list(result.speaker_segments)
         if previous_diarization:
@@ -1258,7 +1269,11 @@ class MeetingManager:
             "sources": [dict(item) for item in runtime.sources],
             "source_path": runtime.source_path,
             "language": runtime.settings.language,
-            "model": runtime.settings.model_size,
+            "model": (
+                QWEN_ASR_MODEL
+                if runtime.pipeline in QWEN_PIPELINES
+                else runtime.settings.model_size
+            ),
             "num_speakers": runtime.num_speakers,
             "duration_s": round(duration, 1),
             "progress": runtime.progress,

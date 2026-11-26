@@ -36,10 +36,12 @@ class _Controller:
         self.live_count = 0
         self.file_busy = False
         self.backend_starts = 0
+        self.engine_sessions = 0
 
     @contextmanager
     def meeting_engine_session(self):
         self.backend.stop()
+        self.engine_sessions += 1
         yield
 
     def active_live_count(self) -> int:
@@ -181,9 +183,10 @@ class _Diarizer:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, int]] = []
+        self.releases = 0
 
     def release(self) -> None:
-        pass
+        self.releases += 1
 
     def run(self, path, *, num_speakers, progress=None):
         self.calls.append((str(path), int(num_speakers)))
@@ -404,6 +407,7 @@ def test_meeting_start_finish_processes_to_reviewable_session(
     )
     assert started["status"] == "recording"
     assert started["mode"] == "realtime"
+    assert started["model"] == "Qwen3-ASR-1.7B"  # not the Whisper setting
 
     finishing = manager.finish()
     assert finishing["status"] == "finishing"
@@ -476,11 +480,16 @@ def test_legacy_whisper_meeting_recomputes_voices_with_legacy_diarizer(
     transcript.model = "medium"  # the Whisper model it was transcribed with
     history._write_session(transcript)
     qwen_calls = len(_QwenWorker.calls)
+    sessions_before = controller.engine_sessions
+    releases_before = manager.diarizer.releases
 
     manager.rerun_diarization(session_id, num_speakers=2)
     _wait_until(lambda: manager.snapshot()["status"] == "completed")
 
     assert manager.diarizer.calls[-1][1] == 2
+    # Whisper is stopped for the run and the diarizer frees the GPU after it.
+    assert controller.engine_sessions == sessions_before + 1
+    assert manager.diarizer.releases == releases_before + 1
     assert len(_QwenWorker.calls) == qwen_calls
     assert manager.get(session_id)["meeting"]["num_speakers"] == 2
 

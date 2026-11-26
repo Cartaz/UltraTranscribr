@@ -426,7 +426,7 @@ ScrollView {
                         Metric {
                             Layout.fillWidth: true
                             label: 'Modello'
-                            value: meeting.runtime.pipeline === 'english_qwen' ? 'Qwen3 ASR' : Theme.modelName(meeting.runtime.model)
+                            value: Theme.modelName(meeting.runtime.model)
                         }
                         Metric {
                             Layout.fillWidth: true

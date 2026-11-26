@@ -433,7 +433,8 @@ QtObject {
         return {
             'large-v3': 'Large v3',
             'large-v3-turbo': 'Large v3 Turbo',
-            'medium': 'Medium'
+            'medium': 'Medium',
+            'Qwen3-ASR-1.7B': 'Qwen3 ASR'
         }[v] || v || '—';
     }
     function sourceName(v) {
