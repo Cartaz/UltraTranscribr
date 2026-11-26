@@ -6,7 +6,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV="$ROOT/.venv"
 CACHE="$ROOT/.cache"
 WCPP="$CACHE/whisper.cpp"
-WHISPER_REF="${ULTRATRANSCRIBR_WHISPER_REF:-master}"
+# Revisione whisper.cpp validata su Arc (SYCL, oneAPI 2026.0) con la patch dei
+# tempi VAD. Aggiornarla solo dopo il collaudo Live/File sull'hardware.
+WHISPER_DEFAULT_REF="284029c07012d2000941a08d38a31ffb71f4734e"
+WHISPER_REF="${ULTRATRANSCRIBR_WHISPER_REF:-$WHISPER_DEFAULT_REF}"
 ONEAPI="/opt/intel/oneapi"
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 REQ_MARKER="$VENV/.ultratranscribr-requirements.sha256"

@@ -105,15 +105,15 @@ Le installazioni precedenti che contenevano gli strumenti sperimentali Parakeet 
 
 Demucs non è più un componente opzionale dell'installazione. L'opzione **Isola voce** resta una scelta dell'utente durante la trascrizione musicale, ma quando viene richiesta deve funzionare sul runtime XPU: UltraTranscribr non continua silenziosamente sul file originale e non ripiega sulla CPU.
 
-Per impostazione predefinita l'installer risolve `master` di `ggml-org/whisper.cpp` alla SHA più recente disponibile al momento dell'installazione. La SHA effettivamente installata viene registrata in `.venv/.ultratranscribr-whisper-revision`: se al successivo `./install.sh` la revisione e la configurazione di build non sono cambiate, la compilazione viene saltata; se upstream è avanzato o cambia la configurazione di build, viene pulita e ricompilata soltanto la directory di build di whisper.cpp, senza ricreare la `.venv` Python.
+Per impostazione predefinita l'installer compila la revisione di `ggml-org/whisper.cpp` validata con questa versione (`284029c07012`, fissata in `install.sh`): `master` cambia di continuo e la patch dei tempi VAD o la build SYCL possono rompersi senza preavviso. La SHA installata viene registrata in `.venv/.ultratranscribr-whisper-revision`: se al successivo `./install.sh` la revisione e la configurazione di build non sono cambiate, la compilazione viene saltata; se cambiano, viene pulita e ricompilata soltanto la directory di build di whisper.cpp, senza ricreare la `.venv` Python.
 
-Per usare un tag, branch o commit specifico invece dell'ultimo `master`:
+Per provare un tag, branch o commit diverso (ad esempio l'ultimo `master`):
 
 ```bash
-ULTRATRANSCRIBR_WHISPER_REF=v1.9.3 ./install.sh
+ULTRATRANSCRIBR_WHISPER_REF=master ./install.sh
 ```
 
-È possibile passare anche una SHA completa. Questo override è utile per riprodurre una build nota o bloccare temporaneamente un aggiornamento upstream problematico.
+È possibile passare anche una SHA completa. Una revisione diversa da quella fissata non è collaudata: se la patch dei tempi non si applica l'installer si ferma prima di compilare.
 
 Per forzare la ricompilazione della revisione selezionata:
 

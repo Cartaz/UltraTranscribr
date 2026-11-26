@@ -14,7 +14,6 @@ from core.audio_inputs import AudioInputResolver, AudioInputSelection
 from core.english_models import EnglishModelManager
 from core.english_pipeline import EnglishMeetingThread
 from core.event_bus import EventBus
-from core.file_transcriber import FileTranscriberThread
 from core.meeting_alignment import (
     align_speakers,
     build_speaker_id_mapping,
@@ -29,6 +28,7 @@ from core.meeting_capture import (
 )
 from core.meeting_engine import (
     DEFAULT_MEETING_PIPELINE,
+    LEGACY_WHISPER_PIPELINE,
     QWEN_PIPELINES,
     MeetingEngineStillRunning,
     meeting_language,
@@ -38,7 +38,6 @@ from core.meeting_store import MeetingStore
 from core.microphone_recording import MicrophoneRecorder, RecordingInfo
 from core.speaker_diarization import DiarizationModelManager, SpeakerDiarizer
 from core.transcript_history import TranscriptHistoryStore
-from core.whisper_backend import WhisperBackend
 
 logger = logging.getLogger(__name__)
 
@@ -52,21 +51,11 @@ class MeetingController(Protocol):
     @property
     def history(self) -> TranscriptHistoryStore: ...
 
-    @property
-    def backend(self) -> WhisperBackend: ...
-
     def active_live_count(self) -> int: ...
 
     def is_file_busy(self) -> bool: ...
 
     def meeting_engine_session(self): ...
-
-    def ensure_backend_started(
-        self,
-        *,
-        vad: Optional[bool] = None,
-        settings: Optional[Settings] = None,
-    ) -> None: ...
 
 
 @dataclass
@@ -75,7 +64,7 @@ class MeetingRuntime:
     mode: str
     settings: Settings
     num_speakers: int
-    pipeline: str = "whisper"
+    pipeline: str = DEFAULT_MEETING_PIPELINE
     processing_stage: str = ""
     sources: list[dict[str, Any]] = field(default_factory=list)
     source_path: str = ""
@@ -84,7 +73,7 @@ class MeetingRuntime:
     status: str = "recording"
     progress: int = 0
     diarization_progress: int = 0
-    transcriber: FileTranscriberThread | EnglishMeetingThread | None = None
+    transcriber: EnglishMeetingThread | None = None
     preparation_thread: Optional[threading.Thread] = None
     processing_thread: Optional[threading.Thread] = None
     control_thread: Optional[threading.Thread] = None
@@ -252,9 +241,7 @@ class MeetingManager:
         source_name = selections[0].source if len(selections) == 1 else "multisource"
         source_path = "; ".join(self._selection_label(item) for item in selections)
         session_id = self.store.create(
-            model="Qwen3-ASR-1.7B"
-            if pipeline in QWEN_PIPELINES
-            else settings.model_size,
+            model="Qwen3-ASR-1.7B",
             language=settings.language,
             source=source_name,
             source_path=source_path,
@@ -270,8 +257,7 @@ class MeetingManager:
             for index, selection in enumerate(selections)
         ]
         self.store.set_source_recordings(session_id, planned_sources)
-        if pipeline != "whisper":
-            self.store.set_processing_pipeline(session_id, pipeline)
+        self.store.set_processing_pipeline(session_id, pipeline)
         capture = MeetingCaptureSession(
             session_id,
             settings,
@@ -324,9 +310,7 @@ class MeetingManager:
         )
         pipeline = self._validate_pipeline(pipeline, settings.language)
         session_id = self.store.create(
-            model="Qwen3-ASR-1.7B"
-            if pipeline in QWEN_PIPELINES
-            else settings.model_size,
+            model="Qwen3-ASR-1.7B",
             language=settings.language,
             source="file",
             source_path=str(source),
@@ -343,8 +327,7 @@ class MeetingManager:
             }
         ]
         self.store.set_source_recordings(session_id, planned)
-        if pipeline != "whisper":
-            self.store.set_processing_pipeline(session_id, pipeline)
+        self.store.set_processing_pipeline(session_id, pipeline)
         runtime = MeetingRuntime(
             id=session_id,
             mode="file",
@@ -416,7 +399,9 @@ class MeetingManager:
             channels=int(recording.get("channels") or 1),
             format=str(recording.get("format") or "flac"),
         )
-        pipeline_id = (metadata.get("processing_pipeline") or {}).get("id", "whisper")
+        pipeline_id = (metadata.get("processing_pipeline") or {}).get(
+            "id", LEGACY_WHISPER_PIPELINE
+        )
         status_models = (
             self.english_diarization_models
             if pipeline_id in QWEN_PIPELINES
@@ -646,8 +631,6 @@ class MeetingManager:
             transcriber = runtime.transcriber
             if transcriber is not None:
                 transcriber.stop()
-                if transcriber.is_alive() and runtime.pipeline not in QWEN_PIPELINES:
-                    self._controller.backend.abort_active_request()
                 if (
                     transcriber.is_alive()
                     and transcriber is not threading.current_thread()
@@ -786,8 +769,6 @@ class MeetingManager:
         transcriber = runtime.transcriber
         if transcriber is not None:
             transcriber.stop()
-            if transcriber.is_alive():
-                self._controller.backend.abort_active_request()
             if transcriber.is_alive() and transcriber is not current:
                 transcriber.join(timeout=self._TRANSCRIBER_JOIN_TIMEOUT_S)
                 if transcriber.is_alive():
@@ -830,35 +811,13 @@ class MeetingManager:
         try:
             if runtime.stop_event.is_set() or self._shutdown_event.is_set():
                 return
-            if runtime.pipeline in QWEN_PIPELINES:
-                worker = self._run_qwen_worker(
-                    runtime,
-                    info.path,
-                    event_sink=lambda event, payload: self._transcription_event(
-                        runtime, event, payload
-                    ),
-                )
-            else:
-                self._controller.ensure_backend_started(
-                    vad=runtime.settings.vad_filter,
-                    settings=runtime.settings,
-                )
-                if runtime.stop_event.is_set() or self._shutdown_event.is_set():
-                    return
-                worker = FileTranscriberThread(
-                    info.path,
-                    self._controller.backend,
-                    runtime.settings,
-                    language=runtime.settings.language,
-                    event_sink=lambda event, payload: self._transcription_event(
-                        runtime, event, payload
-                    ),
-                    thread_name=f"MeetingTranscriber-{runtime.id}",
-                )
-            if runtime.pipeline not in QWEN_PIPELINES:
-                runtime.transcriber = worker
-                worker.start()
-                worker.join()
+            worker = self._run_qwen_worker(
+                runtime,
+                info.path,
+                event_sink=lambda event, payload: self._transcription_event(
+                    runtime, event, payload
+                ),
+            )
             if (
                 runtime.stop_event.is_set()
                 or self._shutdown_event.is_set()
@@ -874,20 +833,12 @@ class MeetingManager:
                     "Il riconoscitore non ha prodotto segmenti timestampati"
                 )
 
-            if runtime.pipeline in QWEN_PIPELINES:
-                diarization = list(worker.exclusive_segments)
-                speaker_diarization = list(worker.speaker_segments)
-                review = align_speakers(raw_segments, diarization, speaker_diarization)
-                self.store.set_processing_pipeline(
-                    runtime.id, runtime.pipeline, worker.provenance
-                )
-            else:
-                diarization, speaker_diarization, review = self._compute_diarization(
-                    runtime,
-                    info.path,
-                    raw_segments,
-                    persist_transient_status=True,
-                )
+            diarization = list(worker.exclusive_segments)
+            speaker_diarization = list(worker.speaker_segments)
+            review = align_speakers(raw_segments, diarization, speaker_diarization)
+            self.store.set_processing_pipeline(
+                runtime.id, runtime.pipeline, worker.provenance
+            )
             if runtime.stop_event.is_set() or self._shutdown_event.is_set():
                 return
             self.store.set_diarization(
@@ -1218,23 +1169,23 @@ class MeetingManager:
 
     def _validate_pipeline(self, pipeline: str, language: str) -> str:
         selected = str(pipeline or DEFAULT_MEETING_PIPELINE)
-        if selected not in {"whisper", *QWEN_PIPELINES}:
+        if selected not in QWEN_PIPELINES:
+            # Whisper no longer transcribes new meetings; old ones stay readable.
             raise ValueError("Percorso di trascrizione non valido")
-        if selected in QWEN_PIPELINES:
-            if selected == "english_qwen" and language != "en":
-                raise ValueError(
-                    "Il percorso Qwen verificato richiede la lingua inglese (en)"
-                )
-            meeting_language(language)
-            self.english_models.dependencies()
-            if self.english_models.missing():
-                raise RuntimeError(
-                    "Prepara i modelli delle riunioni prima di avviare la riunione"
-                )
-            if not self.english_diarization_models.status()["ready"]:
-                raise RuntimeError(
-                    "Prepara i modelli degli interlocutori prima di avviare la riunione"
-                )
+        if selected == "english_qwen" and language != "en":
+            raise ValueError(
+                "Il percorso Qwen verificato richiede la lingua inglese (en)"
+            )
+        meeting_language(language)
+        self.english_models.dependencies()
+        if self.english_models.missing():
+            raise RuntimeError(
+                "Prepara i modelli delle riunioni prima di avviare la riunione"
+            )
+        if not self.english_diarization_models.status()["ready"]:
+            raise RuntimeError(
+                "Prepara i modelli degli interlocutori prima di avviare la riunione"
+            )
         return selected
 
     def _require_start_available(self) -> None:

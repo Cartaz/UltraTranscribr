@@ -9,6 +9,10 @@ ALIGNMENT_LANGUAGES = {
 }
 QWEN_PIPELINES = {"qwen_meeting", "english_qwen"}
 DEFAULT_MEETING_PIPELINE = "qwen_meeting"
+# Meetings saved before Qwen carry no processing_pipeline (or "whisper"). They
+# stay readable and their voices can be recomputed with the legacy diarizer,
+# but new meetings always run on Qwen.
+LEGACY_WHISPER_PIPELINE = "whisper"
 
 
 class MeetingEngineStillRunning(RuntimeError):

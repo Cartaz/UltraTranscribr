@@ -7,7 +7,7 @@ import uuid
 from PySide6.QtCore import Property, QTimer, QUrl, Signal, Slot
 
 from core.meeting_alignment import speaker_label
-from core.meeting_engine import ALIGNMENT_LANGUAGES
+from core.meeting_engine import ALIGNMENT_LANGUAGES, DEFAULT_MEETING_PIPELINE
 from core.review_timeline import ReviewTimeline
 from ui.adapters.base import Adapter, choose_files, export_session
 from ui.models import RecordModel
@@ -59,11 +59,11 @@ class MeetingAdapter(Adapter):
         self.drafts = RecordModel(parent=self)
         self.pipelines = RecordModel(
             [
-                {"value": "qwen_meeting", "name": "Qwen · Riunioni"},
+                {"value": DEFAULT_MEETING_PIPELINE, "name": "Qwen · Riunioni"},
             ],
             self,
         )
-        self._pipeline = "qwen_meeting"
+        self._pipeline = DEFAULT_MEETING_PIPELINE
         self._english_status = {
             "ready": False,
             "busy": False,
@@ -115,8 +115,7 @@ class MeetingAdapter(Adapter):
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self.changed)
         self._timer.start()
-        if hasattr(self.application, "english_pipeline_status"):
-            QTimer.singleShot(0, self.refreshEnglish)
+        QTimer.singleShot(0, self.refreshEnglish)
 
     @Property(str, notify=changed)
     def language(self):
@@ -168,12 +167,11 @@ class MeetingAdapter(Adapter):
 
     @Slot()
     def refreshEnglish(self):
-        if hasattr(self.application, "english_pipeline_status"):
-            self.background(
-                "qml-english-status",
-                self.application.english_pipeline_status,
-                self._english_status_received,
-            )
+        self.background(
+            "qml-english-status",
+            self.application.english_pipeline_status,
+            self._english_status_received,
+        )
 
     @Slot()
     def prepareEnglish(self):
@@ -204,9 +202,9 @@ class MeetingAdapter(Adapter):
 
     @Slot(str, result=bool)
     def selectPipeline(self, value):
-        if value not in {"qwen_meeting"}:
+        if value != DEFAULT_MEETING_PIPELINE:
             return False
-        if value == "qwen_meeting" and not self._english_status.get("ready"):
+        if not self._english_status.get("ready"):
             self.feedback.show("Prepara i modelli delle riunioni prima di avviare")
             return False
         self._pipeline = value
@@ -352,11 +350,7 @@ class MeetingAdapter(Adapter):
                         "path": p,
                         "language": language,
                         "num_speakers": speakers,
-                        **(
-                            {"pipeline": self._pipeline}
-                            if self._pipeline != "whisper"
-                            else {}
-                        ),
+                        "pipeline": self._pipeline,
                     }
                     for p in values
                 ]
@@ -374,15 +368,12 @@ class MeetingAdapter(Adapter):
     def editDraft(self, index, key, value):
         if key not in {"language", "num_speakers", "pipeline"}:
             return False
-        if (
-            key == "pipeline"
-            and value == "qwen_meeting"
-            and not self._english_status.get("ready")
-        ):
-            self.feedback.show("Prepara i modelli delle riunioni prima di avviare")
-            return False
-        if key == "pipeline" and value not in {"qwen_meeting"}:
-            return False
+        if key == "pipeline":
+            if value != DEFAULT_MEETING_PIPELINE:
+                return False
+            if not self._english_status.get("ready"):
+                self.feedback.show("Prepara i modelli delle riunioni prima di avviare")
+                return False
 
         def edit():
             fields = {key: value}
@@ -416,11 +407,7 @@ class MeetingAdapter(Adapter):
                     self.sources.rows(),
                     language=language or None,
                     num_speakers=speakers,
-                    **(
-                        {"pipeline": self._pipeline}
-                        if self._pipeline != "whisper"
-                        else {}
-                    ),
+                    pipeline=self._pipeline,
                 )
             )
             if value:

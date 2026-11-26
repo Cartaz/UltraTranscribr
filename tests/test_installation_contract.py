@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -69,10 +70,11 @@ def test_install_script_skips_unchanged_expensive_steps() -> None:
     assert "ULTRATRANSCRIBR_FORCE_REBUILD" in source
 
 
-def test_installer_tracks_latest_whisper_ref_by_exact_revision() -> None:
+def test_installer_pins_the_validated_whisper_revision() -> None:
     source = (ROOT / "install.sh").read_text(encoding="utf-8")
 
-    assert 'WHISPER_REF="${ULTRATRANSCRIBR_WHISPER_REF:-master}"' in source
+    assert re.search(r'^WHISPER_DEFAULT_REF="[0-9a-f]{40}"$', source, re.MULTILINE)
+    assert 'WHISPER_REF="${ULTRATRANSCRIBR_WHISPER_REF:-$WHISPER_DEFAULT_REF}"' in source
     assert "\nPIN=" not in source
     assert 'git -C "$WCPP" fetch --force --depth 1 origin "$WHISPER_REF"' in source
     assert "rev-parse 'FETCH_HEAD^{commit}'" in source

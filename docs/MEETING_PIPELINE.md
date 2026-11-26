@@ -52,7 +52,7 @@ Il modello Community-1 viene scaricato una sola volta nella cache XDG dell'appli
 
 ## Word-level speaker alignment
 
-Whisper viene interrogato in `verbose_json` con token timestamps. `FileTranscriberThread` conserva i record `words` insieme ai segmenti canonici nello storico Python:
+Riunioni precedenti a Qwen (sola lettura e ricalcolo voci): Whisper veniva interrogato in `verbose_json` con token timestamps. `FileTranscriberThread` conserva i record `words` insieme ai segmenti canonici nello storico Python:
 
 ```text
 segment
