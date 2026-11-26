@@ -146,4 +146,4 @@ Le nuove catture conservano tracce e mix a 48 kHz mono per l'ascolto, con un der
 segnalati. Testo e speaker si salvano automaticamente; Undo/Redo appartengono al
 documento persistente. Lista compatta, Due colonne e Documento continuo condividono
 la stessa revisione e possono seguire l'audio. Vedi il
-[rapporto di verifica UX](UX_IMPLEMENTATION_2026-10-29.md) per prove e limiti.
+[rapporto di verifica UX](archive/UX_IMPLEMENTATION_2026-10-29.md) per prove e limiti.

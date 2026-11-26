@@ -10,7 +10,7 @@ La configurazione di riferimento è CachyOS/Arch Linux con GPU Intel e due runti
 La revisione offre **Lista compatta**, **Due colonne** e **Documento continuo**,
 con autosalvataggio, Undo/Redo persistenti e sincronizzazione con l'audio.
 Le nuove Riunioni conservano l'originale per l'ascolto separato dal derivato per i modelli.
-Dettagli e limiti verificati: [rapporto UX](docs/UX_IMPLEMENTATION_2026-10-29.md).
+Dettagli e limiti verificati: [rapporto UX](docs/archive/UX_IMPLEMENTATION_2026-10-29.md).
 
 ## Funzioni principali
 
@@ -273,8 +273,8 @@ Verifica locale: `QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software pytest -q`
 
 Per rigenerare lo shader: `pyside6-qsb --qt6 -o ui/qml/shaders/inset.frag.qsb ui/qml/shaders/inset.frag`. Per catturare le schermate con dati isolati: `python tools/capture_ui.py --output tests/visual/after`. Il fixture sostituisce esclusivamente il rilevamento GPU: non esegue inferenza e non introduce un fallback CPU nel programma.
 
-Audit e limiti di accettazione del porting: [docs/QML_AUDIT_2026-10-01.md](docs/QML_AUDIT_2026-10-01.md).
+Audit e limiti di accettazione del porting: [docs/archive/QML_AUDIT_2026-10-01.md](docs/archive/QML_AUDIT_2026-10-01.md).
 
-Correzioni successive e prove sul desktop reale con riunioni lunghe: [docs/POST_AUDIT_2026-10-25.md](docs/POST_AUDIT_2026-10-25.md).
+Correzioni successive e prove sul desktop reale con riunioni lunghe: [docs/archive/POST_AUDIT_2026-10-25.md](docs/archive/POST_AUDIT_2026-10-25.md).
 
-Collaudo di Whisper/SYCL, diarizzazione, Live e registrazione con audio reale: [docs/RELEASE_VALIDATION_2026-10-26.md](docs/RELEASE_VALIDATION_2026-10-26.md).
+Collaudo di Whisper/SYCL, diarizzazione, Live e registrazione con audio reale: [docs/archive/RELEASE_VALIDATION_2026-10-26.md](docs/archive/RELEASE_VALIDATION_2026-10-26.md).

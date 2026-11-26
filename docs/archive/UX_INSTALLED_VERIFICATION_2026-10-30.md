@@ -52,7 +52,7 @@ minima i pannelli si dispongono in colonna. Le verifiche visive usano finestre
 create a 1200×800, 1650×930 e 1920×1052, con dimensioni PNG corrispondenti.
 Nell’ultima prova il compositor limita a 1052 px l’altezza utile richiesta di 1080 px.
 
-![File: selezione e coda affiancate](ux/screenshots/file-affiancati-native.png)
+![File: selezione e coda affiancate](../ux/screenshots/file-affiancati-native.png)
 
 ## Matrice di verifica
 
