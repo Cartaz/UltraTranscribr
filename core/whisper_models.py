@@ -70,10 +70,6 @@ class WhisperModelManager:
             return target
         return self._download_asset(_VAD_REPOS, filename, target, 100_000)
 
-    def is_model_cached(self, model_size: str) -> bool:
-        target = self._models_dir / self._resolve_filename(model_size)
-        return self._is_valid_cached(target, _MIN_MODEL_BYTES[model_size])
-
     def get_model_info(self, model_size: str) -> dict[str, object]:
         """Return cheap inventory information without hashing multi-GB files."""
         self._require_known_model(model_size)

@@ -48,7 +48,6 @@ class ComputeDevice(str, Enum):
 class AudioSource(str, Enum):
     SYSTEM = "system"
     APPLICATION = "application"
-    FIREFOX = "system"
     MICROPHONE = "microphone"
 
     @classmethod
@@ -86,12 +85,22 @@ INTEGER_FIELDS = {
     "buffer_warn_threshold",
     "history_retention_days",
     "meeting_audio_retention_days",
-    "gpu_layers",
     "server_port",
     "backend_instances",
     "window_width",
     "window_height",
 }
+# Changing any of these restarts whisper-server with the new configuration.
+BACKEND_SETTING_KEYS = frozenset(
+    {
+        "model_size",
+        "beam_size",
+        "vad_filter",
+        "vad_min_silence_ms",
+        "server_port",
+        "backend_instances",
+    }
+)
 BOOLEAN_FIELDS = {"vad_filter", "live_microphone_recording", "preload_model"}
 SUPPORTED_LANGUAGES = frozenset(
     "en zh de es ru ko fr ja pt tr pl ca nl ar sv it id hi fi vi he uk el ms cs ro da hu ta no th ur hr bg lt la mi ml cy sk te fa lv bn sr az sl kn et mk br eu is hy ne mn bs kk sq sw gl mr pa si km sn yo so af oc ka be tg sd gu am yi lo uz fo ht ps tk nn mt sa lb my bo tl mg as tt haw ln ha ba jw su yue auto".split()
@@ -121,7 +130,6 @@ class Settings:
 
     model_size: str = ProcessDefaults.MODEL_SIZE
     device: str = ComputeDevice.SYCL.value
-    compute_type: str = ProcessDefaults.COMPUTE_TYPE
     language: str = ProcessDefaults.LANGUAGE
     audio_source: str = AudioSource.SYSTEM.value
     beam_size: int = ProcessDefaults.BEAM_SIZE
@@ -135,7 +143,6 @@ class Settings:
     sink_name: Optional[str] = None
     sink_search_keyword: str = ProcessDefaults.SINK_SEARCH_KEYWORD
 
-    gpu_layers: int = SYCLDefaults.GPU_LAYERS
     server_port: int = SYCLDefaults.PORT
     backend_instances: int = 1
     preload_model: bool = False
@@ -169,8 +176,6 @@ class Settings:
             "sample_rate": ProcessDefaults.SAMPLE_RATE,
             "device": "sycl",
             "dtype": "float32",
-            "gpu_layers": SYCLDefaults.GPU_LAYERS,
-            "compute_type": ProcessDefaults.COMPUTE_TYPE,
         }
         for key, expected in fixed.items():
             if getattr(self, key) != expected:

@@ -113,14 +113,10 @@ git rev-parse HEAD
 ## SYS-004 — Sintassi frontend — P0
 
 ```fish
-node --check ui/web/app.js
-node --check ui/web/multi_live.js
-node --check ui/web/settings_cleanup.js
-node --check ui/web/file_history.js
-node --check ui/web/meeting.js
+.venv/bin/pyside6-qmllint --unqualified info -I ui/qml ui/qml/*.qml
 ```
 
-**Atteso**: tutti i comandi terminano con exit code `0`.
+**Atteso**: il comando termina con exit code `0` e nessun `Warning`/`Error`.
 
 **Esito**: [ ] PASS [ ] FAIL [ ] SKIP
 
@@ -1098,15 +1094,15 @@ Eseguire Live + File + brevi Dictation compatibili per almeno 10 minuti.
 
 # 20. Sicurezza e confini desktop
 
-## SYS-800 — Navigazione WebEngine esterna — P0
+## SYS-800 — Nessun WebEngine a runtime — P0
 
-**Atteso**: contenuti HTTP(S) esterni non vengono caricati nella WebEngine locale; eventuali link esterni usano il browser di sistema.
+**Atteso**: l'interfaccia è solo Qt Quick/QML; durante l'uso non viene caricato alcun modulo `QtWebEngine` o `QtWebChannel` e nessun contenuto HTTP(S) esterno viene aperto nell'applicazione.
 
 **Esito**: [ ] PASS [ ] FAIL [ ] SKIP
 
-## SYS-801 — Un solo QWebChannel applicativo — P0
+## SYS-801 — Overlay Dictation presentation-only — P0
 
-**Atteso**: overlay Dictation non crea un secondo backend QWebChannel e resta presentation-only.
+**Atteso**: l'overlay Dictation è una finestra QML locale che non prende il focus e non espone operazioni applicative.
 
 **Esito**: [ ] PASS [ ] FAIL [ ] SKIP
 
@@ -1118,7 +1114,7 @@ Eseguire Live + File + brevi Dictation compatibili per almeno 10 minuti.
 
 ## SYS-803 — Restore token non esposto alla UI — P0
 
-**Atteso**: il token RemoteDesktop non compare nel bootstrap QWebChannel, nelle impostazioni frontend o nei log normali.
+**Atteso**: il token RemoteDesktop non compare nello stato esposto al QML, nelle impostazioni o nei log normali.
 
 **Esito**: [ ] PASS [ ] FAIL [ ] SKIP
 

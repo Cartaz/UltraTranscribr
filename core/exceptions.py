@@ -7,9 +7,6 @@ cattura e le presenta all'utente con messaggio localizzato.
 
 Classes:
     AppError: Eccezione base dell'applicazione.
-    ConfigError: Errore nella configurazione.
-    AudioCaptureError: Errore nella cattura audio.
-    TranscriptionError: Errore nella trascrizione.
     SinkNotFoundError: Sink audio non trovato.
     GPUNotAvailableError: GPU Intel Arc / SYCL non disponibili.
 """
@@ -35,24 +32,6 @@ class AppError(Exception):
         if self.detail:
             return f"{self.message}\n{self.detail}"
         return self.message
-
-
-class ConfigError(AppError):
-    """Errore nella configurazione o nelle impostazioni."""
-
-    pass
-
-
-class AudioCaptureError(AppError):
-    """Errore nella cattura audio dal dispositivo."""
-
-    pass
-
-
-class TranscriptionError(AppError):
-    """Errore durante la trascrizione con whisper-server."""
-
-    pass
 
 
 class SinkNotFoundError(AppError):

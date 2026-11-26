@@ -2,7 +2,6 @@
 """Test per il BufferManager dell'applicazione unificata."""
 
 import numpy as np
-import pytest
 
 from core.buffer_manager import BufferManager
 
@@ -30,12 +29,12 @@ class TestBufferManager:
         buf = BufferManager()
         assert buf.buffer_level == 0
 
-    def test_is_buffering_threshold(self) -> None:
-        """is_buffering deve essere True oltre la soglia di warning."""
+    def test_buffer_level_crosses_warning_threshold(self) -> None:
+        """buffer_level supera 100 oltre la soglia di warning."""
         buf = BufferManager(warn_threshold=3)
         for i in range(4):
             buf.put(np.ones(100, dtype=np.float32))
-        assert buf.is_buffering
+        assert buf.buffer_level > 100
 
     def test_clear(self) -> None:
         """clear deve svuotare il buffer."""
@@ -45,16 +44,6 @@ class TestBufferManager:
         count = buf.clear()
         assert count == 5
         assert buf.is_empty
-
-    def test_total_put_get_counters(self) -> None:
-        """I contatori total_put e total_get devono tracciare le operazioni."""
-        buf = BufferManager()
-        chunk = np.ones(100, dtype=np.float32)
-        buf.put(chunk)
-        buf.put(chunk)
-        assert buf.total_put == 2
-        buf.get_nowait()
-        assert buf.total_get == 1
 
 
 def test_put_never_calls_metrics_sink_on_the_producer_thread() -> None:

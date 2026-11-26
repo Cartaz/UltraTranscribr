@@ -2,3 +2,8 @@
 # installed explicitly by install.sh from the official PyTorch XPU/CPU indexes.
 pyannote.audio==4.0.7
 demucs-infer==4.2.2
+# Security floors for transitive dependencies (pip-audit, 2026-11).
+setuptools>=84.1.0  # GHSA-xmj3-9gf7-h52w, PYSEC-2026-3447; required by torch
+opentelemetry-api>=1.45.2  # CVE-2026-126360; pulled in by pyannote.audio
+opentelemetry-sdk>=1.45.2
+opentelemetry-exporter-otlp>=1.45.2

@@ -58,12 +58,6 @@ def find_system_monitor(*, pactl_runner: Optional[PactlRunner] = None) -> Option
     return None
 
 
-def find_firefox_sink(settings: Settings | None = None) -> Optional[str]:
-    """Alias legacy: dalla v5.3 Firefox è sostituito dall'audio di sistema."""
-    del settings
-    return find_system_monitor()
-
-
 def find_microphone(settings: Settings | None = None) -> Optional[str]:
     """Trova il microfono, preferendo un override keyword se configurato."""
     if settings is None:
@@ -106,11 +100,6 @@ def list_available_devices() -> list[dict]:
         })
 
     return devices
-
-
-def list_all_monitor_sources() -> list[dict]:
-    """Restituisce soltanto le sorgenti monitor disponibili."""
-    return [d for d in list_available_devices() if d["is_monitor"]]
 
 
 def _default_sink_name_via_pactl(runner: PactlRunner) -> Optional[str]:
@@ -231,52 +220,3 @@ def _find_mic_via_sounddevice(keyword: str = "") -> Optional[str]:
             return name
     return None
 
-
-def debug_dump(*, pactl_runner: Optional[PactlRunner] = None) -> str:
-    """Dump diagnostico; pactl viene interrogato solo con ownership esplicita."""
-    lines: list[str] = []
-    lines.append("=== default playback ===")
-    if pactl_runner is None:
-        lines.append("  default sink: non interrogato (runner applicativo richiesto)")
-        lines.append(
-            f"  system monitor: {_find_default_monitor_via_sounddevice() or 'non disponibile'}"
-        )
-    else:
-        lines.append(
-            f"  default sink: {_default_sink_name_via_pactl(pactl_runner) or 'non disponibile'}"
-        )
-        lines.append(
-            f"  system monitor: {find_system_monitor(pactl_runner=pactl_runner) or 'non disponibile'}"
-        )
-
-    lines.append("")
-    lines.append("=== sounddevice devices (input only) ===")
-    try:
-        devices = sd.query_devices()
-        for i, dev in enumerate(devices):
-            if dev.get("max_input_channels", 0) > 0:
-                lines.append(f"  [{i}] {dev.get('name', '?')}")
-                lines.append(
-                    f"      channels={dev.get('max_input_channels')} "
-                    f"rate={dev.get('default_samplerate')}"
-                )
-    except Exception as exc:
-        lines.append(f"  Errore: {exc}")
-
-    lines.append("")
-    lines.append("=== pactl sources (monitors) ===")
-    if pactl_runner is None:
-        lines.append("  non interrogato (runner applicativo richiesto)")
-    else:
-        sources = pactl_runner.run(["list", "short", "sources"])
-        if sources is None:
-            lines.append("  pactl non disponibile")
-        else:
-            found = False
-            for line in sources.splitlines():
-                if ".monitor" in line or "monitor" in line.lower():
-                    lines.append(f"  {line}")
-                    found = True
-            if not found:
-                lines.append("  nessun monitor")
-    return "\n".join(lines)

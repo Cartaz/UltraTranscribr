@@ -10,8 +10,6 @@ from typing import Iterator, Optional
 import sounddevice as sd
 
 logger = logging.getLogger(__name__)
-_UNSET = object()
-_saved_pulse_source: object | str | None = _UNSET
 _pulse_source_lock = threading.RLock()
 
 
@@ -64,26 +62,3 @@ def temporary_pulse_source(source_name: str) -> Iterator[None]:
                 os.environ["PULSE_SOURCE"] = original
             logger.info("PULSE_SOURCE temporaneo ripristinato")
 
-
-def set_pulse_source(source_name: str) -> None:
-    """Legacy helper retained for callers/tests outside the multi-session path."""
-    global _saved_pulse_source
-    with _pulse_source_lock:
-        if _saved_pulse_source is _UNSET:
-            _saved_pulse_source = os.environ.get("PULSE_SOURCE")
-        os.environ["PULSE_SOURCE"] = source_name
-        logger.info("PULSE_SOURCE impostato a %s", source_name)
-
-
-def restore_pulse_source() -> None:
-    global _saved_pulse_source
-    with _pulse_source_lock:
-        if _saved_pulse_source is _UNSET:
-            return
-        if _saved_pulse_source is None:
-            os.environ.pop("PULSE_SOURCE", None)
-            logger.info("PULSE_SOURCE rimosso")
-        else:
-            os.environ["PULSE_SOURCE"] = str(_saved_pulse_source)
-            logger.info("PULSE_SOURCE ripristinato a %s", _saved_pulse_source)
-        _saved_pulse_source = _UNSET

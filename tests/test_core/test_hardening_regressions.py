@@ -33,7 +33,7 @@ def test_music_preserves_repetitions():
     assert deduplicate_text(text, preserve_repetitions=True) == text
 
 
-def test_buffer_spill_is_fifo_and_stats_reset():
+def test_buffer_spill_is_fifo_and_clear_empties_it():
     b = BufferManager(warn_threshold=2, max_memory_chunks=2)
     chunks = [np.full(8, i, dtype=np.float32) for i in range(7)]
     for chunk in chunks:
@@ -43,7 +43,7 @@ def test_buffer_spill_is_fifo_and_stats_reset():
         np.testing.assert_array_equal(actual, expected)
     b.put(chunks[0])
     b.clear()
-    assert b.total_put == 0 and b.total_get == 0 and b.qsize == 0
+    assert b.qsize == 0 and b.pending_seconds == 0
     b.close()
 
 
@@ -137,12 +137,6 @@ def test_backend_vad_command_requires_model(tmp_path):
     assert "--vad-model" in cmd
     assert "--vad-min-silence-duration-ms" in cmd
     assert str(settings.beam_size) in cmd
-
-
-def test_endpoint_order_prefers_documented_inference():
-    import core.whisper_backend as wb
-
-    assert wb._ENDPOINTS[0] == "/inference"
 
 
 def test_multipart_does_not_send_undocumented_vad_field(tmp_path):

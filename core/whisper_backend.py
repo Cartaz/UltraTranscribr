@@ -5,7 +5,6 @@ import json
 import logging
 import queue
 import re
-import struct
 import subprocess
 import threading
 import time
@@ -20,11 +19,9 @@ from core.sycl_runtime import build_whisper_sycl_env
 from core.whisper_gpu_detect import find_whisper_server, verify_sycl_binary
 
 logger = logging.getLogger(__name__)
-_ENDPOINTS = ["/inference", "/v1/audio/transcriptions"]
-
-
-def _alternate_endpoint(current: str) -> str:
-    return next((ep for ep in _ENDPOINTS if ep != current), current)
+# whisper-server is always started by the app without --inference-path, so the
+# endpoint is fixed: the binary exposes only /inference (plus /load).
+_INFERENCE_PATH = "/inference"
 
 
 class WhisperBackend:
@@ -51,7 +48,6 @@ class WhisperBackend:
         self._model_path: Optional[Path] = None
         self._vad_model_path: Optional[Path] = None
         self._log_file_handle: Optional[Any] = None
-        self._api_endpoint = _ENDPOINTS[0]
         self._server_vad_enabled = False
         self._io_lock = threading.RLock()
         self._lifecycle_lock = threading.RLock()
@@ -72,10 +68,6 @@ class WhisperBackend:
         if not primary:
             return False
         return all(backend.is_running for backend in self._aux_backends)
-
-    @property
-    def api_endpoint(self) -> str:
-        return self._api_endpoint
 
     @property
     def server_vad_enabled(self) -> bool:
@@ -101,7 +93,6 @@ class WhisperBackend:
             use_vad = bool(self._settings.vad_filter and self._vad_model_path)
             try:
                 self._spawn(use_vad)
-                self._detect_api_endpoint()
                 self._start_aux_backends(use_vad)
                 self._reset_pool_queue()
             except Exception:
@@ -128,7 +119,6 @@ class WhisperBackend:
                 self._cleanup_aux_backends()
                 self._cleanup_process()
                 self._spawn(wanted)
-                self._detect_api_endpoint()
                 self._start_aux_backends(wanted)
                 self._reset_pool_queue()
             except Exception:
@@ -241,55 +231,45 @@ class WhisperBackend:
                     logger.exception("Callback metrica coda inferenza fallita")
             if self._pool_stopping or not self._process_running():
                 raise RuntimeError("whisper-server non in esecuzione")
-            last_error: Exception | None = None
-            for _ in range(len(_ENDPOINTS)):
-                endpoint = self._api_endpoint
-                boundary = "----UltraTranscribrBoundary"
-                body = self._build_multipart(
-                    audio_data,
-                    language,
-                    boundary,
-                    openai_compat=endpoint != "/inference",
-                    prompt=prompt,
-                    verbose=verbose,
-                )
-                req = urllib.request.Request(
-                    f"{self.server_url}{endpoint}",
-                    data=body,
-                    headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-                    method="POST",
-                )
-                try:
-                    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-                        result = json.loads(resp.read().decode("utf-8"))
-                    return result if verbose else result.get("text", "")
-                except urllib.error.HTTPError as exc:
-                    detail = self._error_body(exc)
-                    if exc.code == 404:
-                        self._api_endpoint = _alternate_endpoint(endpoint)
-                        last_error = exc
-                        continue
+            endpoint = _INFERENCE_PATH
+            boundary = "----UltraTranscribrBoundary"
+            body = self._build_multipart(
+                audio_data,
+                language,
+                boundary,
+                prompt=prompt,
+                verbose=verbose,
+            )
+            req = urllib.request.Request(
+                f"{self.server_url}{endpoint}",
+                data=body,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                    result = json.loads(resp.read().decode("utf-8"))
+                return result if verbose else result.get("text", "")
+            except urllib.error.HTTPError as exc:
+                detail = self._error_body(exc)
+                raise RuntimeError(
+                    f"Trascrizione fallita: HTTP {exc.code} su {endpoint}: {detail}"
+                ) from exc
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                native = self._native_failure_detail()
+                process = self._process
+                stopped = process is not None and process.poll() is not None
+                if native or stopped:
+                    detail = (
+                        native or f"processo terminato con codice {process.returncode}"
+                    )
                     raise RuntimeError(
-                        f"Trascrizione fallita: HTTP {exc.code} su {endpoint}: {detail}"
+                        f"Trascrizione fallita: il motore Whisper si è arrestato. "
+                        f"{detail}. Log: {self._server_log_path()}"
                     ) from exc
-                except (urllib.error.URLError, TimeoutError, OSError) as exc:
-                    native = self._native_failure_detail()
-                    process = self._process
-                    stopped = process is not None and process.poll() is not None
-                    if native or stopped:
-                        detail = (
-                            native or f"processo terminato con codice {process.returncode}"
-                        )
-                        raise RuntimeError(
-                            f"Trascrizione fallita: il motore Whisper si è arrestato. "
-                            f"{detail}. Log: {self._server_log_path()}"
-                        ) from exc
-                    raise RuntimeError(
-                        f"Trascrizione fallita su {endpoint}: {exc}"
-                    ) from exc
-            raise RuntimeError(
-                "Nessun endpoint di trascrizione disponibile"
-            ) from last_error
+                raise RuntimeError(
+                    f"Trascrizione fallita su {endpoint}: {exc}"
+                ) from exc
 
     def _process_running(self) -> bool:
         p = self._process
@@ -470,40 +450,6 @@ class WhisperBackend:
             time.sleep(SYCLDefaults.HEALTH_POLL_INTERVAL_S)
         raise RuntimeError("whisper-server non ha risposto al health check")
 
-    def _detect_api_endpoint(self) -> None:
-        silent = self._make_silent_wav()
-        for endpoint in _ENDPOINTS:
-            boundary = "----UltraTranscribrProbe"
-            body = self._build_multipart(
-                silent,
-                None,
-                boundary,
-                openai_compat=endpoint != "/inference",
-            )
-            req = urllib.request.Request(
-                f"{self.server_url}{endpoint}",
-                data=body,
-                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-                method="POST",
-            )
-            try:
-                with urllib.request.urlopen(
-                    req,
-                    timeout=SYCLDefaults.ENDPOINT_PROBE_TIMEOUT_S,
-                ) as resp:
-                    if 200 <= resp.status < 300:
-                        self._api_endpoint = endpoint
-                        return
-            except urllib.error.HTTPError as exc:
-                if exc.code in (400, 405, 415, 422):
-                    self._api_endpoint = endpoint
-                    return
-                if exc.code == 404 or exc.code >= 500:
-                    continue
-            except (urllib.error.URLError, OSError):
-                continue
-        self._api_endpoint = "/inference"
-
     def _server_log_path(self) -> Path:
         name = f"whisper-server{self._instance_label}.log"
         log_dir = AppMeta.CACHE_DIR / "logs"
@@ -524,31 +470,11 @@ class WhisperBackend:
         except Exception:
             return ""
 
-    @staticmethod
-    def _make_silent_wav() -> bytes:
-        return struct.pack(
-            "<4sI4s4sIHHIIHH4sI",
-            b"RIFF",
-            36,
-            b"WAVE",
-            b"fmt ",
-            16,
-            1,
-            1,
-            16000,
-            32000,
-            2,
-            16,
-            b"data",
-            0,
-        )
-
     def _build_multipart(
         self,
         audio_data: bytes,
         language: Optional[str],
         boundary: str,
-        openai_compat: bool = True,
         prompt: Optional[str] = None,
         verbose: bool = False,
     ) -> bytes:
@@ -568,8 +494,6 @@ class WhisperBackend:
             # VAD removes silence. The application does not use probabilities;
             # disabling their calculation avoids that failing decoder path.
             fields.append(("no_language_probabilities", "true"))
-        if openai_compat:
-            fields.append(("model", "whisper-1"))
         parts: list[bytes] = [
             f"--{boundary}\r\n".encode(),
             b'Content-Disposition: form-data; name="file"; filename="audio.wav"\r\n',

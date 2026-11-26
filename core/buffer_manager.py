@@ -31,7 +31,6 @@ class BufferManager:
     def __init__(
         self,
         warn_threshold: int = 20,
-        level_window_seconds: float = 5.0,
         max_memory_chunks: int = ProcessDefaults.BUFFER_MAX_MEMORY_CHUNKS,
     ) -> None:
         if warn_threshold <= 0:
@@ -49,10 +48,6 @@ class BufferManager:
         self._spooled_count = 0
         self._spool_active = False
         self._pending_samples = 0
-        self._total_put = 0
-        self._total_get = 0
-        self._start_time = time.monotonic()
-        self._window = float(level_window_seconds)
         self.metrics_sink = None
         self._last_metrics_at = 0.0
         self._input_closed = False
@@ -73,7 +68,6 @@ class BufferManager:
             else:
                 self._memory.append(arr.copy())
             self._pending_samples += arr.size
-            self._total_put += 1
             self._condition.notify()
         self._schedule_metrics()
 
@@ -144,7 +138,6 @@ class BufferManager:
             else:
                 chunk = self._read_spooled()
             self._pending_samples -= chunk.size
-            self._total_get += 1
         self._notify_metrics()
         return chunk
 
@@ -176,7 +169,6 @@ class BufferManager:
             else:
                 chunk = self._read_spooled()
             self._pending_samples -= chunk.size
-            self._total_get += 1
         self._notify_metrics()
         return chunk
 
@@ -188,10 +180,6 @@ class BufferManager:
     @property
     def is_empty(self) -> bool:
         return self.qsize == 0
-
-    @property
-    def is_buffering(self) -> bool:
-        return self.qsize >= self._warn_threshold
 
     @property
     def buffer_level(self) -> int:
@@ -208,16 +196,6 @@ class BufferManager:
             return self._spooled_count
 
     @property
-    def total_put(self) -> int:
-        with self._condition:
-            return self._total_put
-
-    @property
-    def total_get(self) -> int:
-        with self._condition:
-            return self._total_get
-
-    @property
     def input_closed(self) -> bool:
         with self._condition:
             return self._input_closed
@@ -228,11 +206,7 @@ class BufferManager:
             self._condition.notify_all()
         logger.info("Input buffer chiuso")
 
-    def reset_input(self) -> None:
-        with self._condition:
-            self._input_closed = False
-
-    def clear(self, *, reset_stats: bool = True) -> int:
+    def clear(self) -> int:
         with self._condition:
             count = len(self._memory) + self._spooled_count
             self._memory.clear()
@@ -243,15 +217,8 @@ class BufferManager:
             self._spooled_count = 0
             self._spool_active = False
             self._input_closed = False
-            if reset_stats:
-                self._total_put = 0
-                self._total_get = 0
-                self._start_time = time.monotonic()
             self._condition.notify_all()
             return count
-
-    def task_done(self) -> None:
-        return None
 
     def close(self) -> None:
         self._metrics_stop.set()

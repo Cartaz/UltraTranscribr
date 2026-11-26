@@ -167,8 +167,8 @@ class TestAppController:
         with pytest.raises(RuntimeError, match="sessioni Live"):
             controller.start_file_transcription("example.wav")
 
-    def test_stop_transcription_when_idle(self, controller: AppController) -> None:
-        controller.stop_transcription()
+    def test_stop_all_live_sessions_when_idle(self, controller: AppController) -> None:
+        controller.stop_all_live_sessions(drain=False)
 
     def test_stop_file_transcription_when_idle(self, controller: AppController) -> None:
         controller.stop_file_transcription()

@@ -19,7 +19,7 @@ XDG GlobalShortcuts
   -> currently focused field
 ```
 
-Python owns activation state, capture, inference, stability, settings and lifecycle. Native Qt adapters own only XDG Portal integration, clipboard handling and the transient overlay. No arbitrary keyboard or filesystem operation is exposed through QWebChannel.
+Python owns activation state, capture, inference, stability, settings and lifecycle. Native Qt adapters own only XDG Portal integration, clipboard handling and the transient overlay. No arbitrary keyboard or filesystem operation is exposed to the QML layer.
 
 ## Activation modes
 
@@ -72,7 +72,7 @@ If the user copies something else before restoration, UltraTranscribr leaves the
 
 ## Overlay
 
-The Dictation overlay is a small non-focusable local QWebEngine surface using the project dark-neumorphic palette. Its HTML/CSS lives in `ui/web/`; the native shell only controls window visibility and placement. It deliberately has no QWebChannel, so the application still exposes a single `backend` WebChannel object. The animated bars are a status animation, not an audio waveform.
+The Dictation overlay is a small non-focusable local QML window (`ui/qml/DictationOverlay.qml`) using the project dark-neumorphic palette; `ui/native/dictation_overlay.py` only controls its visibility and placement and exposes no application operations. The animated bars are a status animation, not an audio waveform.
 
 ## Diagnostics
 

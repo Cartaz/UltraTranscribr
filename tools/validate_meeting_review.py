@@ -27,14 +27,13 @@ def main():
     parser.add_argument(
         "--source-root", type=Path, default=Path(__file__).resolve().parents[1]
     )
-    parser.add_argument("--frontend", choices=["qml", "web"], default="qml")
     parser.add_argument("--cycles", type=int, default=12)
     parser.add_argument("--checkpoint-only", action="store_true")
     parser.add_argument("--reopen", action="store_true")
     parser.add_argument(
         "--skip-playback",
         action="store_true",
-        help="Isolate the editor workload for frontend memory comparisons",
+        help="Isolate the editor workload from audio playback",
     )
     args = parser.parse_args()
     args.output = args.output.resolve()
@@ -49,12 +48,9 @@ def main():
         QEvent,
         QEventLoop,
         QObject,
-        QPoint,
-        Qt,
         QTimer,
     )
     from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-    from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication
 
     from config.constants import AppMeta
@@ -96,7 +92,6 @@ def main():
             controller.meeting.store.retain_original(sid, Path(original))
     process = psutil.Process()
     result = {
-        "frontend": args.frontend,
         "native_desktop": True,
         "gpu_detection_mocked": False,
         "inference_exercised": False,
@@ -175,33 +170,11 @@ def main():
     )
     telemetry.start()
 
-    def js(code):
-        box = []
-        window._web_page.runJavaScript(code, lambda value: box.append(value))
-        wait_until(lambda: bool(box))
-        return box[0]
-
     def load():
-        if args.frontend == "qml":
-            window.runtime.meeting.select(sid)
-            wait_until(
-                lambda: window.runtime.meeting.segments.count == result["input_rows"]
-            )
-        else:
-            js(f"meetingLoad({json.dumps(sid)}); true")
-            wait_until(
-                lambda: js(
-                    "!!meetingCurrent && meetingCurrent.id === " + json.dumps(sid)
-                )
-            )
-            wait_until(
-                lambda: (
-                    js(
-                        "document.querySelectorAll('#meeting-review-list textarea').length"
-                    )
-                    == result["input_rows"]
-                )
-            )
+        window.runtime.meeting.select(sid)
+        wait_until(
+            lambda: window.runtime.meeting.segments.count == result["input_rows"]
+        )
 
     def qml_item(name):
         return window._window.findChild(QObject, name)
@@ -210,67 +183,32 @@ def main():
         window.resize(1200, 800)
         window.show()
         settle(1200)
-        if args.frontend == "qml":
-            window._window.setProperty("view", "meeting")
-        else:
-            js("switchView('meeting');true")
+        window._window.setProperty("view", "meeting")
         result["empty"] = sample("empty")
         load()
         settle(300)
-        if args.frontend == "qml":
-            page = qml_item("meetingPage").property("contentItem")
-            page.setProperty("contentY", 850)
-            settle()
-            player = qml_item("audioMediaPlayer")
-            output = qml_item("audioOutput")
-            assert isinstance(player, QMediaPlayer) and isinstance(output, QAudioOutput)
-            output.setMuted(True)
-            if not args.skip_playback:
-                wait_until(lambda: player.duration() > 0)
-                player.setPosition(120000)
-                player.play()
-                wait_until(lambda: player.position() > 120300)
-                player.pause()
-            result["playback"] = {
-                "duration_ms": player.duration(),
-                "position_ms": player.position(),
-                "muted": output.isMuted(),
-                "actual_decoder": player.duration() > 0,
-                "playback_exercised": not args.skip_playback,
-            }
-            window._window.grabWindow().save(str(args.output / "long-review.png"))
-        else:
-            if not args.skip_playback:
-                wait_until(
-                    lambda: (
-                        js("document.getElementById('meeting-audio').readyState") >= 1
-                    )
-                )
-                js(
-                    "var a=document.getElementById('meeting-audio');a.muted=true;a.currentTime=120;a.scrollIntoView({block:'center'});true"
-                )
-                rect = js(
-                    "JSON.stringify((()=>{var r=document.getElementById('meeting-audio').getBoundingClientRect();return {x:r.left,y:r.top}})())"
-                )
-                rect = json.loads(rect)
-                window._web_view.setFocus()
-                QTest.mouseClick(
-                    window._web_view.focusProxy() or window._web_view,
-                    Qt.MouseButton.LeftButton,
-                    Qt.KeyboardModifier.NoModifier,
-                    QPoint(int(rect["x"] + 20), int(rect["y"] + 20)),
-                )
-                wait_until(
-                    lambda: (
-                        js("document.getElementById('meeting-audio').currentTime")
-                        > 120.3
-                    )
-                )
-                js("document.getElementById('meeting-audio').pause();true")
-            result["playback"] = {"playback_exercised": not args.skip_playback}
-            window.grab().save(str(args.output / "long-review.png"))
+        page = qml_item("meetingPage").property("contentItem")
+        page.setProperty("contentY", 850)
+        settle()
+        player = qml_item("audioMediaPlayer")
+        output = qml_item("audioOutput")
+        assert isinstance(player, QMediaPlayer) and isinstance(output, QAudioOutput)
+        output.setMuted(True)
+        if not args.skip_playback:
+            wait_until(lambda: player.duration() > 0)
+            player.setPosition(120000)
+            player.play()
+            wait_until(lambda: player.position() > 120300)
+            player.pause()
+        result["playback"] = {
+            "duration_ms": player.duration(),
+            "position_ms": player.position(),
+            "muted": output.isMuted(),
+            "actual_decoder": player.duration() > 0,
+            "playback_exercised": not args.skip_playback,
+        }
+        window._window.grabWindow().save(str(args.output / "long-review.png"))
         if args.checkpoint_only or args.reopen:
-            assert args.frontend == "qml"
             meeting = window.runtime.meeting
             if args.reopen:
                 assert (
@@ -292,30 +230,20 @@ def main():
             for cycle in range(args.cycles):
                 index = 0 if cycle % 2 == 0 else result["input_rows"] - 1
                 text = f"Verifica di salvataggio {cycle}"
-                if args.frontend == "qml":
-                    meeting = window.runtime.meeting
-                    listing = qml_item("meetingReviewList")
-                    listing.positionViewAtIndex(index, 0)
-                    settle(50)
-                    meeting.editText(index, text)
-                    meeting.saveAll()
-                    wait_until(
-                        lambda meeting=meeting: (
-                            not meeting.saving
-                            and not meeting.dirty
-                            and not meeting._draft_pending
-                            and not meeting._draft_writing
-                        )
+                meeting = window.runtime.meeting
+                listing = qml_item("meetingReviewList")
+                listing.positionViewAtIndex(index, 0)
+                settle(50)
+                meeting.editText(index, text)
+                meeting.saveAll()
+                wait_until(
+                    lambda meeting=meeting: (
+                        not meeting.saving
+                        and not meeting.dirty
+                        and not meeting._draft_pending
+                        and not meeting._draft_writing
                     )
-                else:
-                    js(
-                        f"var t=document.querySelectorAll('#meeting-review-list textarea')[{index}];t.value={json.dumps(text)};t.dispatchEvent(new Event('input',{{bubbles:true}}));meetingSaveAllReviewEdits();true"
-                    )
-                    wait_until(
-                        lambda: js(
-                            "!meetingReviewSaving && meetingReviewDirty.size===0"
-                        )
-                    )
+                )
                 assert (
                     controller.meeting.store.get(sid)["meeting"]["review_segments"][
                         index
@@ -329,8 +257,7 @@ def main():
         result["webengine_modules"] = [
             key for key in sys.modules if "QtWebEngine" in key or "QtWebChannel" in key
         ]
-        if args.frontend == "qml":
-            assert not result["webengine_modules"]
+        assert not result["webengine_modules"]
         for path, digest in hashes.items():
             with Path(path).open("rb") as handle:
                 assert hashlib.file_digest(handle, "sha256").hexdigest() == digest
@@ -339,12 +266,7 @@ def main():
         result["error"] = f"{type(exc).__name__}: {exc}"
         raise
     finally:
-        if args.frontend == "qml":
-            window.dispose()
-        else:
-            window._prepare_shutdown()
-            window._web_view.deleteLater()
-            window.deleteLater()
+        window.dispose()
         service.close()
         controller.shutdown()
         telemetry_stop.set()

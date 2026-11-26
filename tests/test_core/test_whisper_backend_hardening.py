@@ -45,25 +45,27 @@ def _running_backend(tmp_path) -> WhisperBackend:
     return backend
 
 
-def test_transcribe_falls_back_to_alternate_endpoint_after_404(monkeypatch, tmp_path) -> None:
+def test_transcribe_posts_once_to_the_inference_endpoint(monkeypatch, tmp_path) -> None:
     backend = _running_backend(tmp_path)
-    backend._api_endpoint = "/inference"
-    urlopen = MagicMock(side_effect=[_http_error(404), _Response()])
+    urlopen = MagicMock(return_value=_Response())
     monkeypatch.setattr("core.whisper_backend.urllib.request.urlopen", urlopen)
 
     assert backend.transcribe_audio(b"wav", language="it") == "ok"
-    assert backend.api_endpoint == "/v1/audio/transcriptions"
-    assert urlopen.call_count == 2
-    assert urlopen.call_args_list[0].args[0].full_url.endswith("/inference")
-    assert urlopen.call_args_list[1].args[0].full_url.endswith("/v1/audio/transcriptions")
+    assert urlopen.call_count == 1
+    request = urlopen.call_args.args[0]
+    assert request.full_url.endswith("/inference")
+    assert b'name="model"' not in request.data
 
 
-def test_non_404_http_error_does_not_probe_another_endpoint(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("code", [404, 500])
+def test_http_error_is_reported_without_trying_another_endpoint(
+    monkeypatch, tmp_path, code
+) -> None:
     backend = _running_backend(tmp_path)
-    urlopen = MagicMock(side_effect=_http_error(500, b"server exploded"))
+    urlopen = MagicMock(side_effect=_http_error(code, b"server exploded"))
     monkeypatch.setattr("core.whisper_backend.urllib.request.urlopen", urlopen)
 
-    with pytest.raises(RuntimeError, match="HTTP 500") as exc_info:
+    with pytest.raises(RuntimeError, match=f"HTTP {code}") as exc_info:
         backend.transcribe_audio(b"wav")
     assert "server exploded" in str(exc_info.value)
     assert urlopen.call_count == 1
@@ -78,17 +80,6 @@ def test_request_timeout_is_forwarded_and_wrapped(monkeypatch, tmp_path) -> None
         backend.transcribe_audio(b"wav", timeout=7.5)
 
     assert urlopen.call_args.kwargs["timeout"] == 7.5
-
-
-def test_endpoint_detection_accepts_validation_error_as_supported(monkeypatch, tmp_path) -> None:
-    backend = WhisperBackend(Settings(), tmp_path)
-    urlopen = MagicMock(side_effect=[_http_error(404), _http_error(422)])
-    monkeypatch.setattr("core.whisper_backend.urllib.request.urlopen", urlopen)
-
-    backend._detect_api_endpoint()
-
-    assert backend.api_endpoint == "/v1/audio/transcriptions"
-    assert urlopen.call_count == 2
 
 
 def test_cleanup_escalates_from_terminate_to_kill_on_timeout(tmp_path) -> None:

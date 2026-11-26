@@ -158,7 +158,7 @@ def test_toggles_save_real_booleans(quick_window, key, control, advanced):
 
 
 @pytest.mark.parametrize(
-    "key", ["gpu_layers", "compute_type", "device", "sample_rate", "dtype"]
+    "key", ["device", "sample_rate", "dtype"]
 )
 def test_fixed_engine_fields_do_not_pretend_to_be_editable(quick_window, key):
     app, window, _, _, _ = quick_window

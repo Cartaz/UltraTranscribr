@@ -6,6 +6,7 @@ implementing independent GPU detection or CPU fallbacks.
 """
 from __future__ import annotations
 
+import importlib.util
 import logging
 import os
 import threading
@@ -21,6 +22,32 @@ def _import_torch() -> Any:
     import torch
 
     return torch
+
+
+def _torch_import_error(exc: Exception) -> GPUNotAvailableError:
+    """Tell a missing runtime apart from an installed one that cannot load."""
+    try:
+        installed = importlib.util.find_spec("torch") is not None
+    except (ImportError, ValueError):
+        installed = True  # a broken torch module is still an installed one
+    if isinstance(exc, ImportError) and not installed:
+        return GPUNotAvailableError(
+            "PyTorch XPU non installato",
+            "Esegui ./install.sh per installare il runtime Intel XPU richiesto.",
+        )
+    hint = ""
+    # oneAPI's libraries shadowing torch's own show up as unresolved symbols;
+    # a merely missing library is not fixed by clearing LD_LIBRARY_PATH.
+    if "undefined symbol" in str(exc) and os.environ.get("LD_LIBRARY_PATH"):
+        hint = (
+            " LD_LIBRARY_PATH è impostato (ad esempio da oneAPI setvars.sh): "
+            "PyTorch XPU usa le proprie librerie Intel, quindi avvia senza "
+            "`source setvars.sh` o con `env -u LD_LIBRARY_PATH`."
+        )
+    return GPUNotAvailableError(
+        "PyTorch XPU installato ma non caricabile",
+        f"{str(exc).rstrip('.')}.{hint}",
+    )
 
 
 class TorchXpuRuntime:
@@ -48,11 +75,10 @@ class TorchXpuRuntime:
             )
             try:
                 torch = _import_torch()
-            except ImportError as exc:
-                raise GPUNotAvailableError(
-                    "PyTorch XPU non installato",
-                    "Esegui ./install.sh per installare il runtime Intel XPU richiesto.",
-                ) from exc
+            except (ImportError, OSError) as exc:
+                # torch preloads its Intel runtime with ctypes: a library
+                # conflict can surface as OSError instead of ImportError.
+                raise _torch_import_error(exc) from exc
 
             xpu = getattr(torch, "xpu", None)
             if xpu is None or not callable(getattr(xpu, "is_available", None)):

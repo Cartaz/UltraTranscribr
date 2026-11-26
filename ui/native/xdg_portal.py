@@ -12,16 +12,22 @@ from dbus_next import BusType, Message, MessageType, Variant
 from dbus_next.aio import MessageBus
 from PySide6.QtCore import QObject, Signal, Slot
 
+from config.constants import AppMeta
+
 logger = logging.getLogger(__name__)
 PORTAL_SERVICE = "org.freedesktop.portal.Desktop"
 PORTAL_PATH = "/org/freedesktop/portal/desktop"
 REQUEST_INTERFACE = "org.freedesktop.portal.Request"
 SESSION_INTERFACE = "org.freedesktop.portal.Session"
+REGISTRY_INTERFACE = "org.freedesktop.host.portal.Registry"
 REQUEST_PATH_PREFIX = "/org/freedesktop/portal/desktop/request/"
 _DBUS_SERVICE = "org.freedesktop.DBus"
 _DBUS_PATH = "/org/freedesktop/DBus"
 _DBUS_INTERFACE = "org.freedesktop.DBus"
 _REQUEST_TIMEOUT_S = 60.0
+# Register is best effort: a portal still being D-Bus activated must not hold
+# up the shortcut and RemoteDesktop calls queued behind bus setup.
+_REGISTER_TIMEOUT_S = 1.0
 _MAX_EARLY_RESPONSES = 64
 
 ResponseCallback = Callable[[int, dict[str, Any]], None]
@@ -95,6 +101,9 @@ class PortalTransport(QObject):
 
         self._bus: MessageBus | None = None
         self._bus_task: asyncio.Task[MessageBus] | None = None
+        # Portal calls in flight on the worker loop; shutdown lets them finish
+        # before disconnecting so none fails on a closed bus unobserved.
+        self._tasks: set[asyncio.Task[Any]] = set()
         self._request_waiters: dict[str, tuple[str, asyncio.Future[tuple[int, dict[str, Any]]]]] = {}
         self._active_request_paths: dict[str, str] = {}
         self._cancelled_requests: set[str] = set()
@@ -238,22 +247,32 @@ class PortalTransport(QObject):
             pending_tasks = asyncio.all_tasks(loop)
             for task in pending_tasks:
                 task.cancel()
-            if pending_tasks:
-                loop.run_until_complete(asyncio.gather(*pending_tasks, return_exceptions=True))
+            # Always run once more: done-callbacks queued just before stop()
+            # must still observe their task's exception.
+            loop.run_until_complete(
+                asyncio.gather(*pending_tasks, return_exceptions=True)
+                if pending_tasks
+                else asyncio.sleep(0)
+            )
+            for task in list(self._tasks):
+                if task.done() and not task.cancelled():
+                    task.exception()
+            self._tasks.clear()
             loop.close()
             with self._lock:
                 self._loop = None
 
-    @staticmethod
-    def _start_task(factory: Callable[[], Any], on_rejected: Callable[[str], None]) -> None:
+    def _start_task(self, factory: Callable[[], Any], on_rejected: Callable[[str], None]) -> None:
         try:
             coroutine = factory()
             task = asyncio.create_task(coroutine)
         except Exception as exc:
             on_rejected(str(exc))
             return
+        self._tasks.add(task)
 
         def done(completed: asyncio.Task) -> None:
+            self._tasks.discard(completed)
             if completed.cancelled():
                 return
             try:
@@ -287,11 +306,41 @@ class PortalTransport(QObject):
                 "interface='org.freedesktop.portal.GlobalShortcuts',member='Deactivated'",
             ):
                 await self._dbus_match(bus, "AddMatch", rule)
-        except Exception:
+            await self._register_host_app(bus)
+        except BaseException:
+            # Includes cancellation at shutdown: never leave the socket open.
             bus.disconnect()
             raise
         self._bus = bus
         return bus
+
+    async def _register_host_app(self, bus: MessageBus) -> None:
+        """Identify this host app to the portal before any other portal call.
+
+        Started from a terminal (not the .desktop launcher), the portal cannot
+        derive the app id from the systemd scope and GlobalShortcuts rejects
+        the session with "An app id is required". Older portals lack the
+        Registry interface; failures are harmless and only logged.
+        """
+        try:
+            reply = await asyncio.wait_for(
+                bus.call(
+                    Message(
+                        destination=PORTAL_SERVICE,
+                        path=PORTAL_PATH,
+                        interface=REGISTRY_INTERFACE,
+                        member="Register",
+                        signature="sa{sv}",
+                        body=[AppMeta.ID, {}],
+                    )
+                ),
+                timeout=_REGISTER_TIMEOUT_S,
+            )
+            self._raise_for_error(reply, "Portal Registry.Register")
+        except Exception as exc:
+            # TimeoutError included. Info level: a rejected app id explains a
+            # later "An app id is required" from GlobalShortcuts.
+            logger.info("Registrazione app id presso il portal non applicata: %r", exc)
 
     async def _dbus_match(self, bus: MessageBus, member: str, rule: str) -> None:
         reply = await bus.call(
@@ -448,15 +497,36 @@ class PortalTransport(QObject):
     async def _shutdown_worker(self) -> None:
         paths = list(self._active_request_paths.values())
         self._active_request_paths.clear()
+        # Requests waiting for a user answer (consent dialogs) end now, so the
+        # bounded wait below only covers calls already on the wire.
         for _path, (_request_id, future) in list(self._request_waiters.items()):
             if not future.done():
                 future.cancel()
         self._request_waiters.clear()
-        for path in paths:
-            try:
-                await self._close_object(path, REQUEST_INTERFACE)
-            except Exception:
-                logger.debug("Chiusura request portal durante shutdown fallita", exc_info=True)
+        # Let in-flight calls (typically a session Close) reach the portal
+        # before the bus is disconnected underneath them, within the GUI's
+        # join budget even when the portal is slow.
+        in_flight = [
+            task
+            for task in self._tasks
+            if not task.done() and task is not asyncio.current_task()
+        ]
+        if in_flight:
+            await asyncio.wait(in_flight, timeout=0.5)
+        if paths:
+            closes = [
+                asyncio.ensure_future(self._close_object(path, REQUEST_INTERFACE))
+                for path in paths
+            ]
+            _done, slow = await asyncio.wait(closes, timeout=0.25)
+            for task in slow:
+                task.cancel()
+            for task in closes:
+                if task.done() and not task.cancelled() and task.exception():
+                    logger.debug(
+                        "Chiusura request portal durante shutdown fallita: %s",
+                        task.exception(),
+                    )
         if self._bus is not None:
             try:
                 self._bus.disconnect()

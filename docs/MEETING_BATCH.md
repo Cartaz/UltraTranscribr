@@ -39,4 +39,4 @@ Live, File, Dettatura, ricalcolo della diarizzazione e modifiche alle impostazio
 
 ## Ownership
 
-`core/meeting_batch.py` possiede esclusivamente scheduling FIFO e stato transitorio dei job. `MeetingManager` resta l'unico proprietario della pipeline di una singola riunione. `ApplicationService` normalizza i valori per-file, applica le regole di esclusività tra workflow e possiede il lifecycle della coda; il bridge QWebChannel espone soltanto valori serializzati e comandi mirati.
+`core/meeting_batch.py` possiede esclusivamente scheduling FIFO e stato transitorio dei job. `MeetingManager` resta l'unico proprietario della pipeline di una singola riunione. `ApplicationService` normalizza i valori per-file, applica le regole di esclusività tra workflow e possiede il lifecycle della coda; l'adapter QML `ui/adapters/meeting.py` espone soltanto valori serializzati e comandi mirati.

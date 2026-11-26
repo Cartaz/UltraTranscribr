@@ -405,7 +405,6 @@ ScrollView {
                 objectName: 'backendCard'
                 Layout.fillWidth: true
                 Layout.preferredWidth: 1
-                Layout.preferredHeight: 462.59
                 CardHead {
                     kicker: 'BACKEND'
                     title: 'SYCL'
@@ -425,18 +424,6 @@ ScrollView {
                         keyName: 'server_port'
                         label: 'Porta server'
                         numeric: true
-                    }
-                    SettingField {
-                        keyName: 'gpu_layers'
-                        label: 'Uso GPU'
-                        locked: true
-                        fixedValue: 'Automatico · SYCL'
-                    }
-                    SettingField {
-                        keyName: 'compute_type'
-                        label: 'Precisione'
-                        locked: true
-                        fixedValue: 'Dal modello installato'
                     }
                     SettingField {
                         keyName: 'device'

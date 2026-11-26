@@ -135,7 +135,7 @@ Python mantiene stato, lifecycle, persistenza, routing e device ownership canoni
 - `MeetingStore` possiede sidecar, override manuali, export e validazione del percorso audio persistito.
 - `ApplicationService` è la boundary applicativa usata dalla UI.
 
-Il bridge QWebChannel valida e serializza gli input `startMeetingRealtime`, `startMeetingFile`, `rerunMeetingDiarization` e `setMeetingSegmentSpeaker`; non contiene algoritmi di diarizzazione o regole di review. La UI mantiene esclusivamente stato temporaneo di presentazione.
+L'adapter QML `ui/adapters/meeting.py` valida e serializza gli input di avvio, ricalcolo e assegnazione speaker verso `ApplicationService`; non contiene algoritmi di diarizzazione o regole di review. La UI mantiene esclusivamente stato temporaneo di presentazione.
 
 
 ## Revisione UX del 29 ottobre 2026

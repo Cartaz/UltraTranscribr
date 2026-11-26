@@ -10,7 +10,6 @@ class FakeBackend:
         self.is_running = True
         self.instance_count = 1
         self.server_url = "http://127.0.0.1:1"
-        self.api_endpoint = "/inference"
         self.server_vad_enabled = True
         self.holder_started = threading.Event()
         self.release_holder = threading.Event()
