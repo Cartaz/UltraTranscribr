@@ -7,7 +7,7 @@ import uuid
 from PySide6.QtCore import Property, QTimer, QUrl, Signal, Slot
 
 from core.meeting_alignment import speaker_label
-from core.meeting_engine import ALIGNMENT_LANGUAGES
+from core.meeting_engine import ALIGNMENT_LANGUAGES, DEFAULT_MEETING_PIPELINE
 from core.review_timeline import ReviewTimeline
 from ui.adapters.base import Adapter, choose_files, export_session
 from ui.models import RecordModel
@@ -35,7 +35,7 @@ class MeetingAdapter(Adapter):
     reviewChanged = Signal()
     draftChanged = Signal()
     dirtyChanged = Signal(bool)
-    englishChanged = Signal()
+    qwenChanged = Signal()
     pipelineChanged = Signal()
     playbackChanged = Signal()
     reviewOpened = Signal()
@@ -59,12 +59,12 @@ class MeetingAdapter(Adapter):
         self.drafts = RecordModel(parent=self)
         self.pipelines = RecordModel(
             [
-                {"value": "qwen_meeting", "name": "Qwen · Riunioni"},
+                {"value": DEFAULT_MEETING_PIPELINE, "name": "Qwen · Riunioni"},
             ],
             self,
         )
-        self._pipeline = "qwen_meeting"
-        self._english_status = {
+        self._pipeline = DEFAULT_MEETING_PIPELINE
+        self._qwen_status = {
             "ready": False,
             "busy": False,
             "progress": 0,
@@ -115,8 +115,7 @@ class MeetingAdapter(Adapter):
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self.changed)
         self._timer.start()
-        if hasattr(self.application, "english_pipeline_status"):
-            QTimer.singleShot(0, self.refreshEnglish)
+        QTimer.singleShot(0, self.refreshQwen)
 
     @Property(str, notify=changed)
     def language(self):
@@ -148,65 +147,64 @@ class MeetingAdapter(Adapter):
     def pipeline(self):
         return self._pipeline
 
-    @Property("QVariantMap", notify=englishChanged)
-    def englishStatus(self):
-        return self._english_status
+    @Property("QVariantMap", notify=qwenChanged)
+    def qwenStatus(self):
+        return self._qwen_status
 
-    def _english_status_received(self, value):
+    def _qwen_status_received(self, value):
         if isinstance(value, dict):
-            was_busy = bool(self._english_status.get("busy"))
-            self._english_status = dict(value)
+            was_busy = bool(self._qwen_status.get("busy"))
+            self._qwen_status = dict(value)
             self.pipelines.update(
                 0,
                 name="Qwen · Riunioni"
                 if value.get("ready")
                 else "Qwen · Riunioni (prepara modelli)",
             )
-            self.englishChanged.emit()
+            self.qwenChanged.emit()
             if was_busy != bool(value.get("busy")):
                 self.changed.emit()
 
     @Slot()
-    def refreshEnglish(self):
-        if hasattr(self.application, "english_pipeline_status"):
-            self.background(
-                "qml-english-status",
-                self.application.english_pipeline_status,
-                self._english_status_received,
-            )
+    def refreshQwen(self):
+        self.background(
+            "qml-qwen-status",
+            self.application.qwen_pipeline_status,
+            self._qwen_status_received,
+        )
 
     @Slot()
-    def prepareEnglish(self):
-        self._english_status = self._english_status | {
+    def prepareQwen(self):
+        self._qwen_status = self._qwen_status | {
             "busy": True,
             "error": "",
             "progress": 0,
         }
-        self.englishChanged.emit()
+        self.qwenChanged.emit()
         self.changed.emit()
         self.background(
-            "qml-english-models",
-            self.application.prepare_english_models,
-            self._english_status_received,
-            failed=self.refreshEnglish,
+            "qml-qwen-models",
+            self.application.prepare_qwen_models,
+            self._qwen_status_received,
+            failed=self.refreshQwen,
         )
 
     @Slot()
-    def cancelEnglish(self):
-        self._english_status = self._english_status | {"cancelling": True}
-        self.englishChanged.emit()
+    def cancelQwen(self):
+        self._qwen_status = self._qwen_status | {"cancelling": True}
+        self.qwenChanged.emit()
         self.background(
-            "qml-english-cancel",
-            self.application.cancel_english_preparation,
-            self._english_status_received,
-            failed=self.refreshEnglish,
+            "qml-qwen-cancel",
+            self.application.cancel_qwen_preparation,
+            self._qwen_status_received,
+            failed=self.refreshQwen,
         )
 
     @Slot(str, result=bool)
     def selectPipeline(self, value):
-        if value not in {"qwen_meeting"}:
+        if value != DEFAULT_MEETING_PIPELINE:
             return False
-        if value == "qwen_meeting" and not self._english_status.get("ready"):
+        if not self._qwen_status.get("ready"):
             self.feedback.show("Prepara i modelli delle riunioni prima di avviare")
             return False
         self._pipeline = value
@@ -230,7 +228,7 @@ class MeetingAdapter(Adapter):
     @Property(bool, notify=changed)
     def busy(self):
         return (
-            bool(self._english_status.get("busy"))
+            bool(self._qwen_status.get("busy"))
             or bool(self._runtime)
             and self._runtime.get("status")
             not in {
@@ -352,11 +350,7 @@ class MeetingAdapter(Adapter):
                         "path": p,
                         "language": language,
                         "num_speakers": speakers,
-                        **(
-                            {"pipeline": self._pipeline}
-                            if self._pipeline != "whisper"
-                            else {}
-                        ),
+                        "pipeline": self._pipeline,
                     }
                     for p in values
                 ]
@@ -374,15 +368,12 @@ class MeetingAdapter(Adapter):
     def editDraft(self, index, key, value):
         if key not in {"language", "num_speakers", "pipeline"}:
             return False
-        if (
-            key == "pipeline"
-            and value == "qwen_meeting"
-            and not self._english_status.get("ready")
-        ):
-            self.feedback.show("Prepara i modelli delle riunioni prima di avviare")
-            return False
-        if key == "pipeline" and value not in {"qwen_meeting"}:
-            return False
+        if key == "pipeline":
+            if value != DEFAULT_MEETING_PIPELINE:
+                return False
+            if not self._qwen_status.get("ready"):
+                self.feedback.show("Prepara i modelli delle riunioni prima di avviare")
+                return False
 
         def edit():
             fields = {key: value}
@@ -416,11 +407,7 @@ class MeetingAdapter(Adapter):
                     self.sources.rows(),
                     language=language or None,
                     num_speakers=speakers,
-                    **(
-                        {"pipeline": self._pipeline}
-                        if self._pipeline != "whisper"
-                        else {}
-                    ),
+                    pipeline=self._pipeline,
                 )
             )
             if value:
@@ -939,8 +926,8 @@ class MeetingAdapter(Adapter):
         elif name == "meeting_model_progress":
             self._model_progress = value or {}
             self.changed.emit()
-        elif name == "meeting_english_models_changed":
-            self._english_status_received(value or {})
+        elif name == "meeting_qwen_models_changed":
+            self._qwen_status_received(value or {})
         elif name == "meeting_review_changed" and not self.dirty and not self._writing:
             session_id = value.get("session_id") if isinstance(value, dict) else value
             if session_id == self._review.get("id"):

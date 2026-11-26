@@ -42,7 +42,7 @@ file media ---------> normalized canonical recording -------------+
                                                       review / export
 ```
 
-L’analisi usa il motore Qwen delle riunioni; Live, Dettatura e File mantengono Whisper large-v3. Il gestore ferma Whisper sotto lo stesso lock del caricamento, attende l’uscita dei processi di ogni fase Qwen e poi consente di ricaricare Whisper. Il percorso inglese usa CTC/Qwen con soglia 0,2; italiano e altre lingue supportate usano soltanto l’allineatore multilingue Qwen. Il manifest fissa modelli e parametri Community-1 (finestra 3 s). I metadati registrano `qwen_meeting`, lingua, impronte e provenienza; `english_qwen` e Whisper restano leggibili per gli archivi precedenti.
+L’analisi usa il motore Qwen delle riunioni; Live, Dettatura e File mantengono Whisper large-v3. Il gestore ferma Whisper sotto lo stesso lock del caricamento, attende l’uscita dei processi di ogni fase Qwen e poi consente di ricaricare Whisper. Il percorso inglese usa CTC/Qwen con soglia 0,2; italiano e altre lingue supportate usano soltanto l’allineatore multilingue Qwen. Il manifest fissa modelli e parametri Community-1 (finestra 3 s). I metadati registrano `qwen_meeting`, lingua, impronte e provenienza. `english_qwen` è il nome storico del percorso inglese: resta accettato anche per nuove riunioni, ma solo con lingua `en`. Le riunioni Whisper precedenti restano leggibili e se ne possono ricalcolare le voci, ma Whisper non trascrive più nuove riunioni.
 
 La diarizzazione usa esclusivamente `pyannote/speaker-diarization-community-1`. Se il numero di interlocutori è noto viene passato come `num_speakers`; `0` mantiene il conteggio automatico.
 
@@ -52,7 +52,7 @@ Il modello Community-1 viene scaricato una sola volta nella cache XDG dell'appli
 
 ## Word-level speaker alignment
 
-Whisper viene interrogato in `verbose_json` con token timestamps. `FileTranscriberThread` conserva i record `words` insieme ai segmenti canonici nello storico Python:
+Riunioni precedenti a Qwen (sola lettura e ricalcolo voci): Whisper veniva interrogato in `verbose_json` con token timestamps. `FileTranscriberThread` conserva i record `words` insieme ai segmenti canonici nello storico Python:
 
 ```text
 segment
@@ -146,4 +146,4 @@ Le nuove catture conservano tracce e mix a 48 kHz mono per l'ascolto, con un der
 segnalati. Testo e speaker si salvano automaticamente; Undo/Redo appartengono al
 documento persistente. Lista compatta, Due colonne e Documento continuo condividono
 la stessa revisione e possono seguire l'audio. Vedi il
-[rapporto di verifica UX](UX_IMPLEMENTATION_2026-10-29.md) per prove e limiti.
+[rapporto di verifica UX](archive/UX_IMPLEMENTATION_2026-10-29.md) per prove e limiti.

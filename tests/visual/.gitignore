@@ -4,3 +4,8 @@
 /populated-after/
 /runtime-smoke.png
 /comparison.html
+/metrics.json
+/qml-comparison.png
+/qml-verification.zip
+/runtime-smoke.json
+/dependency-audit.json

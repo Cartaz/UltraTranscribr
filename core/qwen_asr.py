@@ -1,4 +1,4 @@
-"""Qwen ASR for the optional English meeting worker process.
+"""Qwen ASR for the meeting worker process.
 
 The production Whisper backend remains responsible for Live and Dictation.
 This backend is owned by one isolated meeting job and uses Intel XPU only.
@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from threading import Event
 
-from core.english_models import EnglishPipelineCancelled
+from core.qwen_models import QwenPipelineCancelled
 from core.meeting_engine import meeting_language
 
 
@@ -124,7 +124,7 @@ def _xpu_loading_context(torch, model_utils):
         model_utils.caching_allocator_warmup = original
 
 
-class EnglishASRBackend:
+class QwenASRBackend:
     def __init__(self, model_dir: Path, cancel: Event):
         self.model_dir = model_dir
         self.cancel = cancel
@@ -133,7 +133,7 @@ class EnglishASRBackend:
 
     def _check_cancelled(self) -> None:
         if self.cancel.is_set():
-            raise EnglishPipelineCancelled()
+            raise QwenPipelineCancelled()
 
     def start(self) -> None:
         self._check_cancelled()

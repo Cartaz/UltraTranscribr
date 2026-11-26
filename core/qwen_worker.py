@@ -1,4 +1,4 @@
-"""One isolated stage of the optional English meeting pipeline."""
+"""One isolated stage of the Qwen meeting pipeline."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import wave
 from pathlib import Path
 from threading import Event
 
-from core.english_models import EnglishModelManager
+from core.qwen_models import QwenModelManager
 from core.meeting_engine import meeting_language
 
 
@@ -41,7 +41,7 @@ def run_stage(
     stage: str,
     source: Path,
     work: Path,
-    models: EnglishModelManager,
+    models: QwenModelManager,
     diarization_models: Path | None = None,
     speakers: int = 0,
     language: str = "en",
@@ -109,12 +109,12 @@ def run_stage(
     elif stage == "asr":
         from config.constants import ProcessDefaults
         from config.settings import Settings
-        from core.english_asr import EnglishASRBackend, verify_decode_coverage
+        from core.qwen_asr import QwenASRBackend, verify_decode_coverage
         from core.file_transcriber import FileTranscriberThread
 
         ProcessDefaults.FILE_SEGMENT_LENGTH_S = 30
         ProcessDefaults.FILE_OVERLAP_DURATION_S = 0
-        backend = EnglishASRBackend(models.path("qwen-asr"), Event())
+        backend = QwenASRBackend(models.path("qwen-asr"), Event())
         rows, quality, chunks, requests, errors = [], [], [], [], []
         original_request = backend.transcribe_audio
 
@@ -229,7 +229,7 @@ def run_stage(
         finally:
             backend.stop()
     elif stage in {"ctc", "qwen"}:
-        from core.english_alignment import align_ctc_rows, align_qwen_rows
+        from core.qwen_alignment import align_ctc_rows, align_qwen_rows
 
         function = align_ctc_rows if stage == "ctc" else align_qwen_rows
         if stage == "ctc" and language != "en":
@@ -247,7 +247,7 @@ def run_stage(
         save(work / f"{stage}.json", rows)
         save(work / f"{stage}-calls.json", calls)
     elif stage == "combine":
-        from core.english_timing import combine_word_timings
+        from core.qwen_timing import combine_word_timings
 
         provenance = load(work / "provenance.json")
         qwen_rows = load(work / "qwen.json")
@@ -357,7 +357,7 @@ def main():
             args.stage,
             args.source,
             args.work,
-            EnglishModelManager(args.models),
+            QwenModelManager(args.models),
             args.diarization_models,
             args.speakers,
             args.language,

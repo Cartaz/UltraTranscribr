@@ -59,7 +59,20 @@ for before, after, case in [
     '<!doctype html><meta charset="utf-8"><title>UltraTranscribr: Originale / QML</title><style>body{background:#141414;color:#e1e1e1;font:16px sans-serif;margin:24px}section{margin-bottom:40px}section div{display:flex;gap:16px}figure{margin:0;width:50%}img{width:100%;height:auto}figcaption{padding:8px}</style><h1>Originale / QML — catture reali</h1><p>Stesso viewport 1200×800, DPR 1 e 2. Dati isolati, rilevamento GPU sostituito solo nel fixture. Questi confronti mostrano differenze residue: non certificano una parità pixel perfect.</p>'
     + "".join(rows)
 )
-font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20)
+def _label_font(size: int = 20):
+    # Debian and Arch place DejaVu differently; Pillow's own font is the fallback.
+    for path in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    ):
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            continue
+    return ImageFont.load_default(size=size)
+
+
+font = _label_font()
 pages = ["live", "file", "meeting", "history", "settings", "settings-advanced", "logs"]
 contact = Image.new("RGB", (1200, len(pages) * 430), "#141414")
 draw = ImageDraw.Draw(contact)
@@ -83,14 +96,12 @@ with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
     for folder in ("before", "after", "populated-before", "populated-after"):
         for path in sorted((root / folder).iterdir()):
             z.write(path, path.relative_to(root))
-    for name in (
-        "comparison.html",
-        "metrics.json",
-        "runtime-smoke.json",
-        "runtime-smoke.png",
-        "dependency-audit.json",
-    ):
-        z.write(root / name, name)
+    z.write(root / "comparison.html", "comparison.html")
+    z.write(root / "metrics.json", "metrics.json")
+    # Optional evidence from other tools (smoke_app.py, a dependency scan).
+    for name in ("runtime-smoke.json", "runtime-smoke.png", "dependency-audit.json"):
+        if (root / name).is_file():
+            z.write(root / name, name)
 print(
     json.dumps(
         {

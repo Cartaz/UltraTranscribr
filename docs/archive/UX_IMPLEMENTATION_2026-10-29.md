@@ -57,7 +57,7 @@ Baseline Git: `9f43d67`; suite iniziale: **778 test passati in 29,43 s**.
   immediatamente e conserva il recovery. Dettagli non essenziali spostati nei tooltip.
 - **MEET/REV-04/05:** archivio a due colonne su desktop e una al minimo, apertura
   con navigazione alla revisione; nove interlocutori raggiungibili con scrollbar.
-  Dieci [concept confrontabili](ux/concepts/index.html); B1/B2/B3 implementati in QML
+  Dieci [concept confrontabili](../ux/concepts/index.html); B1/B2/B3 implementati in QML
   come lista, indice/editor e documento. Posizione reale del player -> intervalli
   Python -> highlight simultaneo degli overlap. Seek dai timestamp, follow discreto,
   pausa durante editing/scroll e ripresa esplicita. Nessun WebEngine nel runtime.
@@ -165,7 +165,7 @@ Riproduzione del confronto Live, con una cartella di output nuova:
 
 Acquisizioni isolate riproducibili con `tools/capture_ui.py --populated --speakers 9`
 a **1200×800**, **1650×930**, **1920×1080**, comprese le tre modalità di revisione.
-[Confronto delle tre modalità implementate](ux/screenshots/index.html).
+[Confronto delle tre modalità implementate](../ux/screenshots/index.html).
 La modalità software verifica geometria e funzionalità, non certifica gli effetti
 shader del renderer grafico. La fixture sostituisce soltanto il rilevamento GPU.
 

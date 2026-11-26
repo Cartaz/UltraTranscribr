@@ -6,14 +6,18 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV="$ROOT/.venv"
 CACHE="$ROOT/.cache"
 WCPP="$CACHE/whisper.cpp"
-WHISPER_REF="${ULTRATRANSCRIBR_WHISPER_REF:-master}"
+# Revisione whisper.cpp validata su Arc (SYCL, oneAPI 2026.0) con la patch dei
+# tempi VAD. Aggiornarla solo dopo il collaudo Live/File sull'hardware.
+WHISPER_DEFAULT_REF="284029c07012d2000941a08d38a31ffb71f4734e"
+WHISPER_REF="${ULTRATRANSCRIBR_WHISPER_REF:-$WHISPER_DEFAULT_REF}"
 ONEAPI="/opt/intel/oneapi"
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 REQ_MARKER="$VENV/.ultratranscribr-requirements.sha256"
 BUILD_MARKER="$VENV/.ultratranscribr-whisper-build.sha256"
 WHISPER_REVISION_MARKER="$VENV/.ultratranscribr-whisper-revision"
 FORCE_REBUILD="${ULTRATRANSCRIBR_FORCE_REBUILD:-0}"
-INSTALL_ENGLISH="${ULTRATRANSCRIBR_ENGLISH:-1}"
+# ULTRATRANSCRIBR_ENGLISH is the old name of the same switch.
+INSTALL_QWEN="${ULTRATRANSCRIBR_QWEN:-${ULTRATRANSCRIBR_ENGLISH:-1}}"
 TORCH_VERSION="2.9.1"
 TORCHAUDIO_VERSION="2.9.1"
 TORCHCODEC_VERSION="0.9.1"
@@ -98,14 +102,14 @@ build_key() {
   } | sha256sum | awk '{print $1}'
 }
 
-install_english_dependencies() {
-  [[ "$INSTALL_ENGLISH" == "1" ]] || return 0
+install_qwen_dependencies() {
+  [[ "$INSTALL_QWEN" == "1" ]] || return 0
   log "Preparazione componenti per il motore delle riunioni..."
-  "$VENV/bin/pip" install -r "$ROOT/requirements-english.txt"
+  "$VENV/bin/pip" install -r "$ROOT/requirements-qwen.txt"
   # Check the optional stack without loading weights or starting GPU inference.
   (cd "$ROOT" && "$VENV/bin/python" - <<'PY'
-from core.english_models import EnglishModelManager
-EnglishModelManager().dependencies()
+from core.qwen_models import QwenModelManager
+QwenModelManager().dependencies()
 PY
   ) || die "Verifica componenti riunioni fallita"
 }
@@ -386,7 +390,7 @@ main() {
   fi
 
   install_python_dependencies
-  install_english_dependencies
+  install_qwen_dependencies
   remove_legacy_parakeet_runtime
   build_whisper_stack
   ensure_default_models

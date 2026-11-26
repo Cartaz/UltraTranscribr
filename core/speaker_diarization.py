@@ -155,6 +155,10 @@ class DiarizationModelManager:
         return cls._has_model_payload(model_dir) and (model_dir / _MARKER_NAME).is_file()
 
 
+class DiarizationCancelled(RuntimeError):
+    """The caller asked to stop while Community-1 was still running."""
+
+
 class SpeakerDiarizer:
     """Run pyannote Community-1 on XPU and return both diarization timelines."""
 
@@ -205,8 +209,16 @@ class SpeakerDiarizer:
         *,
         num_speakers: int = -1,
         progress: Optional[Callable[[int], None]] = None,
+        cancelled: Optional[Callable[[], bool]] = None,
     ) -> DiarizationResult:
+        def check_cancelled() -> None:
+            if cancelled is not None and cancelled():
+                raise DiarizationCancelled("Diarizzazione annullata")
+
+        # Loading and preprocessing make no pyannote hook calls: check around them.
+        check_cancelled()
         pipeline = self._get_pipeline()
+        check_cancelled()
         device = get_torch_xpu_device()
         del device
 
@@ -229,13 +241,23 @@ class SpeakerDiarizer:
         if int(num_speakers) > 0:
             kwargs["num_speakers"] = int(num_speakers)
 
+        def hook(step_name, step_artifact, file=None, total=None, completed=None):
+            # pyannote calls this for every segmentation and embedding batch:
+            # raising here is the only way to stop an in-process run early.
+            del step_name, step_artifact, file, total, completed
+            check_cancelled()
+
+        check_cancelled()
         if progress:
             progress(5)
         try:
             output = pipeline(
                 {"waveform": waveform, "sample_rate": ProcessDefaults.SAMPLE_RATE},
+                hook=hook,
                 **kwargs,
             )
+        except DiarizationCancelled:
+            raise
         except Exception as exc:
             raise RuntimeError(f"Diarizzazione Community-1/XPU fallita: {exc}") from exc
 

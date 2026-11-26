@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from core.english_asr import _xpu_loading_context
+from core.qwen_asr import _xpu_loading_context
 
 
 def test_integrated_arc_without_memory_query_skips_only_optional_warmup():

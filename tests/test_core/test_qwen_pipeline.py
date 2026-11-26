@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from config.constants import AppMeta
-from core.english_pipeline import EnglishMeetingThread
+from core.qwen_pipeline import QwenMeetingThread
 
 
 def test_cancellation_stops_worker_and_descendants_without_publishing_text(
@@ -16,7 +16,7 @@ def test_cancellation_stops_worker_and_descendants_without_publishing_text(
     ready = threading.Event()
     events = []
 
-    class SleepingPipeline(EnglishMeetingThread):
+    class SleepingPipeline(QwenMeetingThread):
         def _stage_command(self, stage, work):
             script = (
                 "import subprocess,sys,time,pathlib;"
@@ -54,7 +54,7 @@ def test_failed_worker_cannot_report_a_completed_meeting(tmp_path, monkeypatch):
     monkeypatch.setattr(AppMeta, "CACHE_DIR", tmp_path / "cache")
     events = []
 
-    class FailedPipeline(EnglishMeetingThread):
+    class FailedPipeline(QwenMeetingThread):
         def _stage_command(self, stage, work):
             return [sys.executable, "-c", "raise SystemExit(3)"]
 
@@ -74,7 +74,7 @@ def test_ready_pipeline_publishes_only_final_aligned_text(tmp_path, monkeypatch)
     monkeypatch.setattr(AppMeta, "CACHE_DIR", tmp_path / "cache")
     events = []
 
-    class ReadyPipeline(EnglishMeetingThread):
+    class ReadyPipeline(QwenMeetingThread):
         def _run_stage(self, stage, work, base_progress, weight):
             if stage == "diar":
                 (work / "diarization.json").write_text(
@@ -114,7 +114,7 @@ def test_voice_only_rerun_does_not_republish_or_recognize_text(tmp_path, monkeyp
     monkeypatch.setattr(AppMeta, "CACHE_DIR", tmp_path / "cache")
     events, stages = [], []
 
-    class ReadyDiarization(EnglishMeetingThread):
+    class ReadyDiarization(QwenMeetingThread):
         def _run_stage(self, stage, work, base_progress, weight):
             stages.append(stage)
             if stage == "prepare_diar":
@@ -152,7 +152,7 @@ def test_model_preparation_has_no_audio_stages_or_transcript(tmp_path, monkeypat
     monkeypatch.setattr(AppMeta, "CACHE_DIR", tmp_path / "cache")
     stages, events = [], []
 
-    class Prepared(EnglishMeetingThread):
+    class Prepared(QwenMeetingThread):
         def _run_stage(self, stage, work, base_progress, weight):
             stages.append(stage)
 
@@ -171,7 +171,7 @@ def test_italian_meeting_skips_english_ctc_and_preserves_language(tmp_path, monk
     monkeypatch.setattr(AppMeta, "CACHE_DIR", tmp_path / "cache")
     stages = []
 
-    class ItalianPipeline(EnglishMeetingThread):
+    class ItalianPipeline(QwenMeetingThread):
         def _run_stage(self, stage, work, base_progress, weight):
             stages.append((stage, base_progress, weight))
             if stage == "combine":
@@ -198,4 +198,4 @@ def test_italian_meeting_skips_english_ctc_and_preserves_language(tmp_path, monk
 def test_unsupported_meeting_language_is_rejected_before_loading(tmp_path):
     import pytest
     with pytest.raises(ValueError, match="lingua supportata"):
-        EnglishMeetingThread(tmp_path / "audio.wav", language="auto")
+        QwenMeetingThread(tmp_path / "audio.wav", language="auto")

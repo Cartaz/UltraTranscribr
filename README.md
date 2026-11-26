@@ -10,7 +10,7 @@ La configurazione di riferimento è CachyOS/Arch Linux con GPU Intel e due runti
 La revisione offre **Lista compatta**, **Due colonne** e **Documento continuo**,
 con autosalvataggio, Undo/Redo persistenti e sincronizzazione con l'audio.
 Le nuove Riunioni conservano l'originale per l'ascolto separato dal derivato per i modelli.
-Dettagli e limiti verificati: [rapporto UX](docs/UX_IMPLEMENTATION_2026-10-29.md).
+Dettagli e limiti verificati: [rapporto UX](docs/archive/UX_IMPLEMENTATION_2026-10-29.md).
 
 ## Funzioni principali
 
@@ -22,7 +22,7 @@ Dettagli e limiti verificati: [rapporto UX](docs/UX_IMPLEMENTATION_2026-10-29.md
 - Batch Riunioni sequenziale per elaborare più registrazioni senza inferenze GPU concorrenti, con lingua e numero interlocutori configurabili per ogni file.
 - Fino a 8 sorgenti realtime conservate come tracce FLAC separate e sincronizzate.
 - Diarizzazione locale ad alta accuratezza con `pyannote/speaker-diarization-community-1`.
-- Timestamp Whisper parola-per-parola per separare cambi di interlocutore anche dentro un singolo segmento di trascrizione.
+- Timestamp parola-per-parola dagli allineatori Qwen/CTC (Whisper per le riunioni precedenti) per separare cambi di interlocutore anche dentro un singolo segmento di trascrizione.
 - `exclusive_speaker_diarization` per assegnare il testo e diarizzazione regolare per segnalare il parlato realmente sovrapposto.
 - Numero di interlocutori noto opzionale e ricalcolo della sola diarizzazione su riunioni già trascritte.
 - Correzione manuale dello speaker per ogni intervento, inclusi i casi `Speaker ?`, senza sovrascrivere il risultato automatico.
@@ -71,7 +71,7 @@ Le nuove **Riunioni** usano **Qwen3-ASR-1.7B** per il testo e **Community-1**
 con finestre di 3 secondi per gli interlocutori. Live, Dettatura e File continuano
 a usare Whisper; il modello predefinito resta **large-v3**.
 
-I componenti Qwen sono inclusi nell'installazione. In **Riunione**, usa
+I componenti Qwen sono inclusi nell'installazione (`ULTRATRANSCRIBR_QWEN=0 ./install.sh` li salta, ma senza di essi le Riunioni non sono disponibili; `ULTRATRANSCRIBR_ENGLISH` è il vecchio nome della stessa opzione). In **Riunione**, usa
 **Prepara modelli riunioni** per scaricare e verificare circa 6,3 GB di modelli
 locali. Scegli `it` per l'italiano o `en` per l'inglese; ogni registrazione in coda
 conserva la propria lingua e il motore. Il numero di interlocutori può restare a 0.
@@ -96,7 +96,7 @@ Il recupero sperimentale dei confini Whisper resta disattivato normalmente.
 2. PyTorch e torchaudio Intel XPU pinning stabile;
 3. TorchCodec compatibile richiesto da pyannote;
 4. `pyannote.audio` e `demucs-infer`;
-5. il ref configurato di `whisper.cpp` compilato con SYCL e il runtime `whisper-server`;
+5. la revisione validata di `whisper.cpp` (o il ref scelto) compilata con SYCL e il runtime `whisper-server`;
 6. modello Whisper predefinito `large-v3` e modello VAD;
 7. integrazione desktop;
 8. self-check finale dell'ambiente.
@@ -105,15 +105,15 @@ Le installazioni precedenti che contenevano gli strumenti sperimentali Parakeet 
 
 Demucs non è più un componente opzionale dell'installazione. L'opzione **Isola voce** resta una scelta dell'utente durante la trascrizione musicale, ma quando viene richiesta deve funzionare sul runtime XPU: UltraTranscribr non continua silenziosamente sul file originale e non ripiega sulla CPU.
 
-Per impostazione predefinita l'installer risolve `master` di `ggml-org/whisper.cpp` alla SHA più recente disponibile al momento dell'installazione. La SHA effettivamente installata viene registrata in `.venv/.ultratranscribr-whisper-revision`: se al successivo `./install.sh` la revisione e la configurazione di build non sono cambiate, la compilazione viene saltata; se upstream è avanzato o cambia la configurazione di build, viene pulita e ricompilata soltanto la directory di build di whisper.cpp, senza ricreare la `.venv` Python.
+Per impostazione predefinita l'installer compila la revisione di `ggml-org/whisper.cpp` validata con questa versione (`284029c07012`, fissata in `install.sh`): `master` cambia di continuo e la patch dei tempi VAD o la build SYCL possono rompersi senza preavviso. La SHA installata viene registrata in `.venv/.ultratranscribr-whisper-revision`: se al successivo `./install.sh` la revisione e la configurazione di build non sono cambiate, la compilazione viene saltata; se cambiano, viene pulita e ricompilata soltanto la directory di build di whisper.cpp, senza ricreare la `.venv` Python.
 
-Per usare un tag, branch o commit specifico invece dell'ultimo `master`:
+Per provare un tag, branch o commit diverso (ad esempio l'ultimo `master`):
 
 ```bash
-ULTRATRANSCRIBR_WHISPER_REF=v1.9.3 ./install.sh
+ULTRATRANSCRIBR_WHISPER_REF=master ./install.sh
 ```
 
-È possibile passare anche una SHA completa. Questo override è utile per riprodurre una build nota o bloccare temporaneamente un aggiornamento upstream problematico.
+È possibile passare anche una SHA completa. Una revisione diversa da quella fissata non è collaudata: se la patch dei tempi non si applica l'installer si ferma prima di compilare.
 
 Per forzare la ricompilazione della revisione selezionata:
 
@@ -273,8 +273,8 @@ Verifica locale: `QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software pytest -q`
 
 Per rigenerare lo shader: `pyside6-qsb --qt6 -o ui/qml/shaders/inset.frag.qsb ui/qml/shaders/inset.frag`. Per catturare le schermate con dati isolati: `python tools/capture_ui.py --output tests/visual/after`. Il fixture sostituisce esclusivamente il rilevamento GPU: non esegue inferenza e non introduce un fallback CPU nel programma.
 
-Audit e limiti di accettazione del porting: [docs/QML_AUDIT_2026-10-01.md](docs/QML_AUDIT_2026-10-01.md).
+Audit e limiti di accettazione del porting: [docs/archive/QML_AUDIT_2026-10-01.md](docs/archive/QML_AUDIT_2026-10-01.md).
 
-Correzioni successive e prove sul desktop reale con riunioni lunghe: [docs/POST_AUDIT_2026-10-25.md](docs/POST_AUDIT_2026-10-25.md).
+Correzioni successive e prove sul desktop reale con riunioni lunghe: [docs/archive/POST_AUDIT_2026-10-25.md](docs/archive/POST_AUDIT_2026-10-25.md).
 
-Collaudo di Whisper/SYCL, diarizzazione, Live e registrazione con audio reale: [docs/RELEASE_VALIDATION_2026-10-26.md](docs/RELEASE_VALIDATION_2026-10-26.md).
+Collaudo di Whisper/SYCL, diarizzazione, Live e registrazione con audio reale: [docs/archive/RELEASE_VALIDATION_2026-10-26.md](docs/archive/RELEASE_VALIDATION_2026-10-26.md).

@@ -7,10 +7,10 @@ La modalità **Riunione → Da registrazione** accetta più file audio/video e l
 Ogni registrazione usa la pipeline Meeting completa già esistente:
 
 ```text
-media -> FLAC mono 16 kHz -> Whisper/SYCL -> Community-1/XPU -> allineamento speaker -> review
+media -> FLAC mono 16 kHz -> Qwen3-ASR + Community-1/XPU (sottoprocessi) -> allineamento speaker -> review
 ```
 
-UltraTranscribr non esegue più riunioni in parallelo. In questo modo Whisper e Community-1 non competono per GPU/RAM e il batch resta utilizzabile anche su sistemi con memoria limitata.
+UltraTranscribr non esegue più riunioni in parallelo. In questo modo Qwen e Community-1 non competono per GPU/RAM e il batch resta utilizzabile anche su sistemi con memoria limitata.
 
 ## Configurazione per registrazione
 
@@ -27,8 +27,8 @@ La richiesta viene validata interamente prima di modificare la coda: un file man
 
 - si possono selezionare più registrazioni con un'unica finestra file;
 - lingua e numero di interlocutori possono essere configurati separatamente per ogni registrazione prima dell'avvio;
-- il modello Whisper resta quello configurato nell'applicazione e le impostazioni backend sono bloccate finché la coda è attiva;
-- ogni job mostra la propria configurazione, la fase, il progresso Whisper e il progresso diarizzazione;
+- Whisper viene fermato per tutta la durata della coda e le impostazioni backend sono bloccate finché la coda è attiva;
+- ogni job mostra la propria configurazione, la fase, il progresso della trascrizione e il progresso diarizzazione;
 - al completamento la riunione viene salvata nell'Archivio senza aprire automaticamente la review;
 - se un job fallisce, l'errore resta visibile nella coda e il job successivo viene avviato comunque;
 - **Annulla coda** interrompe la riunione attiva e marca come annullate quelle ancora in attesa;

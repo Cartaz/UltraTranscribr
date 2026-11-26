@@ -1,7 +1,7 @@
 """Sequential batch queue for recorded Meeting workflows.
 
 The coordinator owns only FIFO scheduling and queue state. Actual media
-normalization, Whisper transcription, diarization and persistence remain owned by
+normalization, Qwen transcription, diarization and persistence remain owned by
 MeetingManager, so batch and single-file meetings share exactly one processing
 pipeline.
 """
@@ -189,12 +189,11 @@ class MeetingBatchCoordinator:
             if not language:
                 raise ValueError(f"lingua non valida per {path.name}")
             pipeline = str(entry.get("pipeline") or DEFAULT_MEETING_PIPELINE)
-            if pipeline not in {"whisper", *QWEN_PIPELINES}:
+            if pipeline not in QWEN_PIPELINES:
                 raise ValueError("percorso riunione non valido")
             if pipeline == "english_qwen" and language != "en":
                 raise ValueError("Il percorso Qwen verificato richiede la lingua inglese (en)")
-            if pipeline in QWEN_PIPELINES:
-                meeting_language(language)
+            meeting_language(language)
             count = speaker_count(entry.get("num_speakers", 0))
             normalized.append(
                 {

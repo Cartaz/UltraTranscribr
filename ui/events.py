@@ -46,7 +46,7 @@ PRESENTATION_EVENTS = (
     "meeting_recording_saved",
     "meeting_source_status",
     "meeting_model_progress",
-    "meeting_english_models_changed",
+    "meeting_qwen_models_changed",
     "meeting_completed",
     "meeting_error",
     "meeting_review_changed",

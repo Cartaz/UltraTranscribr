@@ -11,10 +11,9 @@ from typing import Any, Optional, Protocol
 from config.constants import AppMeta
 from config.settings import AudioSource, Settings
 from core.audio_inputs import AudioInputResolver, AudioInputSelection
-from core.english_models import EnglishModelManager
-from core.english_pipeline import EnglishMeetingThread
+from core.qwen_models import QwenModelManager
+from core.qwen_pipeline import QwenMeetingThread
 from core.event_bus import EventBus
-from core.file_transcriber import FileTranscriberThread
 from core.meeting_alignment import (
     align_speakers,
     build_speaker_id_mapping,
@@ -29,6 +28,8 @@ from core.meeting_capture import (
 )
 from core.meeting_engine import (
     DEFAULT_MEETING_PIPELINE,
+    LEGACY_WHISPER_PIPELINE,
+    QWEN_ASR_MODEL,
     QWEN_PIPELINES,
     MeetingEngineStillRunning,
     meeting_language,
@@ -38,7 +39,6 @@ from core.meeting_store import MeetingStore
 from core.microphone_recording import MicrophoneRecorder, RecordingInfo
 from core.speaker_diarization import DiarizationModelManager, SpeakerDiarizer
 from core.transcript_history import TranscriptHistoryStore
-from core.whisper_backend import WhisperBackend
 
 logger = logging.getLogger(__name__)
 
@@ -52,21 +52,11 @@ class MeetingController(Protocol):
     @property
     def history(self) -> TranscriptHistoryStore: ...
 
-    @property
-    def backend(self) -> WhisperBackend: ...
-
     def active_live_count(self) -> int: ...
 
     def is_file_busy(self) -> bool: ...
 
     def meeting_engine_session(self): ...
-
-    def ensure_backend_started(
-        self,
-        *,
-        vad: Optional[bool] = None,
-        settings: Optional[Settings] = None,
-    ) -> None: ...
 
 
 @dataclass
@@ -75,7 +65,7 @@ class MeetingRuntime:
     mode: str
     settings: Settings
     num_speakers: int
-    pipeline: str = "whisper"
+    pipeline: str = DEFAULT_MEETING_PIPELINE
     processing_stage: str = ""
     sources: list[dict[str, Any]] = field(default_factory=list)
     source_path: str = ""
@@ -84,7 +74,7 @@ class MeetingRuntime:
     status: str = "recording"
     progress: int = 0
     diarization_progress: int = 0
-    transcriber: FileTranscriberThread | EnglishMeetingThread | None = None
+    transcriber: QwenMeetingThread | None = None
     preparation_thread: Optional[threading.Thread] = None
     processing_thread: Optional[threading.Thread] = None
     control_thread: Optional[threading.Thread] = None
@@ -114,14 +104,14 @@ class MeetingManager:
         self._inputs = input_resolver
         self.store = MeetingStore(controller.history)
         self.models = DiarizationModelManager()
-        self.english_models = EnglishModelManager()
-        self.english_diarization_models = DiarizationModelManager(
-            self.english_models.path("community3").parent
+        self.qwen_models = QwenModelManager()
+        self.qwen_diarization_models = DiarizationModelManager(
+            self.qwen_models.path("community3").parent
         )
-        self._english_preparation: EnglishMeetingThread | None = None
-        self._english_preparing = False
-        self._english_preparation_progress = 0
-        self._english_preparation_error = ""
+        self._qwen_preparation: QwenMeetingThread | None = None
+        self._qwen_preparing = False
+        self._qwen_preparation_progress = 0
+        self._qwen_preparation_error = ""
         self.diarizer = SpeakerDiarizer(self.models)
         self._bus = EventBus()
         self._lock = threading.RLock()
@@ -138,35 +128,35 @@ class MeetingManager:
     def is_busy(self) -> bool:
         with self._lock:
             runtime = self._runtime
-            return self._english_preparing or bool(
+            return self._qwen_preparing or bool(
                 runtime and runtime.status not in self._TERMINAL_STATUSES
             )
 
-    def english_pipeline_status(self) -> dict[str, Any]:
+    def qwen_pipeline_status(self) -> dict[str, Any]:
         dependency_error = ""
         try:
-            self.english_models.dependencies()
+            self.qwen_models.dependencies()
         except RuntimeError as exc:
             dependency_error = str(exc)
         ready = (
             not dependency_error
-            and not self.english_models.missing()
-            and self.english_diarization_models.status()["ready"]
+            and not self.qwen_models.missing()
+            and self.qwen_diarization_models.status()["ready"]
         )
         return {
             "ready": bool(
                 ready
-                and not self._english_preparing
-                and not self._english_preparation_error
+                and not self._qwen_preparing
+                and not self._qwen_preparation_error
             ),
-            "busy": self._english_preparing,
-            "progress": self._english_preparation_progress,
-            "error": self._english_preparation_error or dependency_error,
+            "busy": self._qwen_preparing,
+            "progress": self._qwen_preparation_progress,
+            "error": self._qwen_preparation_error or dependency_error,
             "dependencies_ready": not bool(dependency_error),
             "download_gb": round(
                 sum(
                     item["bytes"]
-                    for model in self.english_models.models.values()
+                    for model in self.qwen_models.models.values()
                     for item in model["files"]
                 )
                 / 1_000_000_000,
@@ -174,34 +164,34 @@ class MeetingManager:
             ),
         }
 
-    def prepare_english_models(self) -> dict[str, Any]:
+    def prepare_qwen_models(self) -> dict[str, Any]:
         with self._lock:
-            if self._english_preparing:
-                return self.english_pipeline_status()
+            if self._qwen_preparing:
+                return self.qwen_pipeline_status()
             self._require_start_available()
-            self.english_models.dependencies()
-            self._english_preparation_error = ""
-            self._english_preparation_progress = 0
-            self._english_preparing = True
-            worker = EnglishMeetingThread(
+            self.qwen_models.dependencies()
+            self._qwen_preparation_error = ""
+            self._qwen_preparation_progress = 0
+            self._qwen_preparing = True
+            worker = QwenMeetingThread(
                 AppMeta.CACHE_DIR,
-                models=self.english_models,
-                diarization_models=self.english_diarization_models.root,
+                models=self.qwen_models,
+                diarization_models=self.qwen_diarization_models.root,
                 prepare_models_only=True,
-                event_sink=self._english_model_event,
-                thread_name="EnglishModelPreparation",
+                event_sink=self._qwen_model_event,
+                thread_name="QwenModelPreparation",
             )
-            self._english_preparation = worker
+            self._qwen_preparation = worker
             try:
                 worker.start()
             except Exception:
-                self._english_preparing = False
-                self._english_preparation = None
+                self._qwen_preparing = False
+                self._qwen_preparation = None
                 raise
-        return self.english_pipeline_status()
+        return self.qwen_pipeline_status()
 
-    def cancel_english_preparation(self) -> dict[str, Any]:
-        worker = self._english_preparation
+    def cancel_qwen_preparation(self) -> dict[str, Any]:
+        worker = self._qwen_preparation
         if worker is not None and worker.is_alive():
             worker.stop()
             worker.join(timeout=5)
@@ -209,22 +199,22 @@ class MeetingManager:
                 raise RuntimeError(
                     "La preparazione dei modelli si sta ancora arrestando"
                 )
-        self._english_preparing = False
-        status = self.english_pipeline_status()
-        self._emit("meeting_english_models_changed", status)
+        self._qwen_preparing = False
+        status = self.qwen_pipeline_status()
+        self._emit("meeting_qwen_models_changed", status)
         return status
 
-    def _english_model_event(self, event: str, payload: Any) -> None:
+    def _qwen_model_event(self, event: str, payload: Any) -> None:
         if event == "file_transcriber_progress":
-            self._english_preparation_progress = max(0, min(100, int(payload)))
+            self._qwen_preparation_progress = max(0, min(100, int(payload)))
         elif event == "file_transcriber_completed":
-            self._english_preparing = False
+            self._qwen_preparing = False
         elif event == "file_transcriber_error":
-            self._english_preparation_error = str(payload)
-            self._english_preparing = False
+            self._qwen_preparation_error = str(payload)
+            self._qwen_preparing = False
         else:
             return
-        self._emit("meeting_english_models_changed", self.english_pipeline_status())
+        self._emit("meeting_qwen_models_changed", self.qwen_pipeline_status())
 
     def snapshot(self) -> Optional[dict[str, Any]]:
         with self._lock:
@@ -252,9 +242,7 @@ class MeetingManager:
         source_name = selections[0].source if len(selections) == 1 else "multisource"
         source_path = "; ".join(self._selection_label(item) for item in selections)
         session_id = self.store.create(
-            model="Qwen3-ASR-1.7B"
-            if pipeline in QWEN_PIPELINES
-            else settings.model_size,
+            model=QWEN_ASR_MODEL,
             language=settings.language,
             source=source_name,
             source_path=source_path,
@@ -270,8 +258,7 @@ class MeetingManager:
             for index, selection in enumerate(selections)
         ]
         self.store.set_source_recordings(session_id, planned_sources)
-        if pipeline != "whisper":
-            self.store.set_processing_pipeline(session_id, pipeline)
+        self.store.set_processing_pipeline(session_id, pipeline)
         capture = MeetingCaptureSession(
             session_id,
             settings,
@@ -324,9 +311,7 @@ class MeetingManager:
         )
         pipeline = self._validate_pipeline(pipeline, settings.language)
         session_id = self.store.create(
-            model="Qwen3-ASR-1.7B"
-            if pipeline in QWEN_PIPELINES
-            else settings.model_size,
+            model=QWEN_ASR_MODEL,
             language=settings.language,
             source="file",
             source_path=str(source),
@@ -343,8 +328,7 @@ class MeetingManager:
             }
         ]
         self.store.set_source_recordings(session_id, planned)
-        if pipeline != "whisper":
-            self.store.set_processing_pipeline(session_id, pipeline)
+        self.store.set_processing_pipeline(session_id, pipeline)
         runtime = MeetingRuntime(
             id=session_id,
             mode="file",
@@ -377,7 +361,7 @@ class MeetingManager:
         *,
         num_speakers: int = 0,
     ) -> dict[str, Any]:
-        """Recompute only speaker diarization from persisted audio + Whisper segments."""
+        """Recompute only speaker diarization from persisted audio + saved segments."""
         self._require_start_available()
         session_key = str(session_id or "").strip()
         meeting = self.store.get(session_key)
@@ -386,7 +370,7 @@ class MeetingManager:
         raw_segments = list(meeting.get("segments") or [])
         if not raw_segments:
             raise RuntimeError(
-                "La riunione non contiene segmenti Whisper timestampati da riutilizzare"
+                "La riunione non contiene segmenti timestampati da riutilizzare"
             )
         audio_path = self.store.recording_path(session_key)
         if audio_path is None:
@@ -416,9 +400,11 @@ class MeetingManager:
             channels=int(recording.get("channels") or 1),
             format=str(recording.get("format") or "flac"),
         )
-        pipeline_id = (metadata.get("processing_pipeline") or {}).get("id", "whisper")
+        pipeline_id = (metadata.get("processing_pipeline") or {}).get(
+            "id", LEGACY_WHISPER_PIPELINE
+        )
         status_models = (
-            self.english_diarization_models
+            self.qwen_diarization_models
             if pipeline_id in QWEN_PIPELINES
             else self.models
         )
@@ -646,8 +632,6 @@ class MeetingManager:
             transcriber = runtime.transcriber
             if transcriber is not None:
                 transcriber.stop()
-                if transcriber.is_alive() and runtime.pipeline not in QWEN_PIPELINES:
-                    self._controller.backend.abort_active_request()
                 if (
                     transcriber.is_alive()
                     and transcriber is not threading.current_thread()
@@ -744,8 +728,8 @@ class MeetingManager:
             self._closed = True
             runtime = self._runtime
         self._shutdown_event.set()
-        if self._english_preparation is not None:
-            self.cancel_english_preparation()
+        if self._qwen_preparation is not None:
+            self.cancel_qwen_preparation()
         current = threading.current_thread()
 
         recovery = self._recovery_thread
@@ -786,8 +770,6 @@ class MeetingManager:
         transcriber = runtime.transcriber
         if transcriber is not None:
             transcriber.stop()
-            if transcriber.is_alive():
-                self._controller.backend.abort_active_request()
             if transcriber.is_alive() and transcriber is not current:
                 transcriber.join(timeout=self._TRANSCRIBER_JOIN_TIMEOUT_S)
                 if transcriber.is_alive():
@@ -830,35 +812,13 @@ class MeetingManager:
         try:
             if runtime.stop_event.is_set() or self._shutdown_event.is_set():
                 return
-            if runtime.pipeline in QWEN_PIPELINES:
-                worker = self._run_qwen_worker(
-                    runtime,
-                    info.path,
-                    event_sink=lambda event, payload: self._transcription_event(
-                        runtime, event, payload
-                    ),
-                )
-            else:
-                self._controller.ensure_backend_started(
-                    vad=runtime.settings.vad_filter,
-                    settings=runtime.settings,
-                )
-                if runtime.stop_event.is_set() or self._shutdown_event.is_set():
-                    return
-                worker = FileTranscriberThread(
-                    info.path,
-                    self._controller.backend,
-                    runtime.settings,
-                    language=runtime.settings.language,
-                    event_sink=lambda event, payload: self._transcription_event(
-                        runtime, event, payload
-                    ),
-                    thread_name=f"MeetingTranscriber-{runtime.id}",
-                )
-            if runtime.pipeline not in QWEN_PIPELINES:
-                runtime.transcriber = worker
-                worker.start()
-                worker.join()
+            worker = self._run_qwen_worker(
+                runtime,
+                info.path,
+                event_sink=lambda event, payload: self._transcription_event(
+                    runtime, event, payload
+                ),
+            )
             if (
                 runtime.stop_event.is_set()
                 or self._shutdown_event.is_set()
@@ -874,20 +834,12 @@ class MeetingManager:
                     "Il riconoscitore non ha prodotto segmenti timestampati"
                 )
 
-            if runtime.pipeline in QWEN_PIPELINES:
-                diarization = list(worker.exclusive_segments)
-                speaker_diarization = list(worker.speaker_segments)
-                review = align_speakers(raw_segments, diarization, speaker_diarization)
-                self.store.set_processing_pipeline(
-                    runtime.id, runtime.pipeline, worker.provenance
-                )
-            else:
-                diarization, speaker_diarization, review = self._compute_diarization(
-                    runtime,
-                    info.path,
-                    raw_segments,
-                    persist_transient_status=True,
-                )
+            diarization = list(worker.exclusive_segments)
+            speaker_diarization = list(worker.speaker_segments)
+            review = align_speakers(raw_segments, diarization, speaker_diarization)
+            self.store.set_processing_pipeline(
+                runtime.id, runtime.pipeline, worker.provenance
+            )
             if runtime.stop_event.is_set() or self._shutdown_event.is_set():
                 return
             self.store.set_diarization(
@@ -975,7 +927,7 @@ class MeetingManager:
         previous_review: Optional[list[dict[str, Any]]] = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
         models = (
-            self.english_diarization_models
+            self.qwen_diarization_models
             if runtime.pipeline in QWEN_PIPELINES
             else self.models
         )
@@ -1033,11 +985,25 @@ class MeetingManager:
             provenance["last_diarization"] = worker.provenance
             self.store.set_processing_pipeline(runtime.id, runtime.pipeline, provenance)
         else:
-            result = self.diarizer.run(
-                audio_path,
-                num_speakers=runtime.num_speakers if runtime.num_speakers > 0 else -1,
-                progress=lambda percent: self._diarization_progress(runtime, percent),
-            )
+            # Pre-Qwen meeting: the in-process diarizer needs the GPU to itself,
+            # like the Qwen workers, and must not keep its weights afterwards.
+            with self._controller.meeting_engine_session():
+                try:
+                    result = self.diarizer.run(
+                        audio_path,
+                        num_speakers=(
+                            runtime.num_speakers if runtime.num_speakers > 0 else -1
+                        ),
+                        progress=lambda percent: self._diarization_progress(
+                            runtime, percent
+                        ),
+                        # Annulla and shutdown must not wait for a whole file
+                        # while this run holds the GPU session lock.
+                        cancelled=lambda: runtime.stop_event.is_set()
+                        or self._shutdown_event.is_set(),
+                    )
+                finally:
+                    self.diarizer.release()
             diarization = list(result.exclusive_segments)
             speaker_diarization = list(result.speaker_segments)
         if previous_diarization:
@@ -1175,10 +1141,10 @@ class MeetingManager:
                     "Riunione annullata prima del caricamento del modello"
                 )
             self.diarizer.release()
-            worker = EnglishMeetingThread(
+            worker = QwenMeetingThread(
                 source,
-                models=self.english_models,
-                diarization_models=self.english_diarization_models.root,
+                models=self.qwen_models,
+                diarization_models=self.qwen_diarization_models.root,
                 num_speakers=runtime.num_speakers,
                 language=runtime.settings.language,
                 diarization_only=diarization_only,
@@ -1218,27 +1184,27 @@ class MeetingManager:
 
     def _validate_pipeline(self, pipeline: str, language: str) -> str:
         selected = str(pipeline or DEFAULT_MEETING_PIPELINE)
-        if selected not in {"whisper", *QWEN_PIPELINES}:
+        if selected not in QWEN_PIPELINES:
+            # Whisper no longer transcribes new meetings; old ones stay readable.
             raise ValueError("Percorso di trascrizione non valido")
-        if selected in QWEN_PIPELINES:
-            if selected == "english_qwen" and language != "en":
-                raise ValueError(
-                    "Il percorso Qwen verificato richiede la lingua inglese (en)"
-                )
-            meeting_language(language)
-            self.english_models.dependencies()
-            if self.english_models.missing():
-                raise RuntimeError(
-                    "Prepara i modelli delle riunioni prima di avviare la riunione"
-                )
-            if not self.english_diarization_models.status()["ready"]:
-                raise RuntimeError(
-                    "Prepara i modelli degli interlocutori prima di avviare la riunione"
-                )
+        if selected == "english_qwen" and language != "en":
+            raise ValueError(
+                "Il percorso Qwen verificato richiede la lingua inglese (en)"
+            )
+        meeting_language(language)
+        self.qwen_models.dependencies()
+        if self.qwen_models.missing():
+            raise RuntimeError(
+                "Prepara i modelli delle riunioni prima di avviare la riunione"
+            )
+        if not self.qwen_diarization_models.status()["ready"]:
+            raise RuntimeError(
+                "Prepara i modelli degli interlocutori prima di avviare la riunione"
+            )
         return selected
 
     def _require_start_available(self) -> None:
-        if self._english_preparing:
+        if self._qwen_preparing:
             raise RuntimeError(
                 "Attendi o annulla la preparazione dei modelli delle riunioni"
             )
@@ -1307,7 +1273,11 @@ class MeetingManager:
             "sources": [dict(item) for item in runtime.sources],
             "source_path": runtime.source_path,
             "language": runtime.settings.language,
-            "model": runtime.settings.model_size,
+            "model": (
+                QWEN_ASR_MODEL
+                if runtime.pipeline in QWEN_PIPELINES
+                else runtime.settings.model_size
+            ),
             "num_speakers": runtime.num_speakers,
             "duration_s": round(duration, 1),
             "progress": runtime.progress,

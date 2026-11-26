@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -9,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize("enabled,valid", [(False, True), (True, True), (True, False)])
-def test_optional_english_installation_checks_runtime_and_propagates_failure(
+def test_optional_qwen_installation_checks_runtime_and_propagates_failure(
     tmp_path, enabled, valid
 ):
     environment = tmp_path / "environment"
@@ -29,8 +30,8 @@ def test_optional_english_installation_checks_runtime_and_propagates_failure(
         path.write_text("#!/usr/bin/env bash\n" + body)
         path.chmod(0o755)
     result = subprocess.run(
-        ["bash", "-c", 'source "$1"; VENV="$2"; INSTALL_ENGLISH="$3"; install_english_dependencies',
-         "english-install-test", str(ROOT / "install.sh"), str(environment),
+        ["bash", "-c", 'source "$1"; VENV="$2"; INSTALL_QWEN="$3"; install_qwen_dependencies',
+         "qwen-install-test", str(ROOT / "install.sh"), str(environment),
          "1" if enabled else "0"],
         capture_output=True, text=True, check=False,
     )
@@ -69,10 +70,11 @@ def test_install_script_skips_unchanged_expensive_steps() -> None:
     assert "ULTRATRANSCRIBR_FORCE_REBUILD" in source
 
 
-def test_installer_tracks_latest_whisper_ref_by_exact_revision() -> None:
+def test_installer_pins_the_validated_whisper_revision() -> None:
     source = (ROOT / "install.sh").read_text(encoding="utf-8")
 
-    assert 'WHISPER_REF="${ULTRATRANSCRIBR_WHISPER_REF:-master}"' in source
+    assert re.search(r'^WHISPER_DEFAULT_REF="[0-9a-f]{40}"$', source, re.MULTILINE)
+    assert 'WHISPER_REF="${ULTRATRANSCRIBR_WHISPER_REF:-$WHISPER_DEFAULT_REF}"' in source
     assert "\nPIN=" not in source
     assert 'git -C "$WCPP" fetch --force --depth 1 origin "$WHISPER_REF"' in source
     assert "rev-parse 'FETCH_HEAD^{commit}'" in source

@@ -1,4 +1,4 @@
-"""Cancellable process ownership for the optional English meeting workflow."""
+"""Cancellable process ownership for the Qwen meeting workflow."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from contextlib import nullcontext
 from pathlib import Path
 
 from config.constants import AppMeta
-from core.english_models import EnglishModelManager, EnglishPipelineCancelled
+from core.qwen_models import QwenModelManager, QwenPipelineCancelled
 from core.meeting_engine import meeting_language
 
 logger = logging.getLogger(__name__)
@@ -29,12 +29,12 @@ STAGES = (
 )
 
 
-class EnglishMeetingThread(threading.Thread):
+class QwenMeetingThread(threading.Thread):
     def __init__(
         self,
         source: str | Path,
         *,
-        models: EnglishModelManager | None = None,
+        models: QwenModelManager | None = None,
         diarization_models: Path | None = None,
         num_speakers: int = 0,
         language: str = "en",
@@ -42,11 +42,11 @@ class EnglishMeetingThread(threading.Thread):
         artifact_dir: Path | None = None,
         prepare_models_only: bool = False,
         event_sink=None,
-        thread_name="EnglishMeeting",
+        thread_name="QwenMeeting",
     ):
         super().__init__(name=thread_name, daemon=True)
         self.source = Path(source).resolve()
-        self.models = models or EnglishModelManager()
+        self.models = models or QwenModelManager()
         self.diarization_models = (
             diarization_models or self.models.path("community3").parent
         )
@@ -91,7 +91,7 @@ class EnglishMeetingThread(threading.Thread):
         return [
             sys.executable,
             "-m",
-            "core.english_worker",
+            "core.qwen_worker",
             "--stage",
             stage,
             "--source",
@@ -127,12 +127,12 @@ class EnglishMeetingThread(threading.Thread):
 
     def _run_stage(self, stage, work, base_progress, weight):
         if self._stop_event.is_set():
-            raise EnglishPipelineCancelled()
+            raise QwenPipelineCancelled()
         error_path = work / f"{stage}.log"
         with error_path.open("wb") as errors:
             with self._child_lock:
                 if self._stop_event.is_set():
-                    raise EnglishPipelineCancelled()
+                    raise QwenPipelineCancelled()
                 process = subprocess.Popen(
                     self._stage_command(stage, work),
                     stdout=subprocess.PIPE,
@@ -148,7 +148,7 @@ class EnglishMeetingThread(threading.Thread):
                     selector.register(process.stdout, selectors.EVENT_READ)
                     while selector.get_map():
                         if self._stop_event.is_set():
-                            raise EnglishPipelineCancelled()
+                            raise QwenPipelineCancelled()
                         self._check_memory()
                         for key, _ in selector.select(timeout=0.2):
                             data = os.read(key.fd, 65536)
@@ -181,10 +181,10 @@ class EnglishMeetingThread(threading.Thread):
                                     )
                 code = process.wait()
                 if self._stop_event.is_set():
-                    raise EnglishPipelineCancelled()
+                    raise QwenPipelineCancelled()
                 if code:
                     logger.error(
-                        "English stage %s failed: %s",
+                        "Qwen meeting stage %s failed: %s",
                         stage,
                         error_path.read_text(errors="replace")[-4000:],
                     )
@@ -208,6 +208,7 @@ class EnglishMeetingThread(threading.Thread):
         try:
             self._emit("file_transcriber_status_changed", "running")
             self._emit("file_transcriber_progress", 0)
+            # Historic directory name, kept for existing job caches.
             cache = AppMeta.CACHE_DIR / "english-jobs"
             cache.mkdir(parents=True, exist_ok=True)
             if self.artifact_dir is not None:
@@ -241,7 +242,7 @@ class EnglishMeetingThread(threading.Thread):
                     self._run_stage(stage, work, completed, weight)
                     completed += weight
                 if self._stop_event.is_set():
-                    raise EnglishPipelineCancelled()
+                    raise QwenPipelineCancelled()
                 if self.prepare_models_only:
                     self._terminal_state = "completed"
                     self._emit("file_transcriber_progress", 100)
@@ -284,11 +285,11 @@ class EnglishMeetingThread(threading.Thread):
                 self._emit("file_transcriber_progress", 100)
                 self._emit("file_transcriber_status_changed", "completed")
                 self._emit("file_transcriber_completed", None)
-        except EnglishPipelineCancelled:
+        except QwenPipelineCancelled:
             self._terminal_state = "stopped"
         except Exception as exc:
             self._terminal_state = "error"
-            logger.exception("English meeting pipeline failed")
+            logger.exception("Qwen meeting pipeline failed")
             self._emit("file_transcriber_error", str(exc))
             self._emit("file_transcriber_status_changed", "error")
         finally:

@@ -1,4 +1,4 @@
-"""Pinned local assets for the optional English meeting pipeline."""
+"""Pinned local assets for the Qwen meeting pipeline."""
 
 from __future__ import annotations
 
@@ -12,23 +12,24 @@ from threading import Event
 from config.constants import AppMeta
 
 
-class EnglishPipelineCancelled(RuntimeError):
+class QwenPipelineCancelled(RuntimeError):
     """The optional pipeline was cancelled by its owning meeting job."""
 
 
-class EnglishModelManager:
+class QwenModelManager:
     def __init__(self, root: Path | None = None, *, manifest_path: Path | None = None):
+        # Historic directory name, kept so already downloaded models stay valid.
         self.root = root or AppMeta.CACHE_DIR / "models" / "english"
         manifest_path = (
             manifest_path
-            or Path(__file__).resolve().parents[1] / "config" / "english-models.json"
+            or Path(__file__).resolve().parents[1] / "config" / "qwen-models.json"
         )
         self.manifest = json.loads(manifest_path.read_text())
         self.models = {item["name"]: item for item in self.manifest["models"]}
 
     def path(self, name: str) -> Path:
         if name not in self.models:
-            raise ValueError("Unknown English pipeline model")
+            raise ValueError("Unknown Qwen meeting model")
         return self.root / self.models[name].get("directory", name)
 
     def dependencies(self) -> dict[str, str]:
@@ -89,14 +90,14 @@ class EnglishModelManager:
         for name, model in selected.items():
             for item in model["files"]:
                 if cancel and cancel.is_set():
-                    raise EnglishPipelineCancelled()
+                    raise QwenPipelineCancelled()
                 path = self.path(name) / item["name"]
                 digest = hashlib.sha256()
                 try:
                     with path.open("rb") as stream:
                         while block := stream.read(2 * 1024 * 1024):
                             if cancel and cancel.is_set():
-                                raise EnglishPipelineCancelled()
+                                raise QwenPipelineCancelled()
                             digest.update(block)
                             processed += len(block)
                             if progress:
@@ -128,7 +129,7 @@ class EnglishModelManager:
         ]
         for index, (name, model, item) in enumerate(files):
             if cancel.is_set():
-                raise EnglishPipelineCancelled()
+                raise QwenPipelineCancelled()
             path = self.path(name) / item["name"]
             valid = False
             if path.is_file() and path.stat().st_size == item["bytes"]:

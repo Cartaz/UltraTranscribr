@@ -24,6 +24,9 @@ class _Backend:
     def abort_active_request(self) -> None:
         self.aborts += 1
 
+    def stop(self) -> None:
+        pass
+
 
 class _Controller:
     def __init__(self, root: Path) -> None:
@@ -33,10 +36,12 @@ class _Controller:
         self.live_count = 0
         self.file_busy = False
         self.backend_starts = 0
+        self.engine_sessions = 0
 
     @contextmanager
     def meeting_engine_session(self):
         self.backend.stop()
+        self.engine_sessions += 1
         yield
 
     def active_live_count(self) -> int:
@@ -134,7 +139,36 @@ class _FakeFileWorker:
         return self.alive
 
 
+class _QwenWorker(_FakeFileWorker):
+    """Stands in for the Qwen meeting subprocess (transcription or voices only)."""
+
+    calls: list[tuple[bool, int]] = []
+
+    def __init__(
+        self, path, *, event_sink, num_speakers=0, diarization_only=False, **kwargs
+    ) -> None:
+        del path, kwargs
+        self.event_sink = event_sink
+        self.alive = False
+        self.diarization_only = diarization_only
+        self.calls.append((diarization_only, int(num_speakers)))
+        self.provenance = {"pipeline": "fixture"}
+        self.exclusive_segments = [
+            {"start": 0.0, "end": 0.5, "speaker_id": "SPEAKER_00"}
+        ]
+        self.speaker_segments = [dict(item) for item in self.exclusive_segments]
+        self._terminal_state = "completed"
+
+    def start(self) -> None:
+        if self.diarization_only:
+            self.event_sink("file_transcriber_progress", 100)
+        else:
+            super().start()
+
+
 class _Models:
+    root = Path("diarization-models")
+
     def status(self):
         return {"ready": True, "model": "community-1"}
 
@@ -145,11 +179,18 @@ class _Models:
 
 
 class _Diarizer:
+    """Legacy diarizer: used only to recompute voices of pre-Qwen meetings."""
+
     def __init__(self) -> None:
         self.calls: list[tuple[str, int]] = []
+        self.releases = 0
 
-    def run(self, path, *, num_speakers, progress=None):
+    def release(self) -> None:
+        self.releases += 1
+
+    def run(self, path, *, num_speakers, progress=None, cancelled=None):
         self.calls.append((str(path), int(num_speakers)))
+        self.cancelled = cancelled
         if progress:
             progress(100)
         timeline = [{"start": 0.0, "end": 0.5, "speaker_id": "SPEAKER_00"}]
@@ -170,7 +211,8 @@ def _manager(
     monkeypatch.setattr(AppMeta, "RECORDINGS_DIR", recordings)
     monkeypatch.setattr(AppMeta, "DATA_DIR", data)
     monkeypatch.setattr(capture_module, "AudioCaptureThread", capture_cls)
-    monkeypatch.setattr(meeting_module, "FileTranscriberThread", _FakeFileWorker)
+    monkeypatch.setattr(meeting_module, "QwenMeetingThread", _QwenWorker)
+    monkeypatch.setattr(_QwenWorker, "calls", [])
     controller = _Controller(tmp_path)
     resolver = AudioInputResolver(
         router=type("Router", (), {})(),
@@ -178,20 +220,24 @@ def _manager(
     )
     manager = MeetingManager(controller, resolver)
     manager.models = _Models()
+    manager.qwen_models = type(
+        "QwenModels", (), {"dependencies": lambda self: {}, "missing": lambda self: []}
+    )()
+    manager.qwen_diarization_models = manager.models
     manager.diarizer = _Diarizer()
     return controller, manager
 
 
-def test_english_preparation_owns_busy_state_and_can_be_cancelled(
+def test_qwen_preparation_owns_busy_state_and_can_be_cancelled(
     monkeypatch, tmp_path
 ):
     from types import SimpleNamespace
 
     _controller, manager = _manager(monkeypatch, tmp_path)
-    manager.english_models = SimpleNamespace(
+    manager.qwen_models = SimpleNamespace(
         dependencies=lambda: {}, missing=lambda: [], models={}, root=tmp_path
     )
-    manager.english_diarization_models = SimpleNamespace(
+    manager.qwen_diarization_models = SimpleNamespace(
         root=tmp_path, status=lambda: {"ready": True}
     )
 
@@ -212,14 +258,14 @@ def test_english_preparation_owns_busy_state_and_can_be_cancelled(
         def join(self, timeout=None):
             pass
 
-    monkeypatch.setattr(meeting_module, "EnglishMeetingThread", Preparation)
+    monkeypatch.setattr(meeting_module, "QwenMeetingThread", Preparation)
     try:
-        assert manager.prepare_english_models()["busy"]
+        assert manager.prepare_qwen_models()["busy"]
         assert manager.is_busy()
-        first = manager._english_preparation
-        manager.prepare_english_models()
-        assert manager._english_preparation is first
-        assert manager.cancel_english_preparation()["ready"]
+        first = manager._qwen_preparation
+        manager.prepare_qwen_models()
+        assert manager._qwen_preparation is first
+        assert manager.cancel_qwen_preparation()["ready"]
         assert not manager.is_busy()
         assert not first.is_alive()
     finally:
@@ -247,8 +293,7 @@ def _completed_meeting(
     started = manager.start_realtime(
         _single_microphone(),
         language="it",
-        num_speakers=num_speakers,
-        pipeline="whisper",
+        num_speakers=num_speakers
     )
     manager.finish()
     _wait_until(lambda: manager.snapshot()["status"] == "completed")
@@ -284,11 +329,11 @@ def test_qwen_meeting_and_voice_rerun_preserve_provenance_and_edits(
     from types import SimpleNamespace
 
     controller, manager = _manager(monkeypatch, tmp_path)
-    manager.english_models = SimpleNamespace(
+    manager.qwen_models = SimpleNamespace(
         root=tmp_path / "english", dependencies=lambda: {}, missing=lambda: []
     )
     manager.models.root = tmp_path / "diarization"
-    manager.english_diarization_models = manager.models
+    manager.qwen_diarization_models = manager.models
     stopped, released, operations = [], [], []
     monkeypatch.setattr(
         controller.backend, "stop", lambda: stopped.append(True), raising=False
@@ -297,7 +342,7 @@ def test_qwen_meeting_and_voice_rerun_preserve_provenance_and_edits(
         manager.diarizer, "release", lambda: released.append(True), raising=False
     )
 
-    class EnglishWorker(_FakeFileWorker):
+    class QwenWorker(_FakeFileWorker):
         def __init__(self, path, *, event_sink, diarization_only=False, **kwargs):
             self.event_sink = event_sink
             self.alive = False
@@ -322,7 +367,7 @@ def test_qwen_meeting_and_voice_rerun_preserve_provenance_and_edits(
                 )
             self.event_sink("file_transcriber_progress", 100)
 
-    monkeypatch.setattr(meeting_module, "EnglishMeetingThread", EnglishWorker)
+    monkeypatch.setattr(meeting_module, "QwenMeetingThread", QwenWorker)
     started = manager.start_realtime(
         _single_microphone(),
         language=language,
@@ -359,10 +404,11 @@ def test_meeting_start_finish_processes_to_reviewable_session(
     controller, manager = _manager(monkeypatch, tmp_path)
 
     started = manager.start_realtime(
-        _single_microphone(), language="it", num_speakers=1, pipeline="whisper"
+        _single_microphone(), language="it", num_speakers=1
     )
     assert started["status"] == "recording"
     assert started["mode"] == "realtime"
+    assert started["model"] == "Qwen3-ASR-1.7B"  # not the Whisper setting
 
     finishing = manager.finish()
     assert finishing["status"] == "finishing"
@@ -374,7 +420,7 @@ def test_meeting_start_finish_processes_to_reviewable_session(
 
     snapshot = manager.snapshot()
     assert snapshot["status"] == "completed"
-    assert controller.backend_starts == 1
+    assert controller.backend_starts == 0  # Qwen only: Whisper never starts
     combined = manager.get(started["id"])
     assert combined is not None
     assert combined["kind"] == "meeting"
@@ -389,7 +435,7 @@ def test_meeting_start_finish_processes_to_reviewable_session(
     assert Path(combined["meeting"]["recording"]["path"]).is_file()
 
 
-def test_rerun_diarization_reuses_raw_segments_without_starting_whisper(
+def test_rerun_diarization_reuses_raw_segments_without_retranscribing(
     monkeypatch, tmp_path: Path
 ) -> None:
     controller, manager = _manager(monkeypatch, tmp_path)
@@ -416,10 +462,54 @@ def test_rerun_diarization_reuses_raw_segments_without_starting_whisper(
     assert combined["meeting"]["speaker_names"] == {"SPEAKER_00": "Marco"}
     assert combined["meeting"]["review_segments"][0]["text"] == "Correzione manuale"
     assert combined["meeting"]["review_segments"][0]["raw_text"] == "Ciao a tutti"
-    assert manager.diarizer.calls[-1][1] == 4
+    assert _QwenWorker.calls[-1] == (True, 4)
+    assert manager.diarizer.calls == []
 
 
-def test_rerun_diarization_recovers_meeting_that_failed_after_whisper(
+def test_legacy_whisper_meeting_recomputes_voices_with_legacy_diarizer(
+    monkeypatch, tmp_path: Path
+) -> None:
+    controller, manager = _manager(monkeypatch, tmp_path)
+    session_id = _completed_meeting(manager)
+    # Meetings saved before Qwen carry no processing_pipeline.
+    with manager.store._lock:
+        data = manager.store._require(session_id)
+        data.pop("processing_pipeline", None)
+        manager.store._write(session_id, data)
+    history = controller.history
+    transcript = history._read_session_required(session_id)
+    transcript.model = "medium"  # the Whisper model it was transcribed with
+    history._write_session(transcript)
+    qwen_calls = len(_QwenWorker.calls)
+    sessions_before = controller.engine_sessions
+    releases_before = manager.diarizer.releases
+
+    manager.rerun_diarization(session_id, num_speakers=2)
+    _wait_until(lambda: manager.snapshot()["status"] == "completed")
+
+    assert manager.diarizer.calls[-1][1] == 2
+    # Whisper is stopped for the run and the diarizer frees the GPU after it.
+    assert controller.engine_sessions == sessions_before + 1
+    assert manager.diarizer.releases == releases_before + 1
+    # Annulla and shutdown reach the in-process run through this callback.
+    assert manager.diarizer.cancelled() is False
+    manager._shutdown_event.set()
+    assert manager.diarizer.cancelled() is True
+    manager._shutdown_event.clear()
+    assert len(_QwenWorker.calls) == qwen_calls
+    assert manager.get(session_id)["meeting"]["num_speakers"] == 2
+
+
+def test_new_meetings_reject_the_retired_whisper_pipeline(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _, manager = _manager(monkeypatch, tmp_path)
+    with pytest.raises(ValueError, match="Percorso di trascrizione non valido"):
+        manager.start_realtime(_single_microphone(), pipeline="whisper")
+    assert manager.snapshot() is None
+
+
+def test_rerun_diarization_recovers_meeting_that_failed_after_transcription(
     monkeypatch, tmp_path: Path
 ) -> None:
     controller, manager = _manager(monkeypatch, tmp_path)
@@ -466,8 +556,7 @@ def test_realtime_meeting_records_multiple_sources_as_tracks(
             {"source": "system", "selected_input": "Test Monitor", "label": "Remoti"},
         ],
         language="it",
-        num_speakers=0,
-        pipeline="whisper",
+        num_speakers=0
     )
     assert len(started["sources"]) == 2
 
@@ -496,7 +585,7 @@ def test_meeting_from_file_converges_on_same_analysis(
     sf.write(source, np.linspace(-0.1, 0.1, 8000, dtype=np.float32), 16000)
 
     started = manager.start_file(
-        source, language="it", num_speakers=1, pipeline="whisper"
+        source, language="it", num_speakers=1
     )
     assert started["mode"] == "file"
     assert started["status"] == "preparing_file"
@@ -507,7 +596,7 @@ def test_meeting_from_file_converges_on_same_analysis(
     assert combined["meeting"]["acquisition"]["mode"] == "file"
     assert combined["text"] == "Ciao a tutti"
     assert Path(combined["meeting"]["recording"]["path"]).is_file()
-    assert controller.backend_starts == 1
+    assert controller.backend_starts == 0  # Qwen only: Whisper never starts
 
 
 def test_duplicate_realtime_source_is_rejected(monkeypatch, tmp_path: Path) -> None:
@@ -517,8 +606,7 @@ def test_duplicate_realtime_source_is_rejected(monkeypatch, tmp_path: Path) -> N
             [
                 {"source": "microphone", "selected_input": "Test Mic"},
                 {"source": "microphone", "selected_input": "Test Mic"},
-            ],
-            pipeline="whisper",
+            ]
         )
     except ValueError as exc:
         assert "due volte" in str(exc)
@@ -530,7 +618,7 @@ def test_finish_returns_while_capture_join_is_still_blocked(
     monkeypatch, tmp_path: Path
 ) -> None:
     _, manager = _manager(monkeypatch, tmp_path, capture_cls=_BlockingCapture)
-    manager.start_realtime(_single_microphone(), pipeline="whisper")
+    manager.start_realtime(_single_microphone())
     runtime = manager._runtime
     assert runtime is not None and runtime.capture is not None
     capture = runtime.capture.tracks[0].capture
@@ -550,7 +638,7 @@ def test_cancel_returns_while_capture_join_is_still_blocked(
     monkeypatch, tmp_path: Path
 ) -> None:
     _, manager = _manager(monkeypatch, tmp_path, capture_cls=_BlockingCapture)
-    manager.start_realtime(_single_microphone(), pipeline="whisper")
+    manager.start_realtime(_single_microphone())
     runtime = manager._runtime
     assert runtime is not None and runtime.capture is not None
     capture = runtime.capture.tracks[0].capture
@@ -569,7 +657,7 @@ def test_meeting_is_exclusive_with_live_and_file(monkeypatch, tmp_path: Path) ->
     controller, manager = _manager(monkeypatch, tmp_path)
     controller.live_count = 1
     try:
-        manager.start_realtime(_single_microphone(), pipeline="whisper")
+        manager.start_realtime(_single_microphone())
     except RuntimeError as exc:
         assert "Live/File" in str(exc)
     else:
@@ -578,7 +666,7 @@ def test_meeting_is_exclusive_with_live_and_file(monkeypatch, tmp_path: Path) ->
     controller.live_count = 0
     controller.file_busy = True
     try:
-        manager.start_realtime(_single_microphone(), pipeline="whisper")
+        manager.start_realtime(_single_microphone())
     except RuntimeError as exc:
         assert "Live/File" in str(exc)
     else:
@@ -589,7 +677,7 @@ def test_shutdown_during_recording_preserves_audio_and_marks_interrupted(
     monkeypatch, tmp_path: Path
 ) -> None:
     _, manager = _manager(monkeypatch, tmp_path)
-    started = manager.start_realtime(_single_microphone(), pipeline="whisper")
+    started = manager.start_realtime(_single_microphone())
 
     manager.shutdown()
 
