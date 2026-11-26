@@ -213,8 +213,10 @@ def test_backend_failure_cannot_publish_or_persist_new_settings():
     app._backend.reconfigure.side_effect = [RuntimeError("backend failed"), None]
     with pytest.raises(RuntimeError, match="backend failed"):
         app.apply_settings(beam_size=2)
-    assert app.settings.beam_size == 5 and Settings.load().beam_size == 5
-    assert app._backend.reconfigure.call_args.args[0].beam_size == 5
+    default = Settings().beam_size
+    assert default != 2
+    assert app.settings.beam_size == default and Settings.load().beam_size == default
+    assert app._backend.reconfigure.call_args.args[0].beam_size == default
 
 
 def test_persistence_failure_restores_previous_backend_profile(monkeypatch):
