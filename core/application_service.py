@@ -115,8 +115,16 @@ class ApplicationService:
         return self.controller.active_live_count() > 0
 
     def dictation_insertion_mode(self) -> str:
-        """Return the canonical insertion policy for the next dictation session."""
-        return self.controller.settings.dictation_insertion_mode
+        """Return the effective insertion policy for the next dictation session.
+
+        Push-to-talk inserts the final text once the shortcut is released:
+        while its keys are held, a synthetic Shift+Insert reaches the target
+        with Meta still applied and pastes nothing.
+        """
+        settings = self.controller.settings
+        if settings.dictation_activation_mode == "push_to_talk":
+            return "final"
+        return settings.dictation_insertion_mode
 
     def dictation_shortcut_pressed(self) -> None:
         """Forward one native global-shortcut press into the canonical dictation state."""

@@ -30,6 +30,8 @@ UltraTranscribr proposes `Meta+H` (`LOGO+h`) as the preferred trigger. The actua
 
 ## Insertion modes
 
+In `push_to_talk` the final text is always inserted once, after the shortcut is released: while its keys are held, a synthetic `Shift+Insert` reaches the target with Meta still applied and pastes nothing. `live` applies to `toggle`.
+
 - `live` (default): words are inserted only after the stable-prefix algorithm has observed them consistently across consecutive Whisper hypotheses. The revisable tail remains internal preview state and is not injected yet; the transient overlay intentionally shows status only.
 - `final`: no text is inserted during speech; the final committed transcript is pasted once Dictation drains. This is the safer mode for applications where progressive insertion is undesirable.
 
@@ -60,6 +62,8 @@ An active inference is never preempted. Waiting work ages upward after 30 second
 Because the legacy HTTP backend can cancel an active request only by terminating the shared server, File Stop becomes non-destructive while Dictation is active: the File stop flag is set, an already-active HTTP request is allowed to return, and no following File chunk is submitted. Full application shutdown still terminates the backend deterministically after Dictation has been closed.
 
 ## Clipboard safety
+
+On KDE Wayland, KWin ignores clipboard changes from a client without keyboard focus, so the text goes on the clipboard through Klipper (`org.kde.klipper.setClipboardContents`), which owns it through the data-control protocol. The dictated text then stays on the clipboard: the previous entry remains one step back in Klipper's history, since Klipper exposes only plain text and a late paste must never insert the old clipboard. The steps below describe the Qt clipboard path used elsewhere (X11).
 
 System text insertion is a serialized transaction:
 

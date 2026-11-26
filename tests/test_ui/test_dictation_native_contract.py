@@ -27,7 +27,8 @@ def test_remote_desktop_persists_permission_restore_token():
 def test_clipboard_restore_is_guarded_by_transaction_marker():
     source = (ROOT / "ui" / "native" / "text_injector.py").read_text(encoding="utf-8")
     assert "_MARKER_MIME" in source
-    assert "_restore_if_owned" in source
+    assert "def restore(self, token" in source
+    assert "KlipperClipboardSwap" in source
     assert "pasteCompleted" in source
     assert "_active_transaction" in source
 

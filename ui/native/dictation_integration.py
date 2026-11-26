@@ -54,6 +54,12 @@ class DictationNativeIntegration(QObject):
         self._eventArrived.connect(self._handle_event)
         self._shortcut.pressed.connect(self._application.dictation_shortcut_pressed)
         self._shortcut.released.connect(self._application.dictation_shortcut_released)
+        self._shortcut.pressed.connect(lambda: self._injector.set_shortcut_held(True))
+        self._shortcut.released.connect(lambda: self._injector.set_shortcut_held(False))
+        # A portal that resets mid-press never sends the release.
+        self._shortcut.readyChanged.connect(
+            lambda ready: None if ready else self._injector.set_shortcut_held(False)
+        )
         self._shortcut.errorOccurred.connect(self._native_error)
         self._injector.errorOccurred.connect(self._native_error)
         self._injector.insertionCompleted.connect(self._application.dictation_text_inserted)
