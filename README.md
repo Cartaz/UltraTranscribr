@@ -22,7 +22,7 @@ Dettagli e limiti verificati: [rapporto UX](docs/archive/UX_IMPLEMENTATION_2026-
 - Batch Riunioni sequenziale per elaborare più registrazioni senza inferenze GPU concorrenti, con lingua e numero interlocutori configurabili per ogni file.
 - Fino a 8 sorgenti realtime conservate come tracce FLAC separate e sincronizzate.
 - Diarizzazione locale ad alta accuratezza con `pyannote/speaker-diarization-community-1`.
-- Timestamp Whisper parola-per-parola per separare cambi di interlocutore anche dentro un singolo segmento di trascrizione.
+- Timestamp parola-per-parola dagli allineatori Qwen/CTC (Whisper per le riunioni precedenti) per separare cambi di interlocutore anche dentro un singolo segmento di trascrizione.
 - `exclusive_speaker_diarization` per assegnare il testo e diarizzazione regolare per segnalare il parlato realmente sovrapposto.
 - Numero di interlocutori noto opzionale e ricalcolo della sola diarizzazione su riunioni già trascritte.
 - Correzione manuale dello speaker per ogni intervento, inclusi i casi `Speaker ?`, senza sovrascrivere il risultato automatico.
@@ -71,7 +71,7 @@ Le nuove **Riunioni** usano **Qwen3-ASR-1.7B** per il testo e **Community-1**
 con finestre di 3 secondi per gli interlocutori. Live, Dettatura e File continuano
 a usare Whisper; il modello predefinito resta **large-v3**.
 
-I componenti Qwen sono inclusi nell'installazione. In **Riunione**, usa
+I componenti Qwen sono inclusi nell'installazione (`ULTRATRANSCRIBR_QWEN=0 ./install.sh` li salta, ma senza di essi le Riunioni non sono disponibili; `ULTRATRANSCRIBR_ENGLISH` è il vecchio nome della stessa opzione). In **Riunione**, usa
 **Prepara modelli riunioni** per scaricare e verificare circa 6,3 GB di modelli
 locali. Scegli `it` per l'italiano o `en` per l'inglese; ogni registrazione in coda
 conserva la propria lingua e il motore. Il numero di interlocutori può restare a 0.
@@ -96,7 +96,7 @@ Il recupero sperimentale dei confini Whisper resta disattivato normalmente.
 2. PyTorch e torchaudio Intel XPU pinning stabile;
 3. TorchCodec compatibile richiesto da pyannote;
 4. `pyannote.audio` e `demucs-infer`;
-5. il ref configurato di `whisper.cpp` compilato con SYCL e il runtime `whisper-server`;
+5. la revisione validata di `whisper.cpp` (o il ref scelto) compilata con SYCL e il runtime `whisper-server`;
 6. modello Whisper predefinito `large-v3` e modello VAD;
 7. integrazione desktop;
 8. self-check finale dell'ambiente.

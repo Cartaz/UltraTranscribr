@@ -7,6 +7,7 @@ from types import ModuleType
 from unittest.mock import Mock
 
 import numpy as np
+import pytest
 
 import core.speaker_diarization as sd
 from core.speaker_diarization import align_speakers, speaker_label
@@ -212,10 +213,42 @@ def test_diarizer_returns_regular_and_exclusive_with_shared_speaker_ids(monkeypa
 
     result = diarizer.run("meeting.flac", num_speakers=4)
 
-    assert captured["kwargs"] == {"num_speakers": 4}
+    assert captured["kwargs"]["num_speakers"] == 4
+    assert callable(captured["kwargs"]["hook"])
     assert captured["payload"]["sample_rate"] == 16000
     assert result.exclusive_segments[0]["speaker_id"] == "SPEAKER_00"
     assert result.exclusive_segments[1]["speaker_id"] == "SPEAKER_01"
     assert result.speaker_segments[0]["speaker_id"] == "SPEAKER_00"
     assert result.speaker_segments[1]["speaker_id"] == "SPEAKER_01"
     assert result.speaker_segments[0]["end"] == 1.1
+
+
+def test_diarizer_stops_between_batches_when_cancelled(monkeypatch, tmp_path) -> None:
+    class _Waveform:
+        def unsqueeze(self, dim):
+            return self
+
+    torch = ModuleType("torch")
+    torch.from_numpy = lambda array: _Waveform()
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setattr(sd, "get_torch_xpu_device", lambda: "xpu:0")
+    monkeypatch.setattr(
+        sd.sf,
+        "read",
+        lambda *args, **kwargs: (np.zeros((16000, 1), dtype=np.float32), 16000),
+    )
+    batches = []
+
+    class _LongPipeline:
+        def __call__(self, payload, *, hook, **kwargs):
+            for index in range(1000):  # stands in for a long recording
+                hook("segmentation", None, total=1000, completed=index)
+                batches.append(index)
+            raise AssertionError("cancellation was ignored")
+
+    diarizer = sd.SpeakerDiarizer(sd.DiarizationModelManager(tmp_path))
+    monkeypatch.setattr(diarizer, "_get_pipeline", lambda: _LongPipeline())
+
+    with pytest.raises(sd.DiarizationCancelled):
+        diarizer.run("meeting.flac", cancelled=lambda: len(batches) >= 3)
+    assert len(batches) == 3

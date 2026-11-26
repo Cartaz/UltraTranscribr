@@ -188,8 +188,9 @@ class _Diarizer:
     def release(self) -> None:
         self.releases += 1
 
-    def run(self, path, *, num_speakers, progress=None):
+    def run(self, path, *, num_speakers, progress=None, cancelled=None):
         self.calls.append((str(path), int(num_speakers)))
+        self.cancelled = cancelled
         if progress:
             progress(100)
         timeline = [{"start": 0.0, "end": 0.5, "speaker_id": "SPEAKER_00"}]
@@ -490,6 +491,11 @@ def test_legacy_whisper_meeting_recomputes_voices_with_legacy_diarizer(
     # Whisper is stopped for the run and the diarizer frees the GPU after it.
     assert controller.engine_sessions == sessions_before + 1
     assert manager.diarizer.releases == releases_before + 1
+    # Annulla and shutdown reach the in-process run through this callback.
+    assert manager.diarizer.cancelled() is False
+    manager._shutdown_event.set()
+    assert manager.diarizer.cancelled() is True
+    manager._shutdown_event.clear()
     assert len(_QwenWorker.calls) == qwen_calls
     assert manager.get(session_id)["meeting"]["num_speakers"] == 2
 

@@ -997,6 +997,10 @@ class MeetingManager:
                         progress=lambda percent: self._diarization_progress(
                             runtime, percent
                         ),
+                        # Annulla and shutdown must not wait for a whole file
+                        # while this run holds the GPU session lock.
+                        cancelled=lambda: runtime.stop_event.is_set()
+                        or self._shutdown_event.is_set(),
                     )
                 finally:
                     self.diarizer.release()
