@@ -27,3 +27,19 @@ def test_dictation_modes_round_trip_through_with():
 
 def test_portal_restore_token_is_not_a_public_setting():
     assert "dictation_remote_restore_token" not in Settings.__dataclass_fields__
+
+
+def test_push_to_talk_inserts_the_final_text_after_release():
+    from types import SimpleNamespace
+
+    from core.application_service import ApplicationService
+
+    def mode(activation, insertion):
+        settings = SimpleNamespace(dictation_activation_mode=activation, dictation_insertion_mode=insertion)
+        service = ApplicationService.__new__(ApplicationService)
+        service.controller = SimpleNamespace(settings=settings)
+        return service.dictation_insertion_mode()
+
+    assert mode("push_to_talk", "live") == "final"
+    assert mode("toggle", "live") == "live"
+    assert mode("toggle", "final") == "final"

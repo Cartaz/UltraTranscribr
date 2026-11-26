@@ -165,6 +165,11 @@ class RemoteDesktopKeyboardPortal(PortalClient):
         self.call_sequence(INTERFACE, calls, completed)
         return True
 
+    def cancel_paste(self) -> None:
+        """Forget an unconfirmed paste so the next one can be sent."""
+        self._paste_generation += 1
+        self._paste_in_flight = False
+
     def reset(self) -> None:
         self.close_requests()
         self.close_session(self._session)
