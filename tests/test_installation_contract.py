@@ -197,3 +197,32 @@ def test_application_log_uses_bounded_rotation() -> None:
     assert "LOG_BACKUP_COUNT = 4" in source
     assert "maxBytes=LOG_MAX_BYTES" in source
     assert "backupCount=LOG_BACKUP_COUNT" in source
+
+
+def test_later_pip_steps_cannot_replace_the_xpu_torch_wheels(tmp_path) -> None:
+    # A transitive requirement once pulled torch 2.15 (CUDA) over 2.9.1+xpu.
+    environment = tmp_path / "environment"
+    binaries = environment / "bin"
+    binaries.mkdir(parents=True)
+    calls = tmp_path / "pip-args"
+    (binaries / "pip").write_text(
+        f'#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "{calls}"\n'
+    )
+    (binaries / "python").write_text("#!/usr/bin/env bash\ncat >/dev/null\n")
+    for tool in ("pip", "python"):
+        (binaries / tool).chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", "-c", 'source "$1"; VENV="$2"; INSTALL_QWEN=1; install_qwen_dependencies',
+         "constraints-test", str(ROOT / "install.sh"), str(environment)],
+        capture_output=True, text=True, check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    constraints = environment / ".ultratranscribr-torch-constraints.txt"
+    assert constraints.read_text().split() == [
+        "torch==2.9.1", "torchaudio==2.9.1", "torchcodec==0.9.1"
+    ]
+    assert calls.read_text().split("\n")[0].startswith(f"install -c {constraints} -r ")
+    source = (ROOT / "install.sh").read_text(encoding="utf-8")
+    assert '"$VENV/bin/pip" install -c "$TORCH_CONSTRAINTS" -r "$ROOT/requirements-xpu.txt"' in source
