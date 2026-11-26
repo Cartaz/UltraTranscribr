@@ -41,7 +41,10 @@ class ProcessDefaults:
     DTYPE = "float32"
     MODEL_SIZE = "large-v3"
     LANGUAGE = "en"
-    BEAM_SIZE = 5
+    # Greedy decoding: on the Meteor Lake iGPU any beam > 1 costs ~2.2x (beams
+    # 2-5 cost the same) with no measurable WER gain on Italian FLEURS, and
+    # beam 5 cannot keep real time in Live with large-v3.
+    BEAM_SIZE = 1
     VAD_FILTER = True
     VAD_MIN_SILENCE_MS = 500
     BUFFER_WARN_THRESHOLD = 20
