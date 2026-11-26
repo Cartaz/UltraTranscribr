@@ -67,10 +67,6 @@ class _MeetingControllerView:
     def history(self) -> TranscriptHistoryStore:
         return self._controller.history
 
-    @property
-    def backend(self) -> PrioritizedWhisperBackend:
-        return self._controller.backend
-
     def active_live_count(self) -> int:
         # Meeting is exclusive with Dictation as well as ordinary Live.
         return self._controller.active_live_count() + int(
@@ -82,14 +78,6 @@ class _MeetingControllerView:
 
     def meeting_engine_session(self):
         return self._controller.meeting_engine_session()
-
-    def ensure_backend_started(
-        self,
-        *,
-        vad: Optional[bool] = None,
-        settings: Optional[Settings] = None,
-    ) -> None:
-        self._controller.ensure_backend_started(vad=vad, settings=settings)
 
 
 class _FileBatchControllerView:
