@@ -2,7 +2,7 @@ import copy
 
 import pytest
 
-from core.english_timing import combine_word_timings
+from core.qwen_timing import combine_word_timings
 
 
 def row(first=0.1, second=0.9):

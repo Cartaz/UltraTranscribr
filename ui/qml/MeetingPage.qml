@@ -193,7 +193,7 @@ ScrollView {
                     }
                 }
                 ColumnLayout {
-                    id: englishControls
+                    id: qwenControls
                     Layout.fillWidth: true
                     FieldLabel {
                         text: 'Motore riunioni'
@@ -214,27 +214,27 @@ ScrollView {
                     }
                     Help {
                         Layout.fillWidth: true
-                        visible: !!meeting.englishStatus.error
-                        text: meeting.englishStatus.error || (meeting.englishStatus.ready ? 'Qwen pronto. Testo e interlocutori vengono elaborati sul computer.' : 'Il motore riunioni richiede circa ' + (meeting.englishStatus.download_gb || '—') + ' GB di modelli locali.')
+                        visible: !!meeting.qwenStatus.error
+                        text: meeting.qwenStatus.error || (meeting.qwenStatus.ready ? 'Qwen pronto. Testo e interlocutori vengono elaborati sul computer.' : 'Il motore riunioni richiede circa ' + (meeting.qwenStatus.download_gb || '—') + ' GB di modelli locali.')
                     }
                     RowLayout {
                         Layout.fillWidth: true
                         NeuButton {
-                            text: meeting.englishStatus.ready ? 'Verifica modelli riunioni' : 'Prepara modelli riunioni'
-                            enabled: !meeting.busy && !!meeting.englishStatus.dependencies_ready
-                            onClicked: meeting.prepareEnglish()
+                            text: meeting.qwenStatus.ready ? 'Verifica modelli riunioni' : 'Prepara modelli riunioni'
+                            enabled: !meeting.busy && !!meeting.qwenStatus.dependencies_ready
+                            onClicked: meeting.prepareQwen()
                         }
                         NeuButton {
-                            visible: !!meeting.englishStatus.busy
-                            text: meeting.englishStatus.cancelling ? 'Arresto…' : 'Annulla preparazione'
-                            enabled: !meeting.englishStatus.cancelling
-                            onClicked: meeting.cancelEnglish()
+                            visible: !!meeting.qwenStatus.busy
+                            text: meeting.qwenStatus.cancelling ? 'Arresto…' : 'Annulla preparazione'
+                            enabled: !meeting.qwenStatus.cancelling
+                            onClicked: meeting.cancelQwen()
                         }
                     }
                     NeuProgress {
-                        visible: !!meeting.englishStatus.busy
+                        visible: !!meeting.qwenStatus.busy
                         Layout.fillWidth: true
-                        value: meeting.englishStatus.progress || 0
+                        value: meeting.qwenStatus.progress || 0
                     }
                 }
                 RowLayout {
@@ -360,7 +360,7 @@ ScrollView {
                     NeuButton {
                         text: page.fromFile ? (meetingDrafts.count > 1 ? 'Avvia batch (' + meetingDrafts.count + ')' : 'Analizza registrazione') : 'Avvia riunione'
                         selected: true
-                        enabled: !runtime.busy && !settings.dirty && !settings.saving && !!meeting.englishStatus.ready
+                        enabled: !runtime.busy && !settings.dirty && !settings.saving && !!meeting.qwenStatus.ready
                         onClicked: meeting.start(page.fromFile, language.selectedValue, Number(speakerCount.text))
                     }
                     NeuButton {

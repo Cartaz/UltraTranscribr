@@ -4,7 +4,7 @@ from threading import Event
 
 import pytest
 
-from core.english_models import EnglishModelManager, EnglishPipelineCancelled
+from core.qwen_models import QwenModelManager, QwenPipelineCancelled
 
 
 def manager(tmp_path):
@@ -29,7 +29,7 @@ def manager(tmp_path):
             }
         )
     )
-    return EnglishModelManager(tmp_path / "models", manifest_path=manifest)
+    return QwenModelManager(tmp_path / "models", manifest_path=manifest)
 
 
 def test_assets_are_not_accepted_only_because_their_size_matches(tmp_path):
@@ -54,7 +54,7 @@ def test_model_verification_honors_cancellation_before_reading_assets(tmp_path):
     models = manager(tmp_path)
     cancel = Event()
     cancel.set()
-    with pytest.raises(EnglishPipelineCancelled):
+    with pytest.raises(QwenPipelineCancelled):
         models.verify(cancel=cancel)
 
 

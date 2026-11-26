@@ -16,7 +16,8 @@ REQ_MARKER="$VENV/.ultratranscribr-requirements.sha256"
 BUILD_MARKER="$VENV/.ultratranscribr-whisper-build.sha256"
 WHISPER_REVISION_MARKER="$VENV/.ultratranscribr-whisper-revision"
 FORCE_REBUILD="${ULTRATRANSCRIBR_FORCE_REBUILD:-0}"
-INSTALL_ENGLISH="${ULTRATRANSCRIBR_ENGLISH:-1}"
+# ULTRATRANSCRIBR_ENGLISH is the old name of the same switch.
+INSTALL_QWEN="${ULTRATRANSCRIBR_QWEN:-${ULTRATRANSCRIBR_ENGLISH:-1}}"
 TORCH_VERSION="2.9.1"
 TORCHAUDIO_VERSION="2.9.1"
 TORCHCODEC_VERSION="0.9.1"
@@ -101,14 +102,14 @@ build_key() {
   } | sha256sum | awk '{print $1}'
 }
 
-install_english_dependencies() {
-  [[ "$INSTALL_ENGLISH" == "1" ]] || return 0
+install_qwen_dependencies() {
+  [[ "$INSTALL_QWEN" == "1" ]] || return 0
   log "Preparazione componenti per il motore delle riunioni..."
-  "$VENV/bin/pip" install -r "$ROOT/requirements-english.txt"
+  "$VENV/bin/pip" install -r "$ROOT/requirements-qwen.txt"
   # Check the optional stack without loading weights or starting GPU inference.
   (cd "$ROOT" && "$VENV/bin/python" - <<'PY'
-from core.english_models import EnglishModelManager
-EnglishModelManager().dependencies()
+from core.qwen_models import QwenModelManager
+QwenModelManager().dependencies()
 PY
   ) || die "Verifica componenti riunioni fallita"
 }
@@ -389,7 +390,7 @@ main() {
   fi
 
   install_python_dependencies
-  install_english_dependencies
+  install_qwen_dependencies
   remove_legacy_parakeet_runtime
   build_whisper_stack
   ensure_default_models

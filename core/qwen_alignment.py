@@ -1,4 +1,4 @@
-"""CPU acoustic alignment stages of the frozen English meeting pipeline.
+"""CPU acoustic alignment stages of the frozen Qwen meeting pipeline.
 
 Algorithms are transferred from the full public validation. Only automatically
 recognized words are supplied to the models; no reference text is accepted.
@@ -15,13 +15,13 @@ from pathlib import Path
 
 import numpy as np
 
-from core.english_models import EnglishPipelineCancelled
+from core.qwen_models import QwenPipelineCancelled
 from core.meeting_engine import ALIGNMENT_LANGUAGES, meeting_language
 
 
 def _check_cancel(cancel):
     if cancel is not None and cancel.is_set():
-        raise EnglishPipelineCancelled()
+        raise QwenPipelineCancelled()
 
 
 def _audio(path):

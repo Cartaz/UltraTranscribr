@@ -13,7 +13,7 @@ def test_meeting_draft_keeps_language_and_speaker_fields_editable(quick_window):
     page = window._window.findChild(QObject, "meetingPage")
     page.setProperty("fromFile", True)
     adapter = window.runtime.meeting
-    adapter._english_status_received({"ready": True, "busy": False})
+    adapter._qwen_status_received({"ready": True, "busy": False})
     adapter.drafts.replace(
         [
             {
@@ -38,19 +38,19 @@ def test_meeting_draft_keeps_language_and_speaker_fields_editable(quick_window):
     assert not any("TypeError" in m or "ReferenceError" in m for m in messages)
 
 
-def test_english_status_only_refreshes_general_bindings_when_busy_changes(quick_window):
+def test_qwen_status_only_refreshes_general_bindings_when_busy_changes(quick_window):
     _app, window, _service, _controller, _messages = quick_window
     adapter = window.runtime.meeting
     general, english = [], []
     adapter.changed.connect(lambda: general.append(True))
-    adapter.englishChanged.connect(lambda: english.append(True))
-    adapter._english_status_received({"ready": True, "busy": False})
-    adapter._english_status_received({"ready": True, "busy": False, "progress": 50})
+    adapter.qwenChanged.connect(lambda: english.append(True))
+    adapter._qwen_status_received({"ready": True, "busy": False})
+    adapter._qwen_status_received({"ready": True, "busy": False, "progress": 50})
     assert general == []
     assert len(english) == 2
-    adapter._english_status_received({"ready": True, "busy": True})
-    adapter._english_status_received({"ready": True, "busy": True, "progress": 75})
-    adapter._english_status_received({"ready": True, "busy": False})
+    adapter._qwen_status_received({"ready": True, "busy": True})
+    adapter._qwen_status_received({"ready": True, "busy": True, "progress": 75})
+    adapter._qwen_status_received({"ready": True, "busy": False})
     assert len(general) == 2
 
 

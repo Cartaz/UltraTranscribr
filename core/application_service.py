@@ -468,15 +468,15 @@ class ApplicationService:
                 "Annulla o completa la coda Riunioni prima di avviare una riunione manuale"
             )
 
-    def english_pipeline_status(self) -> dict[str, Any]:
-        return self.meeting.english_pipeline_status()
+    def qwen_pipeline_status(self) -> dict[str, Any]:
+        return self.meeting.qwen_pipeline_status()
 
-    def prepare_english_models(self) -> dict[str, Any]:
+    def prepare_qwen_models(self) -> dict[str, Any]:
         self._require_meeting_start_available()
-        return self.meeting.prepare_english_models()
+        return self.meeting.prepare_qwen_models()
 
-    def cancel_english_preparation(self) -> dict[str, Any]:
-        return self.meeting.cancel_english_preparation()
+    def cancel_qwen_preparation(self) -> dict[str, Any]:
+        return self.meeting.cancel_qwen_preparation()
 
     def start_meeting_realtime(
         self,

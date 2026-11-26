@@ -9,15 +9,15 @@ import numpy as np
 import pytest
 
 from config.settings import Settings
-from core.english_asr import (
+from core.qwen_asr import (
     ASRRecoveryExhaustedError,
     ASRTokenLimitError,
-    EnglishASRBackend,
+    QwenASRBackend,
     _check_generation_end,
     _choose_split_frame,
     verify_decode_coverage,
 )
-from core.english_models import EnglishPipelineCancelled
+from core.qwen_models import QwenPipelineCancelled
 from core.file_transcriber import FileTranscriberThread
 
 RATE = 16000
@@ -36,7 +36,7 @@ def wav_pcm16(seconds: int = 30) -> tuple[bytes, bytes]:
 
 
 def backend_with_decoder(monkeypatch, decoder):
-    backend = EnglishASRBackend(Path("not-used-in-tests"), Event())
+    backend = QwenASRBackend(Path("not-used-in-tests"), Event())
     backend.is_running = True
     monkeypatch.setattr(backend, "_decode_window", decoder)
     return backend
@@ -177,7 +177,7 @@ def test_cancellation_interrupts_recursive_recovery(monkeypatch):
         raise ASRTokenLimitError(512)
 
     monkeypatch.setattr(backend, "_decode_window", decode)
-    with pytest.raises(EnglishPipelineCancelled):
+    with pytest.raises(QwenPipelineCancelled):
         backend.transcribe_audio(audio, verbose=True)
 
 

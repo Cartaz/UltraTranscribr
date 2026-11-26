@@ -207,7 +207,7 @@ def _manager(
     monkeypatch.setattr(AppMeta, "RECORDINGS_DIR", recordings)
     monkeypatch.setattr(AppMeta, "DATA_DIR", data)
     monkeypatch.setattr(capture_module, "AudioCaptureThread", capture_cls)
-    monkeypatch.setattr(meeting_module, "EnglishMeetingThread", _QwenWorker)
+    monkeypatch.setattr(meeting_module, "QwenMeetingThread", _QwenWorker)
     monkeypatch.setattr(_QwenWorker, "calls", [])
     controller = _Controller(tmp_path)
     resolver = AudioInputResolver(
@@ -216,24 +216,24 @@ def _manager(
     )
     manager = MeetingManager(controller, resolver)
     manager.models = _Models()
-    manager.english_models = type(
+    manager.qwen_models = type(
         "QwenModels", (), {"dependencies": lambda self: {}, "missing": lambda self: []}
     )()
-    manager.english_diarization_models = manager.models
+    manager.qwen_diarization_models = manager.models
     manager.diarizer = _Diarizer()
     return controller, manager
 
 
-def test_english_preparation_owns_busy_state_and_can_be_cancelled(
+def test_qwen_preparation_owns_busy_state_and_can_be_cancelled(
     monkeypatch, tmp_path
 ):
     from types import SimpleNamespace
 
     _controller, manager = _manager(monkeypatch, tmp_path)
-    manager.english_models = SimpleNamespace(
+    manager.qwen_models = SimpleNamespace(
         dependencies=lambda: {}, missing=lambda: [], models={}, root=tmp_path
     )
-    manager.english_diarization_models = SimpleNamespace(
+    manager.qwen_diarization_models = SimpleNamespace(
         root=tmp_path, status=lambda: {"ready": True}
     )
 
@@ -254,14 +254,14 @@ def test_english_preparation_owns_busy_state_and_can_be_cancelled(
         def join(self, timeout=None):
             pass
 
-    monkeypatch.setattr(meeting_module, "EnglishMeetingThread", Preparation)
+    monkeypatch.setattr(meeting_module, "QwenMeetingThread", Preparation)
     try:
-        assert manager.prepare_english_models()["busy"]
+        assert manager.prepare_qwen_models()["busy"]
         assert manager.is_busy()
-        first = manager._english_preparation
-        manager.prepare_english_models()
-        assert manager._english_preparation is first
-        assert manager.cancel_english_preparation()["ready"]
+        first = manager._qwen_preparation
+        manager.prepare_qwen_models()
+        assert manager._qwen_preparation is first
+        assert manager.cancel_qwen_preparation()["ready"]
         assert not manager.is_busy()
         assert not first.is_alive()
     finally:
@@ -325,11 +325,11 @@ def test_qwen_meeting_and_voice_rerun_preserve_provenance_and_edits(
     from types import SimpleNamespace
 
     controller, manager = _manager(monkeypatch, tmp_path)
-    manager.english_models = SimpleNamespace(
+    manager.qwen_models = SimpleNamespace(
         root=tmp_path / "english", dependencies=lambda: {}, missing=lambda: []
     )
     manager.models.root = tmp_path / "diarization"
-    manager.english_diarization_models = manager.models
+    manager.qwen_diarization_models = manager.models
     stopped, released, operations = [], [], []
     monkeypatch.setattr(
         controller.backend, "stop", lambda: stopped.append(True), raising=False
@@ -338,7 +338,7 @@ def test_qwen_meeting_and_voice_rerun_preserve_provenance_and_edits(
         manager.diarizer, "release", lambda: released.append(True), raising=False
     )
 
-    class EnglishWorker(_FakeFileWorker):
+    class QwenWorker(_FakeFileWorker):
         def __init__(self, path, *, event_sink, diarization_only=False, **kwargs):
             self.event_sink = event_sink
             self.alive = False
@@ -363,7 +363,7 @@ def test_qwen_meeting_and_voice_rerun_preserve_provenance_and_edits(
                 )
             self.event_sink("file_transcriber_progress", 100)
 
-    monkeypatch.setattr(meeting_module, "EnglishMeetingThread", EnglishWorker)
+    monkeypatch.setattr(meeting_module, "QwenMeetingThread", QwenWorker)
     started = manager.start_realtime(
         _single_microphone(),
         language=language,

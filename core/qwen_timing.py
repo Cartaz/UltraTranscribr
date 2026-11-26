@@ -1,4 +1,4 @@
-"""Frozen acoustic timing policy for the optional English meeting pipeline.
+"""Frozen acoustic timing policy for the Qwen meeting pipeline.
 
 CTC timing is primary; the Qwen aligner supplies timing where CTC has no
 alignment or probability below 0.2. Neither aligner may change the ASR text.
